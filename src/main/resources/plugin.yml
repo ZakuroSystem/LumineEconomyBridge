@@ -1,0 +1,13 @@
+name: LumineEconomyBridge
+version: 0.1.0
+main: com.grapelemon.lumineeconomybridge.LumineEconomyBridge
+api-version: '1.20'
+authors: [grapelemon]
+commands:
+  le:
+    description: Send command to Lumine Economy backend
+    usage: /le <content> | /le rewrite
+    permission: lumineeconomy.le
+permissions:
+  lumineeconomy.le:
+    default: true

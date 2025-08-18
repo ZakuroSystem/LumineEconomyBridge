@@ -1,0 +1,4 @@
+# Lumine Economy Bridge configuration
+endpoint: "http://127.0.0.1:8000"
+update_period_ticks: 200   # 10 seconds (20 ticks = 1 second)
+http_timeout_millis: 2000  # OkHttp timeouts
