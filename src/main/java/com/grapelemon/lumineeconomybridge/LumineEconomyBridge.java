@@ -1,7 +1,6 @@
 package com.grapelemon.lumineeconomybridge;
 
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
-import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 import okhttp3.OkHttpClient;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -21,13 +20,14 @@ public class LumineEconomyBridge extends JavaPlugin {
         instance = this;
         saveDefaultConfig();
 
+        int timeout = getConfig().getInt("api.timeout", 2000);
         httpClient = new OkHttpClient.Builder()
-                .connectTimeout(getConfig().getInt("http_timeout_millis", 2000), TimeUnit.MILLISECONDS)
-                .readTimeout(getConfig().getInt("http_timeout_millis", 2000), TimeUnit.MILLISECONDS)
-                .writeTimeout(getConfig().getInt("http_timeout_millis", 2000), TimeUnit.MILLISECONDS)
+                .connectTimeout(timeout, TimeUnit.MILLISECONDS)
+                .readTimeout(timeout, TimeUnit.MILLISECONDS)
+                .writeTimeout(timeout, TimeUnit.MILLISECONDS)
                 .build();
 
-        String baseUrl = getConfig().getString("endpoint", "http://127.0.0.1:8000");
+        String baseUrl = getConfig().getString("api.base_url", "http://127.0.0.1:5100");
         syncService = new ScoreboardSyncService(httpClient, baseUrl, this);
 
         executor = new LeCommandExecutor(baseUrl, httpClient, syncService);
@@ -39,11 +39,14 @@ public class LumineEconomyBridge extends JavaPlugin {
         }
 
         // 10秒ごとに差分送信（非同期ループ）。Scoreboard読み取りは同期タスク内で行うので安全
-        long period = getConfig().getLong("update_period_ticks", 200L);
+        long period = getConfig().getLong("sync.interval", 10L) * 20L;
         Bukkit.getScheduler().runTaskTimerAsynchronously(this, () -> syncService.tickAll(), period, period);
 
         // ログイン/ログアウトでシード/掃除
         getServer().getPluginManager().registerEvents(new PlayerListener(syncService), this);
+
+        // 起動時に全プレイヤーの絶対値同期
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> syncService.rewriteAll());
 
         getLogger().info("LumineEconomyBridge enabled. Endpoint = " + baseUrl);
     }

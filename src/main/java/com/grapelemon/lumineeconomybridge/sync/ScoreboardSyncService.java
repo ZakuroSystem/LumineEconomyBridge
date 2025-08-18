@@ -22,7 +22,6 @@ public class ScoreboardSyncService {
     // 同期用の状態
     private final Map<UUID, int[]> lastSentAbs = new ConcurrentHashMap<>();
     private final Map<UUID, int[]> appliedFromPython = new ConcurrentHashMap<>();
-    private final Map<UUID, Long> seq = new ConcurrentHashMap<>();
 
     public ScoreboardSyncService(OkHttpClient http, String baseUrl, LumineEconomyBridge plugin) {
         this.http = http;
@@ -35,13 +34,11 @@ public class ScoreboardSyncService {
         int[] current = callSync(() -> ScoreboardUtil.readBothSync(p));
         lastSentAbs.putIfAbsent(p.getUniqueId(), current);
         appliedFromPython.putIfAbsent(p.getUniqueId(), new int[]{0,0});
-        seq.putIfAbsent(p.getUniqueId(), 0L);
     }
 
     public void cleanup(UUID id) {
         lastSentAbs.remove(id);
         appliedFromPython.remove(id);
-        seq.remove(id);
     }
 
     private <T> T callSync(Callable<T> task) {
@@ -69,7 +66,7 @@ public class ScoreboardSyncService {
         });
     }
 
-    public void sendDelta(Player p, String reason) {
+    public void sendDelta(Player p) {
         UUID id = p.getUniqueId();
 
         // メインスレッドで現在値を取得
@@ -88,34 +85,22 @@ public class ScoreboardSyncService {
         // 送る差分がゼロならスキップ
         if (d1 == 0 && d2 == 0) return;
 
-        long nextSeq = seq.compute(id, (k,v) -> v==null?1L:v+1L);
-
         Map<String, Object> payload = new HashMap<>();
         payload.put("player", id.toString());
         Map<String, Integer> delta = new HashMap<>();
         delta.put("currency1", d1);
         delta.put("currency2", d2);
         payload.put("delta", delta);
-        payload.put("reason", reason);
-        Map<String, Integer> base = new HashMap<>();
-        base.put("currency1", last[0]);
-        base.put("currency2", last[1]);
-        payload.put("base", base);
-        Map<String, Integer> cur = new HashMap<>();
-        cur.put("currency1", current[0]);
-        cur.put("currency2", current[1]);
-        payload.put("current", cur);
-        payload.put("seq", nextSeq);
-        payload.put("idempotency_key", id.toString() + ":" + nextSeq);
+        payload.put("timestamp", System.currentTimeMillis() / 1000);
 
         Request req = new Request.Builder()
-                .url(baseUrl + "/delta")
+                .url(baseUrl + "/api/sync")
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
 
         http.newCall(req).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException e) {
-                // 応答失敗: lastSentAbs を更新しない → 次回送信で再度同じ差分が載る
+                plugin.getLogger().warning("Failed to sync scoreboard for " + p.getName() + ": " + e.getMessage());
             }
             @Override public void onResponse(Call call, Response response) throws IOException {
                 String body = response.body()!=null? response.body().string():"{}";
@@ -123,15 +108,9 @@ public class ScoreboardSyncService {
                 // ACKが返ってきたら lastSent を current に更新
                 if (res.has("status") && res.get("status").getAsString().equalsIgnoreCase("success")) {
                     lastSentAbs.put(id, current);
-                }
-                // メッセージ表示（任意）
-                if (res.has("messages")) {
-                    Bukkit.getScheduler().runTask(plugin, () -> {
-                        res.getAsJsonArray("messages").forEach(el -> {
-                            // ここでは送信者不明なので呼び出し側で表示するのが適切だが、
-                            // シンプルに全員に送るよりは何もしない方がよい。必要に応じて拡張。
-                        });
-                    });
+                    plugin.getLogger().fine("Synced scoreboard for " + p.getName());
+                } else {
+                    plugin.getLogger().warning("Failed to sync scoreboard for " + p.getName());
                 }
             }
         });
@@ -140,8 +119,42 @@ public class ScoreboardSyncService {
     public void tickAll() {
         for (Player p : Bukkit.getOnlinePlayers()) {
             try {
-                sendDelta(p, "periodic");
+                sendDelta(p);
             } catch (Exception ignored) {}
+        }
+    }
+
+    public void sendAbsolute(Player p) {
+        UUID id = p.getUniqueId();
+        int[] current = callSync(() -> ScoreboardUtil.readBothSync(p));
+        lastSentAbs.put(id, current);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("player", id.toString());
+        Map<String, Integer> scoreboard = new HashMap<>();
+        scoreboard.put("currency1", current[0]);
+        scoreboard.put("currency2", current[1]);
+        payload.put("scoreboard", scoreboard);
+        payload.put("timestamp", System.currentTimeMillis() / 1000);
+
+        Request req = new Request.Builder()
+                .url(baseUrl + "/api/rewrite")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+
+        http.newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException e) {
+                plugin.getLogger().warning("Failed to rewrite scoreboard for " + p.getName() + ": " + e.getMessage());
+            }
+
+            @Override public void onResponse(Call call, Response response) {
+                plugin.getLogger().fine("Rewrote scoreboard for " + p.getName());
+            }
+        });
+    }
+
+    public void rewriteAll() {
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            try { sendAbsolute(p); } catch (Exception ignored) {}
         }
     }
 }

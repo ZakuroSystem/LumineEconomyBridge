@@ -1,7 +1,6 @@
 package com.grapelemon.lumineeconomybridge;
 
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
-import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -11,6 +10,8 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import net.md_5.bungee.api.ChatMessageType;
+import net.md_5.bungee.api.chat.TextComponent;
 
 import java.io.IOException;
 import java.util.*;
@@ -39,27 +40,31 @@ public class LeCommandExecutor implements CommandExecutor {
         sync.seed(p); // 安全に初期化
 
         if (args.length > 0 && args[0].equalsIgnoreCase("rewrite")) {
-            // 現在値と lastSent から delta を計算して送る
-            sync.sendDelta(p, "rewrite");
+            sync.rewriteAll();
             p.sendActionBar("§7同期を要求しました…");
+            return true;
+        }
+
+        if (args.length == 0) {
+            p.sendMessage("§7Usage: /le <content> | /le rewrite");
             return true;
         }
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("player", p.getUniqueId().toString());
-        payload.put("command", "/" + label + (args.length>0 ? " " + String.join(" ", args) : ""));
-        payload.put("args", Arrays.asList(args));
+        payload.put("command", "/" + String.join(" ", args));
         payload.put("timestamp", System.currentTimeMillis()/1000);
 
         Request req = new Request.Builder()
-                .url(baseUrl + "/execute")
+                .url(baseUrl + "/api/message")
                 .post(RequestBody.create(new Gson().toJson(payload), JSON))
                 .build();
 
         http.newCall(req).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException e) {
+                LumineEconomyBridge.getInstance().getLogger().warning("Message send failed: " + e.getMessage());
                 Bukkit.getScheduler().runTask(LumineEconomyBridge.getInstance(),
-                        () -> p.sendMessage("§e⏳ 応答を待機中… §7(経済サーバーに接続できません)"));
+                        () -> p.sendMessage("§c[EconomyBridge] 現在利用できません。"));
             }
 
             @Override public void onResponse(Call call, Response response) throws IOException {
@@ -68,11 +73,17 @@ public class LeCommandExecutor implements CommandExecutor {
                 Bukkit.getScheduler().runTask(LumineEconomyBridge.getInstance(), () -> {
                     if (res.has("messages")) {
                         res.getAsJsonArray("messages").forEach(el -> {
-                            String text = el.getAsJsonObject().get("text").getAsString();
-                            p.sendMessage(text);
+                            JsonObject msg = el.getAsJsonObject();
+                            String text = msg.get("text").getAsString();
+                            String target = msg.has("target") ? msg.get("target").getAsString() : "chat";
+                            switch (target.toLowerCase()) {
+                                case "actionbar" -> p.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(text));
+                                case "title" -> p.sendTitle(text, "", 10, 40, 10);
+                                case "subtitle" -> p.sendTitle("", text, 10, 40, 10);
+                                default -> p.sendMessage(text);
+                            }
                         });
                     }
-                    // 将来: scoreboard が返ってきたら適用する
                     if (res.has("scoreboard")) {
                         JsonObject sb = res.get("scoreboard").getAsJsonObject();
                         Integer c1 = sb.has("currency1") ? sb.get("currency1").getAsInt() : null;
@@ -80,6 +91,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         sync.applyFromPython(p, c1, c2);
                     }
                 });
+                LumineEconomyBridge.getInstance().getLogger().fine("Message handled for " + p.getName());
             }
         });
 
