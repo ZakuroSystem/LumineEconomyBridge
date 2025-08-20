@@ -43,6 +43,9 @@ public class ScoreboardSyncService {
 
     private <T> T callSync(Callable<T> task) {
         try {
+            if (Bukkit.isPrimaryThread()) {
+                return task.call();
+            }
             Future<T> f = Bukkit.getScheduler().callSyncMethod(plugin, task);
             return f.get(3, TimeUnit.SECONDS);
         } catch (Exception e) {
