@@ -7,6 +7,7 @@ money:
 deposit: "{src} から {dst} へ {amount} を入金しました。"
 withdraw: "{src} から {dst} へ {amount} を引き出しました。"
 transfer: "{src} から {dst} へ {amount} を送金しました。"
+receive: "{src} から {amount} を受け取りました。"
 balance:
   single: "{currency}: {amount}"
   all: "残高: {balances}"

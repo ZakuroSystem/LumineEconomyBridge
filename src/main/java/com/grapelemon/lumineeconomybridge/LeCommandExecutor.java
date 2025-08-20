@@ -115,10 +115,24 @@ public class LeCommandExecutor implements CommandExecutor {
                             JsonObject msg = el.getAsJsonObject();
                             String text = msg.has("text") ? msg.get("text").getAsString() : "";
                             String target = msg.has("target") ? msg.get("target").getAsString() : "chat";
+                            Player recv = p;
+                            if (msg.has("player")) {
+                                try {
+                                    UUID id = UUID.fromString(msg.get("player").getAsString());
+                                    Player other = Bukkit.getPlayer(id);
+                                    if (other != null) {
+                                        recv = other;
+                                    } else {
+                                        return;
+                                    }
+                                } catch (IllegalArgumentException ignored) {
+                                    return;
+                                }
+                            }
                             switch (target.toLowerCase()) {
-                                case "actionbar" -> p.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(text));
-                                case "title" -> p.sendTitle(text, msg.has("subtitle") ? msg.get("subtitle").getAsString() : "", 10, 40, 10);
-                                default -> p.sendMessage(text);
+                                case "actionbar" -> recv.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(text));
+                                case "title" -> recv.sendTitle(text, msg.has("subtitle") ? msg.get("subtitle").getAsString() : "", 10, 40, 10);
+                                default -> recv.sendMessage(text);
                             }
                         });
                     }
