@@ -109,14 +109,16 @@ public class ScoreboardSyncService {
                 plugin.getLogger().warning("Failed to sync scoreboard for " + p.getName() + ": " + e.getMessage());
             }
             @Override public void onResponse(Call call, Response response) throws IOException {
-                String body = response.body()!=null? response.body().string():"{}";
-                JsonObject res = JsonParser.parseString(body).getAsJsonObject();
-                // ACKが返ってきたら lastSent を current に更新
-                if (res.has("status") && res.get("status").getAsString().equalsIgnoreCase("success")) {
-                    lastSentAbs.put(id, current);
-                    plugin.getLogger().fine("Synced scoreboard for " + p.getName());
-                } else {
-                    plugin.getLogger().warning("Failed to sync scoreboard for " + p.getName());
+                try (response) {
+                    String body = response.body() != null ? response.body().string() : "{}";
+                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                    // ACKが返ってきたら lastSent を current に更新
+                    if (res.has("status") && res.get("status").getAsString().equalsIgnoreCase("success")) {
+                        lastSentAbs.put(id, current);
+                        plugin.getLogger().fine("Synced scoreboard for " + p.getName());
+                    } else {
+                        plugin.getLogger().warning("Failed to sync scoreboard for " + p.getName());
+                    }
                 }
             }
         });
@@ -153,7 +155,9 @@ public class ScoreboardSyncService {
             }
 
             @Override public void onResponse(Call call, Response response) {
-                plugin.getLogger().fine("Rewrote scoreboard for " + p.getName());
+                try (response) {
+                    plugin.getLogger().fine("Rewrote scoreboard for " + p.getName());
+                }
             }
         });
     }

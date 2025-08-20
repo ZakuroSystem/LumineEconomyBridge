@@ -107,56 +107,58 @@ public class LeCommandExecutor implements CommandExecutor {
             }
 
             @Override public void onResponse(Call call, Response response) throws IOException {
-                String body = response.body() != null ? response.body().string() : "{}";
-                JsonObject res = JsonParser.parseString(body).getAsJsonObject();
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (res.has("messages")) {
-                        res.getAsJsonArray("messages").forEach(el -> {
-                            JsonObject msg = el.getAsJsonObject();
-                            String text = msg.has("text") ? msg.get("text").getAsString() : "";
-                            String target = msg.has("target") ? msg.get("target").getAsString() : "chat";
-                            Player recv = p;
-                            if (msg.has("player")) {
-                                try {
-                                    UUID id = UUID.fromString(msg.get("player").getAsString());
-                                    Player other = Bukkit.getPlayer(id);
-                                    if (other != null) {
-                                        recv = other;
-                                    } else {
+                try (response) {
+                    String body = response.body() != null ? response.body().string() : "{}";
+                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (res.has("messages")) {
+                            res.getAsJsonArray("messages").forEach(el -> {
+                                JsonObject msg = el.getAsJsonObject();
+                                String text = msg.has("text") ? msg.get("text").getAsString() : "";
+                                String target = msg.has("target") ? msg.get("target").getAsString() : "chat";
+                                Player recv = p;
+                                if (msg.has("player")) {
+                                    try {
+                                        UUID id = UUID.fromString(msg.get("player").getAsString());
+                                        Player other = Bukkit.getPlayer(id);
+                                        if (other != null) {
+                                            recv = other;
+                                        } else {
+                                            return;
+                                        }
+                                    } catch (IllegalArgumentException ignored) {
                                         return;
                                     }
-                                } catch (IllegalArgumentException ignored) {
-                                    return;
                                 }
-                            }
-                            switch (target.toLowerCase()) {
-                                case "actionbar" -> recv.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(text));
-                                case "title" -> recv.sendTitle(text, msg.has("subtitle") ? msg.get("subtitle").getAsString() : "", 10, 40, 10);
-                                default -> recv.sendMessage(text);
-                            }
-                        });
-                    }
-                    if (res.has("scoreboards")) {
-                        res.getAsJsonObject("scoreboards").entrySet().forEach(en -> {
-                            try {
-                                UUID pid = UUID.fromString(en.getKey());
-                                Player target = Bukkit.getPlayer(pid);
-                                if (target != null) {
-                                    JsonObject sb = en.getValue().getAsJsonObject();
-                                    Map<String, Integer> updates = new HashMap<>();
-                                    sb.entrySet().forEach(e -> updates.put(e.getKey(), e.getValue().getAsInt()));
-                                    sync.applyFromPython(target, updates);
+                                switch (target.toLowerCase()) {
+                                    case "actionbar" -> recv.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(text));
+                                    case "title" -> recv.sendTitle(text, msg.has("subtitle") ? msg.get("subtitle").getAsString() : "", 10, 40, 10);
+                                    default -> recv.sendMessage(text);
                                 }
-                            } catch (IllegalArgumentException ignored) {}
-                        });
-                    } else if (res.has("scoreboard")) {
-                        JsonObject sb = res.getAsJsonObject("scoreboard");
-                        Map<String, Integer> updates = new HashMap<>();
-                        sb.entrySet().forEach(e -> updates.put(e.getKey(), e.getValue().getAsInt()));
-                        sync.applyFromPython(p, updates);
-                    }
-                });
-                plugin.getLogger().fine("Message handled for " + p.getName());
+                            });
+                        }
+                        if (res.has("scoreboards")) {
+                            res.getAsJsonObject("scoreboards").entrySet().forEach(en -> {
+                                try {
+                                    UUID pid = UUID.fromString(en.getKey());
+                                    Player target = Bukkit.getPlayer(pid);
+                                    if (target != null) {
+                                        JsonObject sb = en.getValue().getAsJsonObject();
+                                        Map<String, Integer> updates = new HashMap<>();
+                                        sb.entrySet().forEach(e -> updates.put(e.getKey(), e.getValue().getAsInt()));
+                                        sync.applyFromPython(target, updates);
+                                    }
+                                } catch (IllegalArgumentException ignored) {}
+                            });
+                        } else if (res.has("scoreboard")) {
+                            JsonObject sb = res.getAsJsonObject("scoreboard");
+                            Map<String, Integer> updates = new HashMap<>();
+                            sb.entrySet().forEach(e -> updates.put(e.getKey(), e.getValue().getAsInt()));
+                            sync.applyFromPython(p, updates);
+                        }
+                    });
+                    plugin.getLogger().fine("Message handled for " + p.getName());
+                }
             }
         });
 
