@@ -136,10 +136,18 @@ class RewritePayload(BaseModel):
 def ensure_currency(cur: sqlite3.Cursor, currency: str, symbol: Optional[str] = None) -> None:
     cur.execute(
         "INSERT OR IGNORE INTO currencies(name, symbol) VALUES (?,?)",
-        (currency, symbol or currency),
+        (currency, symbol),
     )
-    if symbol:
+    if symbol is not None:
         cur.execute("UPDATE currencies SET symbol=? WHERE name=?", (symbol, currency))
+
+
+def resolve_currency(cur: sqlite3.Cursor, token: str) -> str:
+    row = cur.execute(
+        "SELECT name FROM currencies WHERE LOWER(name)=LOWER(?) OR LOWER(symbol)=LOWER(?)",
+        (token, token),
+    ).fetchone()
+    return row["name"] if row else token
 
 
 def get_uuid(name: str) -> Optional[str]:
@@ -203,7 +211,9 @@ def get_scoreboard(cur: sqlite3.Cursor, uuid: str) -> Dict[str, int]:
 
 def format_amount(cur: sqlite3.Cursor, amount: int, currency: str) -> str:
     row = cur.execute("SELECT symbol FROM currencies WHERE name=?", (currency,)).fetchone()
-    symbol = row["symbol"] if row and row["symbol"] else currency
+    symbol = ""
+    if row and row["symbol"] and row["symbol"] != currency:
+        symbol = row["symbol"]
     return f"{symbol}{amount:,}"
 
 
@@ -356,7 +366,7 @@ async def message(payload: MessagePayload):
                 sub = cmd[1].lower()
                 if sub in {"give", "take"} and len(cmd) >= 5:
                     target_name = cmd[2].lower()
-                    currency = cmd[3]
+                    currency = resolve_currency(cur, cmd[3])
                     amt = parse_amount(4)
                     target_uuid = get_uuid(target_name)
                     if amt is None or target_uuid is None:
@@ -409,7 +419,7 @@ async def message(payload: MessagePayload):
                 elif sub == "pay" and len(cmd) >= 6:
                     src_name = cmd[2].lower()
                     dst_name = cmd[3].lower()
-                    currency = cmd[4]
+                    currency = resolve_currency(cur, cmd[4])
                     amt = parse_amount(5)
                     src_uuid = get_uuid(src_name)
                     dst_uuid = get_uuid(dst_name)
@@ -472,7 +482,7 @@ async def message(payload: MessagePayload):
             elif action in {"pay", "transfer"} and len(cmd) >= 5:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
-                currency = cmd[3]
+                currency = resolve_currency(cur, cmd[3])
                 amt = parse_amount(4)
                 src_uuid = get_uuid(src_name)
                 dst_uuid = get_uuid(dst_name)
@@ -533,7 +543,7 @@ async def message(payload: MessagePayload):
             elif action in {"deposit", "withdraw"} and len(cmd) >= 5:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
-                currency = cmd[3]
+                currency = resolve_currency(cur, cmd[3])
                 amt = parse_amount(4)
                 src_uuid = get_uuid(src_name)
                 dst_uuid = get_uuid(dst_name)
@@ -589,7 +599,7 @@ async def message(payload: MessagePayload):
                         scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
                         scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
             elif action == "balance":
-                currency = cmd[1] if len(cmd) >= 2 else None
+                currency = resolve_currency(cur, cmd[1]) if len(cmd) >= 2 else None
                 ensure_currency(cur, currency) if currency else None
                 if currency:
                     bal = get_balance(cur, exec_uuid, currency)
@@ -667,7 +677,7 @@ async def message(payload: MessagePayload):
                     error_text = t("redo.none")
             elif action == "setbalance" and len(cmd) >= 4:
                 target_name = cmd[1].lower()
-                currency = cmd[2]
+                currency = resolve_currency(cur, cmd[2])
                 amt = parse_amount_any(3)
                 target_uuid = get_uuid(target_name)
                 if amt is None or target_uuid is None:
