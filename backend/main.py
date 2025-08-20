@@ -406,11 +406,49 @@ async def message(payload: MessagePayload):
                             amt,
                             "pay",
                         )
-                        if src_uuid == exec_uuid or dst_uuid == exec_uuid:
+                        if exec_uuid in {src_uuid, dst_uuid}:
                             scoreboard = get_scoreboard(cur, exec_uuid)
                 else:
                     success = False
                     error_text = t("error.invalid_args")
+            elif action in {"pay", "transfer"} and len(cmd) >= 5:
+                src_name = cmd[1].lower()
+                dst_name = cmd[2].lower()
+                currency = cmd[3]
+                amt = parse_amount(4)
+                src_uuid = get_uuid(src_name)
+                dst_uuid = get_uuid(dst_name)
+                if (
+                    amt is None
+                    or src_uuid is None
+                    or dst_uuid is None
+                    or not transfer(cur, src_uuid, dst_uuid, currency, amt)
+                ):
+                    success = False
+                    error_text = t("error.pay_failed")
+                else:
+                    ensure_currency(cur, currency)
+                    msg_key = "money.pay" if action == "pay" else "transfer"
+                    messages.append({
+                        "target": "chat",
+                        "text": t(
+                            msg_key,
+                            src=src_name,
+                            dst=dst_name,
+                            amount=format_amount(cur, amt, currency),
+                        ),
+                    })
+                    record_transaction(
+                        cur,
+                        payload.timestamp,
+                        src_uuid,
+                        dst_uuid,
+                        currency,
+                        amt,
+                        action if action == "pay" else "transfer",
+                    )
+                    if exec_uuid in {src_uuid, dst_uuid}:
+                        scoreboard = get_scoreboard(cur, exec_uuid)
             elif action in {"deposit", "withdraw"} and len(cmd) >= 5:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
@@ -427,22 +465,15 @@ async def message(payload: MessagePayload):
                     error_text = t("error.invalid_args")
                 else:
                     ensure_currency(cur, currency)
-                    ok = transfer(
-                        cur,
-                        src_uuid if action == "deposit" else dst_uuid,
-                        dst_uuid if action == "deposit" else src_uuid,
-                        currency,
-                        amt,
-                    )
+                    ok = transfer(cur, src_uuid, dst_uuid, currency, amt)
                     if not ok:
                         success = False
                         error_text = t("error.insufficient")
                     else:
-                        verb_key = "deposit" if action == "deposit" else "withdraw"
                         messages.append({
                             "target": "chat",
                             "text": t(
-                                verb_key,
+                                action,
                                 src=src_name,
                                 dst=dst_name,
                                 amount=format_amount(cur, amt, currency),
@@ -451,8 +482,8 @@ async def message(payload: MessagePayload):
                         record_transaction(
                             cur,
                             payload.timestamp,
-                            src_uuid if action == "deposit" else dst_uuid,
-                            dst_uuid if action == "deposit" else src_uuid,
+                            src_uuid,
+                            dst_uuid,
                             currency,
                             amt,
                             action,
