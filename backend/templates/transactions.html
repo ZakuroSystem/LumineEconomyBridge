@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Recent Transactions</h1>
-<table class="table table-striped">
+<h1 class="mb-4">Recent Transactions</h1>
+<canvas id="txChart" class="mb-4" height="120"></canvas>
+<table id="txTable" class="table table-striped">
   <thead>
     <tr><th>ID</th><th>Time</th><th>From</th><th>To</th><th>Currency</th><th>Amount</th><th>Reason</th></tr>
   </thead>
@@ -9,7 +10,7 @@
     {% for tx in txs %}
     <tr>
       <td>{{ tx['id'] }}</td>
-      <td>{{ tx['timestamp'] }}</td>
+      <td>{{ tx['timestamp']|fmt_ts }}</td>
       <td>{{ tx['from_account'] }}</td>
       <td>{{ tx['to_account'] }}</td>
       <td>{{ tx['currency'] }}</td>
@@ -20,4 +21,17 @@
   </tbody>
 </table>
 <a href="{{ url_for('index') }}" class="btn btn-secondary">Back</a>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const labels = {{ labels|tojson }}.reverse();
+const amounts = {{ amounts|tojson }}.reverse();
+new Chart(document.getElementById('txChart'), {
+  type: 'line',
+  data: { labels: labels, datasets: [{ label: 'Amount', data: amounts, borderColor: 'rgb(75, 192, 192)', tension: 0.1 }] },
+  options: { scales: { y: { beginAtZero: true } } }
+});
+new DataTable('#txTable');
+</script>
 {% endblock %}

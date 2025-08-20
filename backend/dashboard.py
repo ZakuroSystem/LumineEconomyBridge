@@ -13,15 +13,22 @@ def get_db():
     return conn
 
 
+@app.template_filter("fmt_ts")
+def fmt_ts(ts: int) -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+
+
 @app.route("/")
 def index():
     with get_db() as db:
         currencies = [r["name"] for r in db.execute("SELECT name FROM currencies ORDER BY name").fetchall()]
         rows = db.execute("SELECT uuid, currency, balance FROM accounts").fetchall()
     accounts = {}
+    totals = {c: 0 for c in currencies}
     for row in rows:
         accounts.setdefault(row["uuid"], {})[row["currency"]] = row["balance"]
-    return render_template("index.html", currencies=currencies, accounts=accounts)
+        totals[row["currency"]] += row["balance"]
+    return render_template("index.html", currencies=currencies, accounts=accounts, totals=totals)
 
 
 @app.route("/transactions")
@@ -30,7 +37,9 @@ def transactions():
         txs = db.execute(
             "SELECT id, timestamp, from_account, to_account, currency, amount, reason FROM transactions ORDER BY id DESC LIMIT 50"
         ).fetchall()
-    return render_template("transactions.html", txs=txs)
+    labels = [time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(tx["timestamp"])) for tx in txs]
+    amounts = [tx["amount"] for tx in txs]
+    return render_template("transactions.html", txs=txs, labels=labels, amounts=amounts)
 
 
 @app.route("/adjust", methods=["GET", "POST"])

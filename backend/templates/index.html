@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Accounts</h1>
-<table class="table table-striped">
+<h1 class="mb-4">Accounts</h1>
+<canvas id="balanceChart" class="mb-4" height="120"></canvas>
+<table id="accountsTable" class="table table-striped">
   <thead>
     <tr>
       <th>UUID</th>
@@ -17,6 +18,20 @@
     {% endfor %}
   </tbody>
 </table>
-<a href="{{ url_for('adjust') }}" class="btn btn-primary">Adjust Balance</a>
+<a href="{{ url_for('adjust') }}" class="btn btn-primary me-2">Adjust Balance</a>
 <a href="{{ url_for('transactions') }}" class="btn btn-secondary">Recent Transactions</a>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const totals = {{ totals|tojson }};
+const labels = Object.keys(totals);
+const data = Object.values(totals);
+new Chart(document.getElementById('balanceChart'), {
+  type: 'bar',
+  data: { labels: labels, datasets: [{ label: 'Total Balance', data: data, backgroundColor: 'rgba(54,162,235,0.5)', borderColor: 'rgb(54,162,235)', borderWidth: 1 }]},
+  options: { scales: { y: { beginAtZero: true } } }
+});
+new DataTable('#accountsTable');
+</script>
 {% endblock %}
