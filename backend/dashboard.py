@@ -104,13 +104,77 @@ def index():
 
 @app.route("/transactions")
 def transactions():
+    player = request.args.get("player", "").strip()
+    currency = request.args.get("currency", "").strip()
+    min_amt = request.args.get("min", "").strip()
+    max_amt = request.args.get("max", "").strip()
+    start = request.args.get("start", "").strip()
+    end = request.args.get("end", "").strip()
+
+    conditions = []
+    params = []
     with get_db() as db:
-        txs = db.execute(
-            "SELECT id, timestamp, from_account, to_account, currency, amount, reason FROM transactions ORDER BY id DESC LIMIT 50"
-        ).fetchall()
+        # resolve player name to uuid
+        if player:
+            row = db.execute("SELECT uuid FROM name_index WHERE name=?", (player,)).fetchone()
+            uid = row["uuid"] if row else player
+            conditions.append("(t.from_account=? OR t.to_account=?)")
+            params.extend([uid, uid])
+        if currency:
+            conditions.append("t.currency=?")
+            params.append(currency)
+        if min_amt.isdigit():
+            conditions.append("t.amount>=?")
+            params.append(int(min_amt))
+        if max_amt.isdigit():
+            conditions.append("t.amount<=?")
+            params.append(int(max_amt))
+        if start:
+            try:
+                ts = int(time.mktime(time.strptime(start, "%Y-%m-%d")))
+                conditions.append("t.timestamp>=?")
+                params.append(ts)
+            except ValueError:
+                pass
+        if end:
+            try:
+                ts = int(time.mktime(time.strptime(end, "%Y-%m-%d"))) + 86400
+                conditions.append("t.timestamp<?")
+                params.append(ts)
+            except ValueError:
+                pass
+
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+        sql = f"""
+            SELECT t.id, t.timestamp, t.from_account, t.to_account,
+                   fn.name AS from_name, tn.name AS to_name,
+                   t.currency, t.amount, t.reason
+            FROM transactions t
+            LEFT JOIN name_index fn ON fn.uuid = t.from_account
+            LEFT JOIN name_index tn ON tn.uuid = t.to_account
+            {where}
+            ORDER BY t.id DESC LIMIT 200
+        """
+        txs = db.execute(sql, params).fetchall()
+        currencies = [r["name"] for r in db.execute("SELECT name FROM currencies WHERE active=1 ORDER BY name").fetchall()]
+
     labels = [time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(tx["timestamp"])) for tx in txs]
     amounts = [tx["amount"] for tx in txs]
-    return render_template("transactions.html", txs=txs, labels=labels, amounts=amounts)
+    return render_template(
+        "transactions.html",
+        txs=txs,
+        labels=labels,
+        amounts=amounts,
+        currencies=currencies,
+        filter={
+            "player": player,
+            "currency": currency,
+            "min": min_amt,
+            "max": max_amt,
+            "start": start,
+            "end": end,
+        },
+    )
 
 
 @app.route("/issuance")

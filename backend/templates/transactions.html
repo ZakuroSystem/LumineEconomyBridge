@@ -1,20 +1,43 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="mb-4">Recent Transactions</h1>
+<h1 class="mb-4">Transaction History</h1>
+
+<form class="row g-3 mb-4" method="get">
+  <div class="col-md-2"><input type="text" class="form-control" name="player" placeholder="Player" value="{{ filter.player }}"></div>
+  <div class="col-md-2">
+    <select class="form-select" name="currency">
+      <option value="">All Currencies</option>
+      {% for c in currencies %}
+      <option value="{{ c }}" {% if filter.currency==c %}selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-2"><input type="number" class="form-control" name="min" placeholder="Min Amount" value="{{ filter.min }}"></div>
+  <div class="col-md-2"><input type="number" class="form-control" name="max" placeholder="Max Amount" value="{{ filter.max }}"></div>
+  <div class="col-md-2"><input type="date" class="form-control" name="start" value="{{ filter.start }}"></div>
+  <div class="col-md-2"><input type="date" class="form-control" name="end" value="{{ filter.end }}"></div>
+  <div class="col-12"><button type="submit" class="btn btn-primary">Filter</button></div>
+</form>
+
 <canvas id="txChart" class="mb-4" height="120"></canvas>
+
 <table id="txTable" class="table table-striped datatable">
   <thead>
-    <tr><th>ID</th><th>Time</th><th>From</th><th>To</th><th>Currency</th><th>Amount</th><th>Reason</th></tr>
+    <tr>
+      <th>ID</th><th>Time</th><th>From</th><th>To</th><th>Currency</th><th>Amount</th><th>Type</th><th>Reason</th>
+    </tr>
   </thead>
   <tbody>
     {% for tx in txs %}
+    {% set type = tx['reason'] if tx['reason'] in ['pay','withdraw','deposit','transfer'] else 'system' %}
     <tr>
       <td>{{ tx['id'] }}</td>
       <td>{{ tx['timestamp']|fmt_ts }}</td>
-      <td>{{ tx['from_account'] }}</td>
-      <td>{{ tx['to_account'] }}</td>
+      <td>{{ tx['from_name'] or tx['from_account'] }}</td>
+      <td>{{ tx['to_name'] or tx['to_account'] }}</td>
       <td>{{ tx['currency'] }}</td>
       <td>{{ tx['amount'] }}</td>
+      <td>{{ type }}</td>
       <td>{{ tx['reason'] }}</td>
     </tr>
     {% endfor %}
@@ -27,10 +50,11 @@
 <script>
 const labels = {{ labels|tojson }}.reverse();
 const amounts = {{ amounts|tojson }}.reverse();
-  new Chart(document.getElementById('txChart'), {
-    type: 'line',
-    data: { labels: labels, datasets: [{ label: 'Amount', data: amounts, borderColor: 'rgb(75, 192, 192)', tension: 0.1 }] },
-    options: { scales: { y: { beginAtZero: true } } }
-  });
+new Chart(document.getElementById('txChart'), {
+  type: 'line',
+  data: { labels: labels, datasets: [{ label: 'Amount', data: amounts, borderColor: 'rgb(75, 192, 192)', tension: 0.1 }] },
+  options: { scales: { y: { beginAtZero: true } } }
+});
 </script>
 {% endblock %}
+
