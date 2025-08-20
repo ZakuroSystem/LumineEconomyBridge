@@ -40,6 +40,10 @@ def init_db() -> None:
                 name TEXT PRIMARY KEY,
                 uuid TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS players (
+                uuid TEXT PRIMARY KEY,
+                last_seen INTEGER NOT NULL
+            );
             """
         )
 
@@ -57,12 +61,30 @@ def index():
     with get_db() as db:
         currencies = [r["name"] for r in db.execute("SELECT name FROM currencies ORDER BY name").fetchall()]
         rows = db.execute("SELECT uuid, currency, balance FROM accounts").fetchall()
+        total_accounts = db.execute("SELECT COUNT(DISTINCT uuid) AS c FROM accounts").fetchone()["c"]
+        since = int(time.time()) - 86400
+        rec = db.execute(
+            "SELECT COUNT(*) AS cnt, COALESCE(SUM(amount),0) AS amt FROM transactions WHERE timestamp >= ?",
+            (since,),
+        ).fetchone()
+        recent_tx_count = rec["cnt"]
+        recent_tx_amount = rec["amt"]
+        active_players = db.execute(
+            "SELECT COUNT(*) AS c FROM players WHERE last_seen >= ?",
+            (since,),
+        ).fetchone()["c"]
     accounts = {}
     totals = {c: 0 for c in currencies}
     for row in rows:
         accounts.setdefault(row["uuid"], {})[row["currency"]] = row["balance"]
         totals[row["currency"]] += row["balance"]
-    return render_template("index.html", currencies=currencies, accounts=accounts, totals=totals)
+    stats = {
+        "total_accounts": total_accounts,
+        "recent_tx_count": recent_tx_count,
+        "recent_tx_amount": recent_tx_amount,
+        "active_players": active_players,
+    }
+    return render_template("index.html", currencies=currencies, accounts=accounts, totals=totals, stats=stats)
 
 
 @app.route("/transactions")

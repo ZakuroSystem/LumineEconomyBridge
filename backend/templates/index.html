@@ -1,5 +1,39 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="row mb-4">
+  <div class="col-md-3">
+    <div class="card text-center">
+      <div class="card-body">
+        <h5 class="card-title">Total Accounts</h5>
+        <p class="fs-4">{{ stats.total_accounts }}</p>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center">
+      <div class="card-body">
+        <h5 class="card-title">Active Players</h5>
+        <p class="fs-4">{{ stats.active_players }}</p>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center">
+      <div class="card-body">
+        <h5 class="card-title">Recent Tx Count</h5>
+        <p class="fs-4">{{ stats.recent_tx_count }}</p>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-center">
+      <div class="card-body">
+        <h5 class="card-title">Recent Tx Amount</h5>
+        <p class="fs-4">{{ stats.recent_tx_amount }}</p>
+      </div>
+    </div>
+  </div>
+</div>
 <h1 class="mb-4">Accounts</h1>
 <canvas id="balanceChart" class="mb-4" height="120"></canvas>
 <table id="accountsTable" class="table table-striped datatable">

@@ -65,6 +65,14 @@ with conn:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS players (
+            uuid TEXT PRIMARY KEY,
+            last_seen INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS system_accounts (
             uuid TEXT PRIMARY KEY
         )
@@ -383,6 +391,10 @@ async def message(payload: MessagePayload):
             cur.execute(
                 "INSERT OR REPLACE INTO name_index(name, uuid) VALUES (?, ?)",
                 (payload.executor.lower(), payload.player),
+            )
+            cur.execute(
+                "INSERT OR REPLACE INTO players(uuid, last_seen) VALUES (?, ?)",
+                (payload.player, payload.timestamp),
             )
 
             exec_uuid = payload.player
@@ -876,6 +888,10 @@ async def rewrite(payload: RewritePayload):
         for k, v in payload.scoreboard.items():
             ensure_currency(cur, k)
             set_balance(cur, payload.player, k, v)
+        cur.execute(
+            "INSERT OR REPLACE INTO players(uuid, last_seen) VALUES (?, ?)",
+            (payload.player, payload.timestamp),
+        )
     msgs = []
     if get_lang(payload.player) == "en":
         msgs.append({
