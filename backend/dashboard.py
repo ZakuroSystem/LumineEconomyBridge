@@ -21,6 +21,7 @@ def init_db() -> None:
                 uuid TEXT NOT NULL,
                 currency TEXT NOT NULL,
                 balance INTEGER NOT NULL,
+                frozen INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY(uuid, currency)
             );
             CREATE TABLE IF NOT EXISTS transactions (
@@ -34,7 +35,9 @@ def init_db() -> None:
             );
             CREATE TABLE IF NOT EXISTS currencies (
                 name TEXT PRIMARY KEY,
-                symbol TEXT
+                symbol TEXT,
+                description TEXT,
+                active INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS name_index (
                 name TEXT PRIMARY KEY,
@@ -46,6 +49,18 @@ def init_db() -> None:
             );
             """
         )
+        try:
+            db.execute("ALTER TABLE accounts ADD COLUMN frozen INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("ALTER TABLE currencies ADD COLUMN description TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("ALTER TABLE currencies ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
 
 
 init_db()
@@ -59,7 +74,7 @@ def fmt_ts(ts: int) -> str:
 @app.route("/")
 def index():
     with get_db() as db:
-        currencies = [r["name"] for r in db.execute("SELECT name FROM currencies ORDER BY name").fetchall()]
+        currencies = [r["name"] for r in db.execute("SELECT name FROM currencies WHERE active=1 ORDER BY name").fetchall()]
         rows = db.execute("SELECT uuid, currency, balance FROM accounts").fetchall()
         total_accounts = db.execute("SELECT COUNT(DISTINCT uuid) AS c FROM accounts").fetchone()["c"]
         since = int(time.time()) - 86400
@@ -119,14 +134,16 @@ def issuance():
 
 @app.route("/adjust", methods=["GET", "POST"])
 def adjust():
+    preset_uuid = request.args.get("uuid", "")
     if request.method == "POST":
         uuid = request.form["uuid"].strip()
         currency = request.form["currency"].strip()
+        action = request.form.get("action", "grant")
         try:
-            amount = int(request.form["amount"])
+            amount = int(request.form.get("amount", 0))
         except ValueError:
             flash("Amount must be an integer")
-            return redirect(url_for("adjust"))
+            return redirect(url_for("adjust", uuid=uuid))
         reason = request.form.get("reason", "adjust")
         ts = int(time.time())
         with get_db() as db:
@@ -135,20 +152,110 @@ def adjust():
                 "INSERT OR IGNORE INTO accounts(uuid, currency, balance) VALUES (?,?,0)",
                 (uuid, currency),
             )
+            if action == "reset":
+                row = cur.execute(
+                    "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
+                    (uuid, currency),
+                ).fetchone()
+                delta = -row["balance"] if row else 0
+            else:
+                delta = amount if action == "grant" else -amount
             cur.execute(
                 "UPDATE accounts SET balance = balance + ? WHERE uuid=? AND currency=?",
-                (amount, uuid, currency),
+                (delta, uuid, currency),
             )
-            from_acc = None if amount >= 0 else uuid
-            to_acc = uuid if amount >= 0 else None
+            from_acc = None if delta >= 0 else uuid
+            to_acc = uuid if delta >= 0 else None
             cur.execute(
                 "INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason) VALUES (?,?,?,?,?,?)",
-                (ts, from_acc, to_acc, currency, abs(amount), reason),
+                (ts, from_acc, to_acc, currency, abs(delta), reason),
             )
             db.commit()
         flash("Balance adjusted")
-        return redirect(url_for("index"))
-    return render_template("adjust.html")
+        return redirect(url_for("accounts"))
+    return render_template("adjust.html", uuid=preset_uuid)
+
+
+@app.route("/accounts")
+def accounts():
+    q = request.args.get("q", "").strip()
+    with get_db() as db:
+        currencies = [r["name"] for r in db.execute("SELECT name FROM currencies WHERE active=1 ORDER BY name").fetchall()]
+        if q:
+            rows = db.execute(
+                """
+                SELECT a.uuid, n.name, a.currency, a.balance, a.frozen
+                FROM accounts a LEFT JOIN name_index n ON n.uuid=a.uuid
+                WHERE a.uuid=? OR n.name LIKE ?
+                """,
+                (q, f"%{q}%"),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                """
+                SELECT a.uuid, n.name, a.currency, a.balance, a.frozen
+                FROM accounts a LEFT JOIN name_index n ON n.uuid=a.uuid
+                """,
+            ).fetchall()
+    accs = {}
+    for r in rows:
+        info = accs.setdefault(
+            r["uuid"], {"uuid": r["uuid"], "name": r["name"], "frozen": r["frozen"], "balances": {}}
+        )
+        info["balances"][r["currency"]] = r["balance"]
+        if r["frozen"]:
+            info["frozen"] = 1
+    return render_template("accounts.html", accounts=accs.values(), currencies=currencies, query=q)
+
+
+@app.route("/accounts/freeze/<uuid>/<int:state>")
+def toggle_freeze(uuid: str, state: int):
+    with get_db() as db:
+        db.execute("UPDATE accounts SET frozen=? WHERE uuid=?", (state, uuid))
+        db.commit()
+    flash("Account frozen" if state else "Account activated")
+    return redirect(url_for("accounts"))
+
+
+@app.route("/currencies", methods=["GET", "POST"])
+def currencies():
+    with get_db() as db:
+        if request.method == "POST":
+            action = request.form["action"]
+            if action == "create":
+                name = request.form["name"].strip()
+                symbol = request.form.get("symbol", "").strip() or None
+                desc = request.form.get("description", "").strip()
+                db.execute(
+                    "INSERT INTO currencies(name, symbol, description, active) VALUES (?,?,?,1)",
+                    (name, symbol, desc),
+                )
+            elif action == "edit":
+                name = request.form["name"].strip()
+                symbol = request.form.get("symbol", "").strip() or None
+                desc = request.form.get("description", "").strip()
+                db.execute(
+                    "UPDATE currencies SET symbol=?, description=? WHERE name=?",
+                    (symbol, desc, name),
+                )
+            elif action == "toggle":
+                name = request.form["name"].strip()
+                db.execute(
+                    "UPDATE currencies SET active = 1 - active WHERE name=?",
+                    (name,),
+                )
+            db.commit()
+        rows = db.execute(
+            """
+            SELECT c.name, c.symbol, c.description, c.active,
+                   COALESCE(SUM(a.balance),0) AS supply
+            FROM currencies c
+            LEFT JOIN accounts a ON a.currency = c.name
+            GROUP BY c.name
+            ORDER BY c.name
+            """,
+        ).fetchall()
+    return render_template("currencies.html", currencies=rows)
 
 
 if __name__ == "__main__":

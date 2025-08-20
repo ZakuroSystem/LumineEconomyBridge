@@ -25,6 +25,7 @@ with conn:
             uuid TEXT NOT NULL,
             currency TEXT NOT NULL,
             balance INTEGER NOT NULL,
+            frozen INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(uuid, currency)
         )
         """
@@ -46,13 +47,27 @@ with conn:
         """
         CREATE TABLE IF NOT EXISTS currencies (
             name TEXT PRIMARY KEY,
-            symbol TEXT
+            symbol TEXT,
+            description TEXT,
+            active INTEGER NOT NULL DEFAULT 1
         )
         """
     )
-    # add symbol column if upgrading from old schema
+    # schema upgrades
+    try:
+        conn.execute("ALTER TABLE accounts ADD COLUMN frozen INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     try:
         conn.execute("ALTER TABLE currencies ADD COLUMN symbol TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE currencies ADD COLUMN description TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE currencies ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
     except sqlite3.OperationalError:
         pass
     conn.execute(
@@ -202,6 +217,14 @@ def get_balance(cur: sqlite3.Cursor, uuid: str, currency: str) -> int:
     return row["balance"] if row else 0
 
 
+def is_frozen(cur: sqlite3.Cursor, uuid: str, currency: str) -> bool:
+    row = cur.execute(
+        "SELECT frozen FROM accounts WHERE uuid=? AND currency=?",
+        (uuid, currency),
+    ).fetchone()
+    return bool(row and row["frozen"])
+
+
 def set_balance(cur: sqlite3.Cursor, uuid: str, currency: str, amount: int) -> None:
     cur.execute(
         """
@@ -213,7 +236,13 @@ def set_balance(cur: sqlite3.Cursor, uuid: str, currency: str, amount: int) -> N
 
 
 def add_balance(cur: sqlite3.Cursor, uuid: str, currency: str, delta: int) -> bool:
-    bal = get_balance(cur, uuid, currency)
+    row = cur.execute(
+        "SELECT balance, frozen FROM accounts WHERE uuid=? AND currency=?",
+        (uuid, currency),
+    ).fetchone()
+    bal = row["balance"] if row else 0
+    if row and row["frozen"]:
+        return False
     new_bal = bal + delta
     if new_bal < 0:
         return False
@@ -460,50 +489,54 @@ async def message(payload: MessagePayload):
                         error_text = t("error.invalid_args", lang=exec_lang)
                     else:
                         ensure_currency(cur, currency)
-                        delta = amt if sub == "give" else -amt
-                        if not add_balance(cur, target_uuid, currency, delta):
+                        if is_frozen(cur, target_uuid, currency):
                             success = False
-                            error_text = t("error.insufficient", lang=exec_lang)
+                            error_text = t("error.frozen", lang=exec_lang)
                         else:
-                            messages.append({
-                                "target": "chat",
-                                "text": t(
-                                    f"money.{sub}",
-                                    lang=exec_lang,
-                                    target=target_name,
-                                    currency=currency,
-                                    amount=format_amount(cur, amt, currency),
-                                ),
-                            })
-                            if sub == "give":
-                                messages.append(
-                                    {
-                                        "target": "chat",
-                                        "player": target_uuid,
-                                        "text": t(
-                                            "receive",
-                                            lang=get_lang(target_uuid),
-                                            src=payload.executor,
-                                            amount=format_amount(cur, amt, currency),
-                                        ),
-                                    }
+                            delta = amt if sub == "give" else -amt
+                            if not add_balance(cur, target_uuid, currency, delta):
+                                success = False
+                                error_text = t("error.insufficient", lang=exec_lang)
+                            else:
+                                messages.append({
+                                    "target": "chat",
+                                    "text": t(
+                                        f"money.{sub}",
+                                        lang=exec_lang,
+                                        target=target_name,
+                                        currency=currency,
+                                        amount=format_amount(cur, amt, currency),
+                                    ),
+                                })
+                                if sub == "give":
+                                    messages.append(
+                                        {
+                                            "target": "chat",
+                                            "player": target_uuid,
+                                            "text": t(
+                                                "receive",
+                                                lang=get_lang(target_uuid),
+                                                src=payload.executor,
+                                                amount=format_amount(cur, amt, currency),
+                                            ),
+                                        }
+                                    )
+                                record_transaction(
+                                    cur,
+                                    payload.timestamp,
+                                    None if sub == "give" else target_uuid,
+                                    target_uuid if sub == "give" else None,
+                                    currency,
+                                    amt,
+                                    "mint" if sub == "give" else "burn",
                                 )
-                            record_transaction(
-                                cur,
-                                payload.timestamp,
-                                None if sub == "give" else target_uuid,
-                                target_uuid if sub == "give" else None,
-                                currency,
-                                amt,
-                                "mint" if sub == "give" else "burn",
-                            )
-                            actions.append({
-                                "src": None if sub == "give" else target_uuid,
-                                "dst": target_uuid if sub == "give" else None,
-                                "currency": currency,
-                                "amount": amt,
-                            })
-                            scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
+                                actions.append({
+                                    "src": None if sub == "give" else target_uuid,
+                                    "dst": target_uuid if sub == "give" else None,
+                                    "currency": currency,
+                                    "amount": amt,
+                                })
+                                scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
                 elif sub == "pay" and len(cmd) >= 6:
                     src_name = cmd[2].lower()
                     dst_name = cmd[3].lower()
@@ -520,7 +553,10 @@ async def message(payload: MessagePayload):
                         error_text = t("error.invalid_args", lang=exec_lang)
                     else:
                         ensure_currency(cur, currency)
-                        if get_balance(cur, src_uuid, currency) < amt:
+                        if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
+                            success = False
+                            error_text = t("error.frozen", lang=exec_lang)
+                        elif get_balance(cur, src_uuid, currency) < amt:
                             success = False
                             error_text = t("error.insufficient", lang=exec_lang)
                         elif not transfer(cur, src_uuid, dst_uuid, currency, amt):
@@ -585,7 +621,10 @@ async def message(payload: MessagePayload):
                     error_text = t("error.invalid_args", lang=exec_lang)
                 else:
                     ensure_currency(cur, currency)
-                    if get_balance(cur, src_uuid, currency) < amt:
+                    if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
+                        success = False
+                        error_text = t("error.frozen", lang=exec_lang)
+                    elif get_balance(cur, src_uuid, currency) < amt:
                         success = False
                         error_text = t("error.insufficient", lang=exec_lang)
                     elif not transfer(cur, src_uuid, dst_uuid, currency, amt):
@@ -648,16 +687,20 @@ async def message(payload: MessagePayload):
                     error_text = t("error.invalid_args", lang=exec_lang)
                 else:
                     ensure_currency(cur, currency)
-                    ok = transfer(cur, src_uuid, dst_uuid, currency, amt)
-                    if not ok:
+                    if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
                         success = False
-                        error_text = t("error.insufficient", lang=exec_lang)
+                        error_text = t("error.frozen", lang=exec_lang)
                     else:
-                        messages.append({
-                            "target": "chat",
-                            "text": t(
-                                action,
-                                lang=exec_lang,
+                        ok = transfer(cur, src_uuid, dst_uuid, currency, amt)
+                        if not ok:
+                            success = False
+                            error_text = t("error.insufficient", lang=exec_lang)
+                        else:
+                            messages.append({
+                                "target": "chat",
+                                "text": t(
+                                    action,
+                                    lang=exec_lang,
                                 src=src_name,
                                 dst=dst_name,
                                 amount=format_amount(cur, amt, currency),

@@ -25,6 +25,6 @@ Use `/le` followed by a subcommand. Common commands:
 - All command validation and economy processing happen on the Python backend.
 - Unknown or invalid commands return an error followed by a suggestion to use `/le help`.
 - Scoreboards for `currency1` and `currency2` are synchronized with the backend every 10 seconds.
-- The web dashboard (run `python backend/dashboard.py`) summarizes total accounts, per-currency supply, recent transaction stats, and active players.
+- The web dashboard (run `python backend/dashboard.py`) summarizes total accounts, per-currency supply, recent transaction stats, and active players. It also provides account search/editing and currency management tools.
 
 For developer details, see `plugin.yml` and the Python sources under `backend/`.

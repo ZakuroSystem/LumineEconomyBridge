@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Accounts</h1>
+<form method="get" class="row g-2 mb-3">
+  <div class="col-auto"><input class="form-control" name="q" placeholder="Name or UUID" value="{{ query }}"></div>
+  <div class="col-auto"><button class="btn btn-primary" type="submit">Search</button></div>
+  <div class="col-auto"><a href="{{ url_for('adjust') }}" class="btn btn-secondary">Adjust</a></div>
+</form>
+<table class="table table-striped datatable">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>UUID</th>
+      {% for c in currencies %}<th>{{ c }}</th>{% endfor %}
+      <th>Frozen</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in accounts %}
+    <tr>
+      <td>{{ a.name }}</td>
+      <td>{{ a.uuid }}</td>
+      {% for c in currencies %}<td>{{ a.balances.get(c, 0) }}</td>{% endfor %}
+      <td>{{ 'Yes' if a.frozen else 'No' }}</td>
+      <td>
+        <a href="{{ url_for('adjust', uuid=a.uuid) }}" class="btn btn-sm btn-secondary">Edit</a>
+        {% if a.frozen %}
+        <a href="{{ url_for('toggle_freeze', uuid=a.uuid, state=0) }}" class="btn btn-sm btn-success">Unfreeze</a>
+        {% else %}
+        <a href="{{ url_for('toggle_freeze', uuid=a.uuid, state=1) }}" class="btn btn-sm btn-danger">Freeze</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

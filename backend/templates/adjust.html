@@ -4,21 +4,29 @@
 <form method="post">
   <div class="mb-3">
     <label class="form-label">UUID</label>
-    <input name="uuid" class="form-control" required>
+    <input name="uuid" class="form-control" value="{{ uuid }}" required>
   </div>
   <div class="mb-3">
     <label class="form-label">Currency</label>
     <input name="currency" class="form-control" required>
   </div>
   <div class="mb-3">
-    <label class="form-label">Amount (positive give, negative take)</label>
-    <input type="number" name="amount" class="form-control" required>
+    <label class="form-label">Action</label>
+    <select name="action" class="form-select">
+      <option value="grant">Grant</option>
+      <option value="revoke">Revoke</option>
+      <option value="reset">Reset</option>
+    </select>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Amount</label>
+    <input type="number" name="amount" class="form-control" value="0">
   </div>
   <div class="mb-3">
     <label class="form-label">Reason</label>
     <input name="reason" class="form-control">
   </div>
   <button type="submit" class="btn btn-primary">Submit</button>
-  <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>
+  <a href="{{ url_for('accounts') }}" class="btn btn-secondary">Cancel</a>
 </form>
 {% endblock %}

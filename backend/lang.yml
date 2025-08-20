@@ -59,6 +59,7 @@ en:
     no_command: "§cNo command provided.§r"
     no_backup: "§cBackup not found.§r"
     unknown_command: "§cUnknown command.§r"
+    frozen: "§cAccount is frozen.§r"
   lang:
     set: "§aLanguage set to §e{code}§a.§r"
     invalid: "§cInvalid language.§r"
@@ -124,6 +125,7 @@ jp:
     no_command: "§cコマンドが指定されていません。§r"
     no_backup: "§cバックアップが見つかりません。§r"
     unknown_command: "§c不明なコマンドです。§r"
+    frozen: "§cアカウントは凍結されています。§r"
   lang:
     set: "§a言語を §e{code}§a に設定しました。§r"
     invalid: "§c無効な言語です。§r"
