@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Backups</h2>
+<form method="post" class="mb-3">
+  <input type="hidden" name="action" value="create">
+  <button class="btn btn-primary">Create Backup</button>
+</form>
+<form method="post" class="row g-2 mb-4">
+  <input type="hidden" name="action" value="settings">
+  <div class="col-auto"><label class="col-form-label">Interval (s)</label></div>
+  <div class="col"><input type="number" class="form-control" name="interval" value="{{ interval }}"></div>
+  <div class="col-auto"><label class="col-form-label">Keep</label></div>
+  <div class="col"><input type="number" class="form-control" name="keep" value="{{ keep }}"></div>
+  <div class="col-auto"><button class="btn btn-secondary">Save</button></div>
+</form>
+<table class="table table-striped">
+  <thead><tr><th>File</th><th>Time</th><th>Size</th><th>Action</th></tr></thead>
+  <tbody>
+    {% for b in backups %}
+    <tr>
+      <td>{{ b.name }}</td>
+      <td>{{ b.mtime|fmt_ts }}</td>
+      <td>{{ (b.size/1024)|round(1) }} KB</td>
+      <td><a class="btn btn-sm btn-danger" href="{{ url_for('restore_backup', name=b.name) }}">Restore</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

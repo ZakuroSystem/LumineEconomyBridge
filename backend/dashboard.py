@@ -1,10 +1,16 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file
 import sqlite3
 import time
+import os
+import json
+import shutil
 
 app = Flask(__name__)
 app.secret_key = "lumineeconomy"
 DB_PATH = "economy.db"
+LOG_PATH = "economy_commands.log"
+BACKUP_DIR = "backups"
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 
 def get_db():
@@ -47,6 +53,10 @@ def init_db() -> None:
                 uuid TEXT PRIMARY KEY,
                 last_seen INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
         try:
@@ -64,6 +74,55 @@ def init_db() -> None:
 
 
 init_db()
+
+
+def get_setting(key: str, default: int) -> int:
+    with get_db() as db:
+        row = db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return int(row["value"]) if row else default
+
+
+def set_setting(key: str, value: int) -> None:
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, str(value)),
+        )
+        db.commit()
+
+
+def list_backups():
+    files = []
+    for name in os.listdir(BACKUP_DIR):
+        if name.endswith(".db"):
+            path = os.path.join(BACKUP_DIR, name)
+            stat = os.stat(path)
+            files.append({"name": name, "size": stat.st_size, "mtime": int(stat.st_mtime)})
+    files.sort(key=lambda x: x["mtime"], reverse=True)
+    return files
+
+
+def backup_db() -> str:
+    ts = time.strftime("%Y%m%d%H%M%S")
+    dest = os.path.join(BACKUP_DIR, f"economy-{ts}.db")
+    with get_db() as db:
+        dest_conn = sqlite3.connect(dest)
+        with dest_conn:
+            db.backup(dest_conn)
+        dest_conn.close()
+    return dest
+
+
+def restore_db(path: str) -> None:
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+    shutil.copy2(path, DB_PATH)
+
+
+def trim_backups(keep: int) -> None:
+    files = list_backups()
+    for info in files[keep:]:
+        os.remove(os.path.join(BACKUP_DIR, info["name"]))
 
 
 @app.template_filter("fmt_ts")
@@ -175,6 +234,81 @@ def transactions():
             "end": end,
         },
     )
+
+
+@app.route("/logs")
+def logs():
+    exec_q = request.args.get("executor", "").strip()
+    type_q = request.args.get("type", "").strip()
+    result_q = request.args.get("result", "").strip()
+    entries = []
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, encoding="utf-8") as f:
+            lines = f.readlines()[-500:]
+        for line in reversed(lines):
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if exec_q and exec_q.lower() not in item.get("executor", "").lower():
+                continue
+            if type_q and not item.get("command", "").lower().startswith(type_q.lower()):
+                continue
+            if result_q == "success" and not item.get("success", False):
+                continue
+            if result_q == "failure" and item.get("success", False):
+                continue
+            entries.append(item)
+    return render_template(
+        "logs.html",
+        logs=entries,
+        filter={"executor": exec_q, "type": type_q, "result": result_q},
+    )
+
+
+@app.route("/logs/download")
+def download_logs():
+    return send_file(LOG_PATH, as_attachment=True)
+
+
+@app.route("/backups", methods=["GET", "POST"])
+def backups():
+    interval = get_setting("auto_backup_interval", 3600)
+    keep = get_setting("auto_backup_keep", 10)
+    if request.method == "POST":
+        action = request.form["action"]
+        if action == "create":
+            backup_db()
+            trim_backups(keep)
+            flash("Backup created")
+        elif action == "settings":
+            try:
+                interval = int(request.form.get("interval", interval))
+                keep = int(request.form.get("keep", keep))
+                set_setting("auto_backup_interval", interval)
+                set_setting("auto_backup_keep", keep)
+                flash("Settings updated")
+            except ValueError:
+                flash("Invalid settings")
+        return redirect(url_for("backups"))
+    files = list_backups()
+    return render_template(
+        "backups.html",
+        backups=files,
+        interval=interval,
+        keep=keep,
+    )
+
+
+@app.route("/backups/restore/<name>")
+def restore_backup(name: str):
+    path = os.path.join(BACKUP_DIR, name)
+    try:
+        restore_db(path)
+        flash("Backup restored")
+    except FileNotFoundError:
+        flash("Backup not found")
+    return redirect(url_for("backups"))
 
 
 @app.route("/issuance")

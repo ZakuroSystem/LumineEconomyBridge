@@ -88,6 +88,14 @@ with conn:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS system_accounts (
             uuid TEXT PRIMARY KEY
         )
@@ -286,6 +294,34 @@ BACKUP_DIR = "backups"
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
 
+def get_setting(key: str, default: int) -> int:
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return int(row["value"]) if row else default
+
+
+def set_setting(key: str, value: int) -> None:
+    with transaction() as cur:
+        cur.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, str(value)),
+        )
+
+
+def list_backups() -> List[str]:
+    files = [
+        os.path.join(BACKUP_DIR, f)
+        for f in os.listdir(BACKUP_DIR)
+        if f.endswith(".db")
+    ]
+    files.sort(reverse=True)
+    return files
+
+
+def trim_backups(keep: int) -> None:
+    for path in list_backups()[keep:]:
+        os.remove(path)
+
+
 def backup_db() -> str:
     ts = time.strftime("%Y%m%d%H%M%S")
     dest = os.path.join(BACKUP_DIR, f"economy-{ts}.db")
@@ -312,8 +348,10 @@ def restore_db(path: str) -> None:
 
 async def auto_backup_loop():
     while True:
-        await asyncio.sleep(3600)
+        interval = get_setting("auto_backup_interval", 3600)
+        await asyncio.sleep(interval)
         backup_db()
+        trim_backups(get_setting("auto_backup_keep", 10))
 
 
 @app.on_event("startup")
@@ -406,6 +444,7 @@ async def message(payload: MessagePayload):
             error_text = t("lang.invalid", lang=exec_lang)
     elif action == "backup":
         path = backup_db()
+        trim_backups(get_setting("auto_backup_keep", 10))
         messages.append({"target": "chat", "text": t("backup.created", lang=exec_lang, file=os.path.basename(path))})
     elif action == "restore" and len(cmd) >= 2:
         file = os.path.join(BACKUP_DIR, cmd[1])
