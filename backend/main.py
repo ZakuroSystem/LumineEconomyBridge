@@ -285,7 +285,7 @@ async def message(payload: MessagePayload):
     cmd = payload.command.lstrip("/").split()
     action = cmd[0].lower() if cmd else ""
     messages: List[Dict[str, str]] = []
-    scoreboard = None
+    scoreboards: Dict[str, Dict[str, int]] = {}
     success = True
     error_text = None
 
@@ -369,8 +369,7 @@ async def message(payload: MessagePayload):
                                 amt,
                                 "mint" if sub == "give" else "burn",
                             )
-                            if target_uuid == exec_uuid:
-                                scoreboard = get_scoreboard(cur, exec_uuid)
+                            scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
                 elif sub == "pay" and len(cmd) >= 6:
                     src_name = cmd[2].lower()
                     dst_name = cmd[3].lower()
@@ -406,8 +405,8 @@ async def message(payload: MessagePayload):
                             amt,
                             "pay",
                         )
-                        if exec_uuid in {src_uuid, dst_uuid}:
-                            scoreboard = get_scoreboard(cur, exec_uuid)
+                        scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
+                        scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
                 else:
                     success = False
                     error_text = t("error.invalid_args")
@@ -447,8 +446,8 @@ async def message(payload: MessagePayload):
                         amt,
                         action if action == "pay" else "transfer",
                     )
-                    if exec_uuid in {src_uuid, dst_uuid}:
-                        scoreboard = get_scoreboard(cur, exec_uuid)
+                    scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
+                    scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
             elif action in {"deposit", "withdraw"} and len(cmd) >= 5:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
@@ -488,8 +487,8 @@ async def message(payload: MessagePayload):
                             amt,
                             action,
                         )
-                        if exec_uuid in {src_uuid, dst_uuid}:
-                            scoreboard = get_scoreboard(cur, exec_uuid)
+                        scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
+                        scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
             elif action == "balance":
                 currency = cmd[1] if len(cmd) >= 2 else None
                 ensure_currency(cur, currency) if currency else None
@@ -512,7 +511,7 @@ async def message(payload: MessagePayload):
                         messages.append({"target": "chat", "text": t("balance.all", balances=balances)})
                     else:
                         messages.append({"target": "chat", "text": t("balance.empty")})
-                scoreboard = get_scoreboard(cur, exec_uuid)
+                scoreboards[exec_uuid] = get_scoreboard(cur, exec_uuid)
             elif action == "setbalance" and len(cmd) >= 4:
                 target_name = cmd[1].lower()
                 currency = cmd[2]
@@ -545,8 +544,7 @@ async def message(payload: MessagePayload):
                             amount=format_amount(cur, amt, currency),
                         ),
                     })
-                    if target_uuid == exec_uuid:
-                        scoreboard = get_scoreboard(cur, exec_uuid)
+                    scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
             elif action == "history" and len(cmd) >= 2:
                 target_name = cmd[1].lower()
                 target_uuid = get_uuid(target_name)
@@ -582,12 +580,12 @@ async def message(payload: MessagePayload):
                         })
             else:
                 messages.append({"target": "chat", "text": f"Echo: {payload.command}"})
-                scoreboard = get_scoreboard(cur, exec_uuid)
+                scoreboards[exec_uuid] = get_scoreboard(cur, exec_uuid)
 
     if success:
         res = {"status": "success", "messages": messages}
-        if scoreboard is not None:
-            res["scoreboard"] = scoreboard
+        if scoreboards:
+            res["scoreboards"] = scoreboards
     else:
         res = {
             "status": "error",

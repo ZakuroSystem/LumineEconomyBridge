@@ -17,6 +17,7 @@ import net.md_5.bungee.api.chat.TextComponent;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 public class LeCommandExecutor implements CommandExecutor {
 
@@ -121,8 +122,21 @@ public class LeCommandExecutor implements CommandExecutor {
                             }
                         });
                     }
-                    if (res.has("scoreboard")) {
-                        JsonObject sb = res.get("scoreboard").getAsJsonObject();
+                    if (res.has("scoreboards")) {
+                        res.getAsJsonObject("scoreboards").entrySet().forEach(en -> {
+                            try {
+                                UUID pid = UUID.fromString(en.getKey());
+                                Player target = Bukkit.getPlayer(pid);
+                                if (target != null) {
+                                    JsonObject sb = en.getValue().getAsJsonObject();
+                                    Map<String, Integer> updates = new HashMap<>();
+                                    sb.entrySet().forEach(e -> updates.put(e.getKey(), e.getValue().getAsInt()));
+                                    sync.applyFromPython(target, updates);
+                                }
+                            } catch (IllegalArgumentException ignored) {}
+                        });
+                    } else if (res.has("scoreboard")) {
+                        JsonObject sb = res.getAsJsonObject("scoreboard");
                         Map<String, Integer> updates = new HashMap<>();
                         sb.entrySet().forEach(e -> updates.put(e.getKey(), e.getValue().getAsInt()));
                         sync.applyFromPython(p, updates);
