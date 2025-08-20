@@ -1,7 +1,6 @@
 package com.grapelemon.lumineeconomybridge;
 
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
-import io.papermc.paper.event.player.PlayerSetScoreEvent;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -31,12 +30,4 @@ public class PlayerListener implements Listener {
         }
     }
 
-    @EventHandler
-    public void onScoreChange(PlayerSetScoreEvent e) {
-        ScoreboardSyncService sync = plugin.getSyncService();
-        if (sync == null) return;
-        String obj = e.getObjectiveName();
-        if (!obj.equalsIgnoreCase("currency1") && !obj.equalsIgnoreCase("currency2")) return;
-        sync.sendDelta(e.getPlayer());
-    }
 }
