@@ -1,5 +1,2 @@
 api:
-  base_url: "http://127.0.0.1:5100"
-  timeout: 2000
-sync:
-  interval: 10
+  base_url: "http://127.0.0.1:8000"

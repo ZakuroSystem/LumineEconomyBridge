@@ -6,7 +6,7 @@ authors: [grapelemon]
 commands:
   le:
     description: Send command to Lumine Economy backend
-    usage: /le <content> | /le rewrite
+    usage: /le <content> | /le rewrite | /le start | /le stop | /le reload
     permission: lumineeconomy.le
     aliases: [lumineeconomy]
 permissions:

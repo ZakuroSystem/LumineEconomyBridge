@@ -8,19 +8,25 @@ import org.bukkit.event.player.PlayerQuitEvent;
 
 public class PlayerListener implements Listener {
 
-    private final ScoreboardSyncService sync;
+    private final LumineEconomyBridge plugin;
 
-    public PlayerListener(ScoreboardSyncService sync) {
-        this.sync = sync;
+    public PlayerListener(LumineEconomyBridge plugin) {
+        this.plugin = plugin;
     }
 
     @EventHandler
     public void onJoin(PlayerJoinEvent e) {
-        sync.seed(e.getPlayer());
+        ScoreboardSyncService sync = plugin.getSyncService();
+        if (sync != null) {
+            sync.seed(e.getPlayer());
+        }
     }
 
     @EventHandler
     public void onQuit(PlayerQuitEvent e) {
-        sync.cleanup(e.getPlayer().getUniqueId());
+        ScoreboardSyncService sync = plugin.getSyncService();
+        if (sync != null) {
+            sync.cleanup(e.getPlayer().getUniqueId());
+        }
     }
 }
