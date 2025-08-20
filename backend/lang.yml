@@ -14,8 +14,13 @@ setbalance: "{target} の {currency} 残高を {amount} に設定しました。
 history:
   header: "{player} の最近の取引:"
   entry: "{time}: {src}->{dst} {amount} {currency} ({reason})"
+backup:
+  created: "バックアップ {file} を作成しました。"
+restore:
+  done: "バックアップから復元しました。"
 error:
   invalid_args: "引数が不正です。"
   insufficient: "残高が不足しています。"
   pay_failed: "支払いに失敗しました。"
   no_command: "コマンドが指定されていません。"
+  no_backup: "バックアップが見つかりません。"
