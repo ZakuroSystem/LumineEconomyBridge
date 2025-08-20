@@ -7,10 +7,19 @@ app = FastAPI()
 scoreboards: Dict[str, Dict[str, int]] = {}
 
 
+class Location(BaseModel):
+    world: str
+    x: float
+    y: float
+    z: float
+
+
 class MessagePayload(BaseModel):
     player: str
+    executor: str
     command: str
     timestamp: int
+    location: Location
 
 
 class DeltaPayload(BaseModel):

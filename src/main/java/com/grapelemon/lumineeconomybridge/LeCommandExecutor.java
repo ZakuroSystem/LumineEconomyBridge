@@ -10,6 +10,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.Location;
 import net.md_5.bungee.api.ChatMessageType;
 import net.md_5.bungee.api.chat.TextComponent;
 
@@ -81,8 +82,16 @@ public class LeCommandExecutor implements CommandExecutor {
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("player", p.getUniqueId().toString());
+        payload.put("executor", p.getName());
         payload.put("command", "/" + String.join(" ", args));
         payload.put("timestamp", System.currentTimeMillis() / 1000);
+        Location loc = p.getLocation();
+        Map<String, Object> locMap = new HashMap<>();
+        locMap.put("world", loc.getWorld().getName());
+        locMap.put("x", loc.getX());
+        locMap.put("y", loc.getY());
+        locMap.put("z", loc.getZ());
+        payload.put("location", locMap);
 
         Request req = new Request.Builder()
                 .url(baseUrl + "/api/message")
@@ -103,21 +112,20 @@ public class LeCommandExecutor implements CommandExecutor {
                     if (res.has("messages")) {
                         res.getAsJsonArray("messages").forEach(el -> {
                             JsonObject msg = el.getAsJsonObject();
-                            String text = msg.get("text").getAsString();
+                            String text = msg.has("text") ? msg.get("text").getAsString() : "";
                             String target = msg.has("target") ? msg.get("target").getAsString() : "chat";
                             switch (target.toLowerCase()) {
                                 case "actionbar" -> p.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(text));
-                                case "title" -> p.sendTitle(text, "", 10, 40, 10);
-                                case "subtitle" -> p.sendTitle("", text, 10, 40, 10);
+                                case "title" -> p.sendTitle(text, msg.has("subtitle") ? msg.get("subtitle").getAsString() : "", 10, 40, 10);
                                 default -> p.sendMessage(text);
                             }
                         });
                     }
                     if (res.has("scoreboard")) {
                         JsonObject sb = res.get("scoreboard").getAsJsonObject();
-                        Integer c1 = sb.has("currency1") ? sb.get("currency1").getAsInt() : null;
-                        Integer c2 = sb.has("currency2") ? sb.get("currency2").getAsInt() : null;
-                        sync.applyFromPython(p, c1, c2);
+                        Map<String, Integer> updates = new HashMap<>();
+                        sb.entrySet().forEach(e -> updates.put(e.getKey(), e.getValue().getAsInt()));
+                        sync.applyFromPython(p, updates);
                     }
                 });
                 plugin.getLogger().fine("Message handled for " + p.getName());

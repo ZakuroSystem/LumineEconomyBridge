@@ -54,9 +54,11 @@ public class ScoreboardSyncService {
     }
 
     // Pythonからの絶対値適用（将来使用）
-    public void applyFromPython(Player p, Integer c1, Integer c2) {
+    public void applyFromPython(Player p, Map<String, Integer> abs) {
         Bukkit.getScheduler().runTask(plugin, () -> {
             int[] before = ScoreboardUtil.readBothSync(p);
+            Integer c1 = abs.get("currency1");
+            Integer c2 = abs.get("currency2");
             ScoreboardUtil.applyAbsoluteSync(p, c1, c2);
             int[] after = ScoreboardUtil.readBothSync(p);
 
