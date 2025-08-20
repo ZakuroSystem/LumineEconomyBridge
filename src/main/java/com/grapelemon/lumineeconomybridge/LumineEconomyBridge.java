@@ -33,6 +33,8 @@ public class LumineEconomyBridge extends JavaPlugin {
         saveDefaultConfig();
         Lang.load(this);
         baseUrl = getConfig().getString("api.base_url", "http://127.0.0.1:8000");
+        timeout = getConfig().getInt("api.timeout", timeout);
+        syncInterval = getConfig().getLong("sync.interval", syncInterval);
 
         executor = new LeCommandExecutor(this);
         getCommand("le").setExecutor(executor);
@@ -69,8 +71,8 @@ public class LumineEconomyBridge extends JavaPlugin {
         try (Response res = temp.newCall(req).execute()) {
             String body = res.body() != null ? res.body().string() : "{}";
             JsonObject cfg = JsonParser.parseString(body).getAsJsonObject();
-            timeout = cfg.has("timeout") ? cfg.get("timeout").getAsInt() : 2000;
-            syncInterval = cfg.has("sync_interval") ? cfg.get("sync_interval").getAsLong() : 10L;
+            timeout = cfg.has("timeout") ? cfg.get("timeout").getAsInt() : timeout;
+            syncInterval = cfg.has("sync_interval") ? cfg.get("sync_interval").getAsLong() : syncInterval;
 
             httpClient = new OkHttpClient.Builder()
                     .connectTimeout(timeout, TimeUnit.MILLISECONDS)
@@ -105,6 +107,8 @@ public class LumineEconomyBridge extends JavaPlugin {
     public void reloadBridge() {
         reloadConfig();
         baseUrl = getConfig().getString("api.base_url", baseUrl);
+        timeout = getConfig().getInt("api.timeout", timeout);
+        syncInterval = getConfig().getLong("sync.interval", syncInterval);
         Lang.load(this);
         stopBridge();
         startBridge();
