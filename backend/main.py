@@ -737,9 +737,14 @@ async def message(payload: MessagePayload):
                                 reason=r["reason"],
                             ),
                         })
+            elif action == "help":
+                help_cfg = LANG.get("help", {})
+                messages.append({"target": "chat", "text": help_cfg.get("header", "Available commands:")})
+                for line in help_cfg.get("lines", []):
+                    messages.append({"target": "chat", "text": line})
             else:
-                messages.append({"target": "chat", "text": f"Echo: {payload.command}"})
-                scoreboards[exec_uuid] = get_scoreboard(cur, exec_uuid)
+                success = False
+                error_text = t("error.unknown_command")
             if success and actions:
                 push_undo(exec_uuid, actions)
 
@@ -748,9 +753,10 @@ async def message(payload: MessagePayload):
         if scoreboards:
             res["scoreboards"] = scoreboards
     else:
-        res = {
-            "status": "error",
-            "messages": [{"target": "chat", "text": error_text or ""}]}
+        err_msgs = [{"target": "chat", "text": error_text or ""}]
+        if error_text in {t("error.invalid_args"), t("error.no_command"), t("error.unknown_command")}:
+            err_msgs.append({"target": "chat", "text": t("help.suggest")})
+        res = {"status": "error", "messages": err_msgs}
 
     log_command(payload, success, error_text)
     return res

@@ -1,0 +1,28 @@
+# LumineEconomyBridge Usage
+
+LumineEconomyBridge bridges a Minecraft server's scoreboard economy with a Python backend. All economy logic lives in Python while the plugin simply forwards commands and applies responses.
+
+## Commands
+Use `/le` followed by a subcommand. Common commands:
+
+- `/le balance [currency]` – Show your balance for a currency or all currencies.
+- `/le money give <player> <currency> <amount>` – Mint funds for a player.
+- `/le money take <player> <currency> <amount>` – Remove funds from a player.
+- `/le money pay <src> <dst> <currency> <amount>` – Pay from one player to another.
+- `/le deposit <src> <dst> <currency> <amount>` – Move funds from src to dst (labelled deposit).
+- `/le withdraw <src> <dst> <currency> <amount>` – Move funds from src to dst (labelled withdraw).
+- `/le transfer <src> <dst> <currency> <amount>` – Transfer funds between players.
+- `/le setbalance <player> <currency> <amount>` – Set a player's balance.
+- `/le history <player> [limit]` – View recent transactions.
+- `/le currency create <id> [symbol]` – Create a new currency.
+- `/le account create <id>` – Create a system account.
+- `/le backup` / `/le restore <file>` – Backup or restore the database.
+- `/le undo` / `/le redo` – Undo or redo recent operations.
+- `/le help` – Show in‑game help.
+
+## Notes
+- All command validation and economy processing happen on the Python backend.
+- Unknown or invalid commands return an error followed by a suggestion to use `/le help`.
+- Scoreboards for `currency1` and `currency2` are synchronized with the backend every 10 seconds.
+
+For developer details, see `plugin.yml` and the Python sources under `backend/`.
