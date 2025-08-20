@@ -239,7 +239,7 @@ def format_amount(cur: sqlite3.Cursor, amount: int, currency: str) -> str:
     symbol = ""
     if row and row["symbol"] and row["symbol"] != currency:
         symbol = row["symbol"]
-    return f"{symbol}{amount:,}"
+    return f"§e{symbol}{amount:,}§r"
 
 
 LOG_PATH = "economy_commands.log"
@@ -698,7 +698,7 @@ async def message(payload: MessagePayload):
                     bals = list_balances(cur, exec_uuid)
                     if bals:
                         balances = ", ".join(
-                            f"{k}={format_amount(cur, v, k)}" for k, v in bals.items()
+                            f"§e{k}§7={format_amount(cur, v, k)}§a" for k, v in bals.items()
                         )
                         messages.append({"target": "chat", "text": t("balance.all", lang=exec_lang, balances=balances)})
                     else:
