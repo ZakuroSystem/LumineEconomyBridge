@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Recent Transactions</h1>
+<table class="table table-striped">
+  <thead>
+    <tr><th>ID</th><th>Time</th><th>From</th><th>To</th><th>Currency</th><th>Amount</th><th>Reason</th></tr>
+  </thead>
+  <tbody>
+    {% for tx in txs %}
+    <tr>
+      <td>{{ tx['id'] }}</td>
+      <td>{{ tx['timestamp'] }}</td>
+      <td>{{ tx['from_account'] }}</td>
+      <td>{{ tx['to_account'] }}</td>
+      <td>{{ tx['currency'] }}</td>
+      <td>{{ tx['amount'] }}</td>
+      <td>{{ tx['reason'] }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<a href="{{ url_for('index') }}" class="btn btn-secondary">Back</a>
+{% endblock %}

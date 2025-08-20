@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Accounts</h1>
+<table class="table table-striped">
+  <thead>
+    <tr>
+      <th>UUID</th>
+      {% for c in currencies %}<th>{{ c }}</th>{% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for uuid, balances in accounts.items() %}
+    <tr>
+      <td>{{ uuid }}</td>
+      {% for c in currencies %}<td>{{ balances.get(c, 0) }}</td>{% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<a href="{{ url_for('adjust') }}" class="btn btn-primary">Adjust Balance</a>
+<a href="{{ url_for('transactions') }}" class="btn btn-secondary">Recent Transactions</a>
+{% endblock %}
