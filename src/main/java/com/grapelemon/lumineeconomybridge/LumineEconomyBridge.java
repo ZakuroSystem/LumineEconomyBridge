@@ -31,10 +31,12 @@ public class LumineEconomyBridge extends JavaPlugin {
     public void onEnable() {
         instance = this;
         saveDefaultConfig();
+        Lang.load(this);
         baseUrl = getConfig().getString("api.base_url", "http://127.0.0.1:8000");
 
         executor = new LeCommandExecutor(this);
         getCommand("le").setExecutor(executor);
+        getCommand("le").setTabCompleter(new LeTabCompleter());
         getServer().getPluginManager().registerEvents(new PlayerListener(this), this);
 
         startBridge();
@@ -103,6 +105,7 @@ public class LumineEconomyBridge extends JavaPlugin {
     public void reloadBridge() {
         reloadConfig();
         baseUrl = getConfig().getString("api.base_url", baseUrl);
+        Lang.load(this);
         stopBridge();
         startBridge();
     }

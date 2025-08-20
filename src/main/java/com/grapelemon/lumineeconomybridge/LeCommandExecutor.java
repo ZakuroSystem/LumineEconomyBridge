@@ -31,7 +31,7 @@ public class LeCommandExecutor implements CommandExecutor {
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         if (!(sender instanceof Player p)) {
-            sender.sendMessage("プレイヤーのみ実行できます。");
+            sender.sendMessage(Lang.get("player-only"));
             return true;
         }
 
@@ -39,38 +39,38 @@ public class LeCommandExecutor implements CommandExecutor {
             switch (args[0].toLowerCase()) {
                 case "rewrite" -> {
                     if (!plugin.isActive()) {
-                        p.sendMessage("§c[EconomyBridge] 現在利用できません。");
+                        p.sendMessage(Lang.get("error-unavailable"));
                         return true;
                     }
                     plugin.getSyncService().rewriteAll();
-                    p.sendActionBar("§7同期を要求しました…");
+                    p.sendActionBar(Lang.get("sync-requested"));
                     return true;
                 }
                 case "start" -> {
                     plugin.startBridge();
-                    p.sendMessage("§7Bridge starting…");
+                    p.sendMessage(Lang.get("bridge-starting"));
                     return true;
                 }
                 case "stop" -> {
                     plugin.stopBridge();
-                    p.sendMessage("§7Bridge stopped");
+                    p.sendMessage(Lang.get("bridge-stopped"));
                     return true;
                 }
                 case "reload" -> {
                     plugin.reloadBridge();
-                    p.sendMessage("§7Bridge reloaded");
+                    p.sendMessage(Lang.get("bridge-reloaded"));
                     return true;
                 }
             }
         }
 
         if (args.length == 0) {
-            p.sendMessage("§7Usage: /le <content> | /le rewrite | /le start | /le stop | /le reload");
+            p.sendMessage(Lang.get("usage"));
             return true;
         }
 
         if (!plugin.isActive()) {
-            p.sendMessage("§c[EconomyBridge] 現在利用できません。");
+            p.sendMessage(Lang.get("error-unavailable"));
             return true;
         }
 
@@ -102,7 +102,7 @@ public class LeCommandExecutor implements CommandExecutor {
             @Override public void onFailure(Call call, IOException e) {
                 plugin.getLogger().warning("Message send failed: " + e.getMessage());
                 Bukkit.getScheduler().runTask(plugin,
-                        () -> p.sendMessage("§c[EconomyBridge] 現在利用できません。"));
+                        () -> p.sendMessage(Lang.get("error-unavailable")));
             }
 
             @Override public void onResponse(Call call, Response response) throws IOException {
@@ -132,7 +132,7 @@ public class LeCommandExecutor implements CommandExecutor {
             }
         });
 
-        p.sendActionBar("§7送信中…");
+        p.sendActionBar(Lang.get("send-pending"));
         return true;
     }
 }

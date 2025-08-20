@@ -1,9 +1,10 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import sqlite3
 import json
 from contextlib import closing
+import yaml
 
 # SQLite persistence
 conn = sqlite3.connect("economy.db", check_same_thread=False)
@@ -35,10 +36,16 @@ with conn:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS currencies (
-            name TEXT PRIMARY KEY
+            name TEXT PRIMARY KEY,
+            symbol TEXT
         )
         """
     )
+    # add symbol column if upgrading from old schema
+    try:
+        conn.execute("ALTER TABLE currencies ADD COLUMN symbol TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS name_index (
@@ -49,6 +56,19 @@ with conn:
     )
 
 app = FastAPI()
+
+
+with open("lang.yml", encoding="utf-8") as f:
+    LANG = yaml.safe_load(f)
+
+
+def t(key: str, **kwargs) -> str:
+    template = LANG
+    for part in key.split('.'):  # nested lookup
+        template = template.get(part, key)
+    if not isinstance(template, str):
+        template = key
+    return template.format(**kwargs)
 
 
 class Location(BaseModel):
@@ -78,14 +98,25 @@ class RewritePayload(BaseModel):
     timestamp: int
 
 
-def ensure_currency(cur: sqlite3.Cursor, currency: str) -> None:
-    cur.execute("INSERT OR IGNORE INTO currencies(name) VALUES (?)", (currency,))
+def ensure_currency(cur: sqlite3.Cursor, currency: str, symbol: Optional[str] = None) -> None:
+    cur.execute(
+        "INSERT OR IGNORE INTO currencies(name, symbol) VALUES (?,?)",
+        (currency, symbol or currency),
+    )
+    if symbol:
+        cur.execute("UPDATE currencies SET symbol=? WHERE name=?", (symbol, currency))
 
 
 def get_uuid(name: str) -> Optional[str]:
     with closing(conn.cursor()) as cur:
         row = cur.execute("SELECT uuid FROM name_index WHERE name=?", (name.lower(),)).fetchone()
         return row["uuid"] if row else None
+
+
+def get_name(uuid: str) -> Optional[str]:
+    with closing(conn.cursor()) as cur:
+        row = cur.execute("SELECT name FROM name_index WHERE uuid=? LIMIT 1", (uuid,)).fetchone()
+        return row["name"] if row else None
 
 
 def get_balance(cur: sqlite3.Cursor, uuid: str, currency: str) -> int:
@@ -133,6 +164,12 @@ def list_balances(cur: sqlite3.Cursor, uuid: str) -> Dict[str, int]:
 def get_scoreboard(cur: sqlite3.Cursor, uuid: str) -> Dict[str, int]:
     balances = list_balances(cur, uuid)
     return {k: v for k, v in balances.items() if k in ("currency1", "currency2")}
+
+
+def format_amount(cur: sqlite3.Cursor, amount: int, currency: str) -> str:
+    row = cur.execute("SELECT symbol FROM currencies WHERE name=?", (currency,)).fetchone()
+    symbol = row["symbol"] if row and row["symbol"] else currency
+    return f"{symbol}{amount:,}"
 
 
 LOG_PATH = "economy_commands.log"
@@ -203,17 +240,26 @@ async def message(payload: MessagePayload):
             return None
         return amt if amt > 0 else None
 
+    def parse_amount_any(index: int) -> Optional[int]:
+        if len(cmd) <= index:
+            return None
+        try:
+            return int(cmd[index])
+        except ValueError:
+            return None
+
     with conn:
         cur = conn.cursor()
         exec_uuid = payload.player
 
         if not cmd:
             success = False
-            error_text = "コマンドが指定されていません。"
+            error_text = t("error.no_command")
         elif action == "currency" and len(cmd) >= 3 and cmd[1].lower() == "create":
             cname = cmd[2]
-            ensure_currency(cur, cname)
-            messages.append({"target": "chat", "text": f"通貨 {cname} を作成しました。"})
+            symbol = cmd[3] if len(cmd) >= 4 else None
+            ensure_currency(cur, cname, symbol)
+            messages.append({"target": "chat", "text": t("currency.create", currency=cname)})
         elif action == "money" and len(cmd) >= 2:
             sub = cmd[1].lower()
             if sub in {"give", "take"} and len(cmd) >= 5:
@@ -223,17 +269,22 @@ async def message(payload: MessagePayload):
                 target_uuid = get_uuid(target_name)
                 if amt is None or target_uuid is None:
                     success = False
-                    error_text = "引数が不正です。"
+                    error_text = t("error.invalid_args")
                 else:
                     ensure_currency(cur, currency)
                     delta = amt if sub == "give" else -amt
                     if not add_balance(cur, target_uuid, currency, delta):
                         success = False
-                        error_text = "残高が不足しています。"
+                        error_text = t("error.insufficient")
                     else:
                         messages.append({
                             "target": "chat",
-                            "text": f"{target_name} の {currency} を {amt} {'付与' if sub=='give' else '減少'}しました。",
+                            "text": t(
+                                f"money.{sub}",
+                                target=target_name,
+                                currency=currency,
+                                amount=format_amount(cur, amt, currency),
+                            ),
                         })
                         record_transaction(
                             cur,
@@ -260,12 +311,17 @@ async def message(payload: MessagePayload):
                     or not transfer(cur, src_uuid, dst_uuid, currency, amt)
                 ):
                     success = False
-                    error_text = "支払いに失敗しました。"
+                    error_text = t("error.pay_failed")
                 else:
                     ensure_currency(cur, currency)
                     messages.append({
                         "target": "chat",
-                        "text": f"{src_name} から {dst_name} へ {amt} {currency} 支払いました。",
+                        "text": t(
+                            "money.pay",
+                            src=src_name,
+                            dst=dst_name,
+                            amount=format_amount(cur, amt, currency),
+                        ),
                     })
                     record_transaction(
                         cur,
@@ -280,7 +336,7 @@ async def message(payload: MessagePayload):
                         scoreboard = get_scoreboard(cur, exec_uuid)
             else:
                 success = False
-                error_text = "money コマンドの形式が不正です。"
+                error_text = t("error.invalid_args")
         elif action in {"deposit", "withdraw"} and len(cmd) >= 5:
             src_name = cmd[1].lower()
             dst_name = cmd[2].lower()
@@ -294,7 +350,7 @@ async def message(payload: MessagePayload):
                 or dst_uuid is None
             ):
                 success = False
-                error_text = "引数が不正です。"
+                error_text = t("error.invalid_args")
             else:
                 ensure_currency(cur, currency)
                 ok = transfer(
@@ -306,12 +362,17 @@ async def message(payload: MessagePayload):
                 )
                 if not ok:
                     success = False
-                    error_text = "残高が不足しています。"
+                    error_text = t("error.insufficient")
                 else:
-                    verb = "入金" if action == "deposit" else "引き出し"
+                    verb_key = "deposit" if action == "deposit" else "withdraw"
                     messages.append({
                         "target": "chat",
-                        "text": f"{src_name} から {dst_name} へ {amt} {currency} を{verb}しました。",
+                        "text": t(
+                            verb_key,
+                            src=src_name,
+                            dst=dst_name,
+                            amount=format_amount(cur, amt, currency),
+                        ),
                     })
                     record_transaction(
                         cur,
@@ -329,14 +390,91 @@ async def message(payload: MessagePayload):
             ensure_currency(cur, currency) if currency else None
             if currency:
                 bal = get_balance(cur, exec_uuid, currency)
-                messages.append({"target": "chat", "text": f"{currency}: {bal}"})
+                messages.append({
+                    "target": "chat",
+                    "text": t(
+                        "balance.single",
+                        currency=currency,
+                        amount=format_amount(cur, bal, currency),
+                    ),
+                })
             else:
                 bals = list_balances(cur, exec_uuid)
-                text = (
-                    "残高: " + ", ".join(f"{k}={v}" for k, v in bals.items())
-                ) if bals else "残高は0です。"
-                messages.append({"target": "chat", "text": text})
+                if bals:
+                    balances = ", ".join(
+                        f"{k}={format_amount(cur, v, k)}" for k, v in bals.items()
+                    )
+                    messages.append({"target": "chat", "text": t("balance.all", balances=balances)})
+                else:
+                    messages.append({"target": "chat", "text": t("balance.empty")})
             scoreboard = get_scoreboard(cur, exec_uuid)
+        elif action == "setbalance" and len(cmd) >= 4:
+            target_name = cmd[1].lower()
+            currency = cmd[2]
+            amt = parse_amount_any(3)
+            target_uuid = get_uuid(target_name)
+            if amt is None or target_uuid is None:
+                success = False
+                error_text = t("error.invalid_args")
+            else:
+                ensure_currency(cur, currency)
+                old = get_balance(cur, target_uuid, currency)
+                set_balance(cur, target_uuid, currency, amt)
+                delta = amt - old
+                if delta != 0:
+                    record_transaction(
+                        cur,
+                        payload.timestamp,
+                        None,
+                        target_uuid,
+                        currency,
+                        abs(delta),
+                        "setbalance",
+                    )
+                messages.append({
+                    "target": "chat",
+                    "text": t(
+                        "setbalance",
+                        target=target_name,
+                        currency=currency,
+                        amount=format_amount(cur, amt, currency),
+                    ),
+                })
+                if target_uuid == exec_uuid:
+                    scoreboard = get_scoreboard(cur, exec_uuid)
+        elif action == "history" and len(cmd) >= 2:
+            target_name = cmd[1].lower()
+            target_uuid = get_uuid(target_name)
+            limit = parse_amount_any(2) or 5
+            if target_uuid is None:
+                success = False
+                error_text = t("error.invalid_args")
+            else:
+                rows = cur.execute(
+                    """
+                    SELECT timestamp, from_account, to_account, currency, amount, reason
+                    FROM transactions
+                    WHERE from_account=? OR to_account=?
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (target_uuid, target_uuid, limit),
+                ).fetchall()
+                messages.append({"target": "chat", "text": t("history.header", player=target_name)})
+                for r in rows:
+                    src = get_name(r["from_account"]) if r["from_account"] else "-"
+                    dst = get_name(r["to_account"]) if r["to_account"] else "-"
+                    messages.append({
+                        "target": "chat",
+                        "text": t(
+                            "history.entry",
+                            time=r["timestamp"],
+                            src=src,
+                            dst=dst,
+                            amount=format_amount(cur, r["amount"], r["currency"]),
+                            currency=r["currency"],
+                            reason=r["reason"],
+                        ),
+                    })
         else:
             messages.append({"target": "chat", "text": f"Echo: {payload.command}"})
             scoreboard = get_scoreboard(cur, exec_uuid)

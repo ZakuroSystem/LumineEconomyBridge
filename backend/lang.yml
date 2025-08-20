@@ -1,0 +1,21 @@
+currency:
+  create: "通貨 {currency} を作成しました。"
+money:
+  give: "{target} の {currency} を {amount} 付与しました。"
+  take: "{target} の {currency} を {amount} 減少しました。"
+  pay: "{src} から {dst} へ {amount} 支払いました。"
+deposit: "{src} から {dst} へ {amount} を入金しました。"
+withdraw: "{src} から {dst} へ {amount} を引き出しました。"
+balance:
+  single: "{currency}: {amount}"
+  all: "残高: {balances}"
+  empty: "残高は0です。"
+setbalance: "{target} の {currency} 残高を {amount} に設定しました。"
+history:
+  header: "{player} の最近の取引:"
+  entry: "{time}: {src}->{dst} {amount} {currency} ({reason})"
+error:
+  invalid_args: "引数が不正です。"
+  insufficient: "残高が不足しています。"
+  pay_failed: "支払いに失敗しました。"
+  no_command: "コマンドが指定されていません。"
