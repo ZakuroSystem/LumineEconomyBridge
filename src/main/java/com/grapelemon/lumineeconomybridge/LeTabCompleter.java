@@ -15,9 +15,9 @@ public class LeTabCompleter implements TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-            return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo")
-                    .filter(s -> s.startsWith(args[0].toLowerCase()))
-                    .toList();
+              return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo", "help", "lang", "backup", "restore")
+                      .filter(s -> s.startsWith(args[0].toLowerCase()))
+                      .toList();
         }
         if (args.length == 2) {
             String first = args[0].toLowerCase();
@@ -29,22 +29,27 @@ public class LeTabCompleter implements TabCompleter {
                 names.removeIf(n -> !n.toLowerCase().startsWith(args[1].toLowerCase()));
                 return names;
             }
-            if (first.equals("currency")) {
-                return Stream.of("create")
-                        .filter(s -> s.startsWith(args[1].toLowerCase()))
-                        .toList();
-            }
-            if (first.equals("account")) {
-                return Stream.of("create")
-                        .filter(s -> s.startsWith(args[1].toLowerCase()))
-                        .toList();
-            }
-            if (first.equals("money")) {
-                return Stream.of("give", "take", "pay")
-                        .filter(s -> s.startsWith(args[1].toLowerCase()))
-                        .toList();
-            }
-        }
+              if (first.equals("currency")) {
+                  return Stream.of("create")
+                          .filter(s -> s.startsWith(args[1].toLowerCase()))
+                          .toList();
+              }
+              if (first.equals("account")) {
+                  return Stream.of("create")
+                          .filter(s -> s.startsWith(args[1].toLowerCase()))
+                          .toList();
+              }
+              if (first.equals("money")) {
+                  return Stream.of("give", "take", "pay")
+                          .filter(s -> s.startsWith(args[1].toLowerCase()))
+                          .toList();
+              }
+              if (first.equals("lang")) {
+                  return Stream.of("en", "jp")
+                          .filter(s -> s.startsWith(args[1].toLowerCase()))
+                          .toList();
+              }
+          }
         if (args.length == 3) {
             String first = args[0].toLowerCase();
             if (first.equals("currency") && args[1].equalsIgnoreCase("create")) {

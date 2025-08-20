@@ -7,6 +7,8 @@ import com.google.gson.JsonParser;
 import okhttp3.*;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import net.md_5.bungee.api.ChatMessageType;
+import net.md_5.bungee.api.chat.TextComponent;
 
 import java.io.IOException;
 import java.util.*;
@@ -149,17 +151,49 @@ public class ScoreboardSyncService {
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
 
-        http.newCall(req).enqueue(new Callback() {
-            @Override public void onFailure(Call call, IOException e) {
-                plugin.getLogger().warning("Failed to rewrite scoreboard for " + p.getName() + ": " + e.getMessage());
-            }
+          http.newCall(req).enqueue(new Callback() {
+              @Override public void onFailure(Call call, IOException e) {
+                  plugin.getLogger().warning("Failed to rewrite scoreboard for " + p.getName() + ": " + e.getMessage());
+              }
 
-            @Override public void onResponse(Call call, Response response) {
-                try (response) {
-                    plugin.getLogger().fine("Rewrote scoreboard for " + p.getName());
-                }
-            }
-        });
+              @Override public void onResponse(Call call, Response response) throws IOException {
+                  try (response) {
+                      String body = response.body() != null ? response.body().string() : "{}";
+                      JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                      plugin.getLogger().fine("Rewrote scoreboard for " + p.getName());
+                      if (res.has("messages")) {
+                          Bukkit.getScheduler().runTask(plugin, () -> {
+                              res.getAsJsonArray("messages").forEach(el -> {
+                                  JsonObject msg = el.getAsJsonObject();
+                                  String text = msg.has("text") ? msg.get("text").getAsString() : "";
+                                  String target = msg.has("target") ? msg.get("target").getAsString() : "chat";
+                                  long delay = msg.has("delay") ? msg.get("delay").getAsLong() : 0;
+                                  Player recv = p;
+                                  if (msg.has("player")) {
+                                      try {
+                                          UUID pid = UUID.fromString(msg.get("player").getAsString());
+                                          Player other = Bukkit.getPlayer(pid);
+                                          if (other != null) recv = other; else return;
+                                      } catch (IllegalArgumentException ignored) {
+                                          return;
+                                      }
+                                  }
+                                  Runnable task = switch (target.toLowerCase()) {
+                                      case "actionbar" -> () -> recv.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(text));
+                                      case "title" -> () -> recv.sendTitle(text, msg.has("subtitle") ? msg.get("subtitle").getAsString() : "", 10, 40, 10);
+                                      default -> () -> recv.sendMessage(text);
+                                  };
+                                  if (delay > 0) {
+                                      Bukkit.getScheduler().runTaskLater(plugin, task, delay * 20L);
+                                  } else {
+                                      task.run();
+                                  }
+                              });
+                          });
+                      }
+                  }
+              }
+          });
     }
 
     public void rewriteAll() {

@@ -13,6 +13,40 @@ def get_db():
     return conn
 
 
+def init_db() -> None:
+    with get_db() as db:
+        db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS accounts (
+                uuid TEXT NOT NULL,
+                currency TEXT NOT NULL,
+                balance INTEGER NOT NULL,
+                PRIMARY KEY(uuid, currency)
+            );
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                from_account TEXT,
+                to_account TEXT,
+                currency TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                reason TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS currencies (
+                name TEXT PRIMARY KEY,
+                symbol TEXT
+            );
+            CREATE TABLE IF NOT EXISTS name_index (
+                name TEXT PRIMARY KEY,
+                uuid TEXT NOT NULL
+            );
+            """
+        )
+
+
+init_db()
+
+
 @app.template_filter("fmt_ts")
 def fmt_ts(ts: int) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))

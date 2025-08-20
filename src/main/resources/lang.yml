@@ -6,5 +6,3 @@ bridge-starting: "§7Bridge starting…"
 bridge-stopped: "§7Bridge stopped"
 bridge-reloaded: "§7Bridge reloaded"
 send-pending: "§7送信中…"
-lang:
-  jp_hint: "日本語表示に変更するには /le lang jp と入力してください。"

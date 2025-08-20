@@ -876,4 +876,12 @@ async def rewrite(payload: RewritePayload):
         for k, v in payload.scoreboard.items():
             ensure_currency(cur, k)
             set_balance(cur, payload.player, k, v)
-    return {"status": "success"}
+    msgs = []
+    if get_lang(payload.player) == "en":
+        msgs.append({
+            "target": "chat",
+            "text": t("lang.switch_hint", lang="jp"),
+            "player": payload.player,
+            "delay": 5,
+        })
+    return {"status": "success", "messages": msgs}

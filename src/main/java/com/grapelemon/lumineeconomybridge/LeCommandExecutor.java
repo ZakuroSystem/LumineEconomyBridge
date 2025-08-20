@@ -111,32 +111,39 @@ public class LeCommandExecutor implements CommandExecutor {
                     String body = response.body() != null ? response.body().string() : "{}";
                     JsonObject res = JsonParser.parseString(body).getAsJsonObject();
                     Bukkit.getScheduler().runTask(plugin, () -> {
-                        if (res.has("messages")) {
-                            res.getAsJsonArray("messages").forEach(el -> {
-                                JsonObject msg = el.getAsJsonObject();
-                                String text = msg.has("text") ? msg.get("text").getAsString() : "";
-                                String target = msg.has("target") ? msg.get("target").getAsString() : "chat";
-                                Player recv = p;
-                                if (msg.has("player")) {
-                                    try {
-                                        UUID id = UUID.fromString(msg.get("player").getAsString());
-                                        Player other = Bukkit.getPlayer(id);
-                                        if (other != null) {
-                                            recv = other;
-                                        } else {
-                                            return;
-                                        }
-                                    } catch (IllegalArgumentException ignored) {
-                                        return;
-                                    }
-                                }
-                                switch (target.toLowerCase()) {
-                                    case "actionbar" -> recv.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(text));
-                                    case "title" -> recv.sendTitle(text, msg.has("subtitle") ? msg.get("subtitle").getAsString() : "", 10, 40, 10);
-                                    default -> recv.sendMessage(text);
-                                }
-                            });
-                        }
+                          if (res.has("messages")) {
+                              res.getAsJsonArray("messages").forEach(el -> {
+                                  JsonObject msg = el.getAsJsonObject();
+                                  String text = msg.has("text") ? msg.get("text").getAsString() : "";
+                                  String target = msg.has("target") ? msg.get("target").getAsString() : "chat";
+                                  long delay = msg.has("delay") ? msg.get("delay").getAsLong() : 0;
+                                  Player recv = p;
+                                  if (msg.has("player")) {
+                                      try {
+                                          UUID id = UUID.fromString(msg.get("player").getAsString());
+                                          Player other = Bukkit.getPlayer(id);
+                                          if (other != null) {
+                                              recv = other;
+                                          } else {
+                                              return;
+                                          }
+                                      } catch (IllegalArgumentException ignored) {
+                                          return;
+                                      }
+                                  }
+                                  Player finalRecv = recv;
+                                  Runnable task = switch (target.toLowerCase()) {
+                                      case "actionbar" -> () -> finalRecv.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(text));
+                                      case "title" -> () -> finalRecv.sendTitle(text, msg.has("subtitle") ? msg.get("subtitle").getAsString() : "", 10, 40, 10);
+                                      default -> () -> finalRecv.sendMessage(text);
+                                  };
+                                  if (delay > 0) {
+                                      Bukkit.getScheduler().runTaskLater(plugin, task, delay * 20L);
+                                  } else {
+                                      task.run();
+                                  }
+                              });
+                          }
                         if (res.has("scoreboards")) {
                             res.getAsJsonObject("scoreboards").entrySet().forEach(en -> {
                                 try {
