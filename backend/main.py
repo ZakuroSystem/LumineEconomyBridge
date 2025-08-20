@@ -357,11 +357,49 @@ async def message(payload: MessagePayload):
             if not cmd:
                 success = False
                 error_text = t("error.no_command")
-            elif action == "currency" and len(cmd) >= 3 and cmd[1].lower() == "create":
-                cname = cmd[2]
-                symbol = cmd[3] if len(cmd) >= 4 else None
-                ensure_currency(cur, cname, symbol)
-                messages.append({"target": "chat", "text": t("currency.create", currency=cname)})
+            elif action == "currency":
+                sub = cmd[1].lower() if len(cmd) >= 2 else ""
+                if sub == "create" and len(cmd) >= 3:
+                    cname = cmd[2]
+                    symbol = cmd[3] if len(cmd) >= 4 else None
+                    ensure_currency(cur, cname, symbol)
+                    messages.append({"target": "chat", "text": t("currency.create", currency=cname)})
+                elif sub == "supply":
+                    if len(cmd) >= 3:
+                        cname = resolve_currency(cur, cmd[2])
+                        total = cur.execute(
+                            "SELECT COALESCE(SUM(balance),0) AS total FROM accounts WHERE currency=?",
+                            (cname,),
+                        ).fetchone()["total"]
+                        messages.append(
+                            {
+                                "target": "chat",
+                                "text": t(
+                                    "currency.supply_entry",
+                                    currency=cname,
+                                    amount=format_amount(cur, total, cname),
+                                ),
+                            }
+                        )
+                    else:
+                        rows = cur.execute(
+                            "SELECT currency, SUM(balance) AS total FROM accounts GROUP BY currency"
+                        ).fetchall()
+                        messages.append({"target": "chat", "text": t("currency.supply_header")})
+                        for r in rows:
+                            messages.append(
+                                {
+                                    "target": "chat",
+                                    "text": t(
+                                        "currency.supply_entry",
+                                        currency=r["currency"],
+                                        amount=format_amount(cur, r["total"], r["currency"]),
+                                    ),
+                                }
+                            )
+                else:
+                    success = False
+                    error_text = t("error.invalid_args")
             elif action == "money" and len(cmd) >= 2:
                 sub = cmd[1].lower()
                 if sub in {"give", "take"} and len(cmd) >= 5:

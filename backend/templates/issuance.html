@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Issuance Monitor</h2>
+<h4>Total Supply</h4>
+<table class="table table-striped">
+  <thead><tr><th>Currency</th><th>Total</th></tr></thead>
+  <tbody>
+  {% for t in totals %}
+    <tr><td>{{ t['currency'] }}</td><td>{{ t['total'] }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<h4>Recent Mint/Burn</h4>
+<table id="issuanceTable" class="table table-striped">
+  <thead><tr><th>Time</th><th>Account</th><th>Currency</th><th>Amount</th><th>Reason</th></tr></thead>
+  <tbody>
+  {% for r in txs %}
+    <tr>
+      <td>{{ r['timestamp']|fmt_ts }}</td>
+      <td>{{ r['account'] }}</td>
+      <td>{{ r['currency'] }}</td>
+      <td>{{ r['amount'] }}</td>
+      <td>{{ r['reason'] }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+{% block scripts %}
+<script>
+$(function(){ $('#issuanceTable').DataTable(); });
+</script>
+{% endblock %}

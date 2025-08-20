@@ -15,6 +15,7 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le setbalance <player> <currency> <amount>` – Set a player's balance.
 - `/le history <player> [limit]` – View recent transactions.
 - `/le currency create <id> [symbol]` – Create a new currency.
+- `/le currency supply [id]` – Show total supply for all currencies or a specific one.
 - `/le account create <id>` – Create a system account.
 - `/le backup` / `/le restore <file>` – Backup or restore the database.
 - `/le undo` / `/le redo` – Undo or redo recent operations.

@@ -1,5 +1,7 @@
 currency:
   create: "通貨 {currency} を作成しました。"
+  supply_header: "現在の通貨供給量:"
+  supply_entry: "{currency}: {amount}"
 money:
   give: "{target} の {currency} を {amount} 付与しました。"
   take: "{target} の {currency} を {amount} 減少しました。"
@@ -41,6 +43,7 @@ help:
     - "/le setbalance <player> <currency> <amount>"
     - "/le history <player> [limit]"
     - "/le currency create <id> [symbol]"
+    - "/le currency supply [id]"
     - "/le account create <id>"
     - "/le backup"
     - "/le restore <file>"

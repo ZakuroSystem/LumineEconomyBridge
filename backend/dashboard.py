@@ -42,6 +42,25 @@ def transactions():
     return render_template("transactions.html", txs=txs, labels=labels, amounts=amounts)
 
 
+@app.route("/issuance")
+def issuance():
+    with get_db() as db:
+        totals = db.execute(
+            "SELECT currency, SUM(balance) AS total FROM accounts GROUP BY currency"
+        ).fetchall()
+        txs = db.execute(
+            """
+            SELECT t.timestamp, COALESCE(n.name, t.to_account, t.from_account) AS account,
+                   t.currency, t.amount, t.reason
+            FROM transactions t
+            LEFT JOIN name_index n ON n.uuid = COALESCE(t.to_account, t.from_account)
+            WHERE t.reason IN ('mint','burn','setbalance')
+            ORDER BY t.id DESC LIMIT 100
+            """
+        ).fetchall()
+    return render_template("issuance.html", totals=totals, txs=txs)
+
+
 @app.route("/adjust", methods=["GET", "POST"])
 def adjust():
     if request.method == "POST":
