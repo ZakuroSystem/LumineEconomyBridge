@@ -168,16 +168,23 @@ public class ScoreboardSyncService {
                                   String text = msg.has("text") ? msg.get("text").getAsString() : "";
                                   String target = msg.has("target") ? msg.get("target").getAsString() : "chat";
                                   long delay = msg.has("delay") ? msg.get("delay").getAsLong() : 0;
-                                  Player recv = p;
+
+                                  Player targetPlayer = p;
                                   if (msg.has("player")) {
                                       try {
                                           UUID pid = UUID.fromString(msg.get("player").getAsString());
                                           Player other = Bukkit.getPlayer(pid);
-                                          if (other != null) recv = other; else return;
+                                          if (other != null) {
+                                              targetPlayer = other;
+                                          } else {
+                                              return;
+                                          }
                                       } catch (IllegalArgumentException ignored) {
                                           return;
                                       }
                                   }
+                                  final Player recv = targetPlayer;
+
                                   Runnable task = switch (target.toLowerCase()) {
                                       case "actionbar" -> () -> recv.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(text));
                                       case "title" -> () -> recv.sendTitle(text, msg.has("subtitle") ? msg.get("subtitle").getAsString() : "", 10, 40, 10);
