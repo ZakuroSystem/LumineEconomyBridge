@@ -19,6 +19,14 @@ backup:
   created: "バックアップ {file} を作成しました。"
 restore:
   done: "バックアップから復元しました。"
+account:
+  created: "システムアカウント {id} を作成しました。"
+undo:
+  done: "直前の操作を取り消しました。"
+  none: "取り消す操作がありません。"
+redo:
+  done: "取り消しをやり直しました。"
+  none: "やり直す操作がありません。"
 error:
   invalid_args: "引数が不正です。"
   insufficient: "残高が不足しています。"

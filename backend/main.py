@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Union
 import sqlite3
 import json
 from contextlib import closing, contextmanager
@@ -63,11 +63,20 @@ with conn:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS system_accounts (
+            uuid TEXT PRIMARY KEY
+        )
+        """
+    )
 
 app = FastAPI()
 
 db_lock = threading.Lock()
 
+undo_stacks: Dict[str, List[List[Dict[str, Union[str, int, None]]]]] = {}
+redo_stack: Dict[str, Optional[List[Dict[str, Union[str, int, None]]]]] = {}
 
 @contextmanager
 def transaction():
@@ -275,6 +284,14 @@ def record_transaction(
     )
 
 
+def push_undo(executor: str, actions: List[Dict[str, Optional[str]]]) -> None:
+    stack = undo_stacks.setdefault(executor, [])
+    stack.append(actions)
+    if len(stack) > 5:
+        stack.pop(0)
+    redo_stack[executor] = None
+
+
 @app.get("/api/config")
 async def get_config():
     return {"timeout": 2000, "sync_interval": 10}
@@ -325,6 +342,7 @@ async def message(payload: MessagePayload):
             )
 
             exec_uuid = payload.player
+            actions: List[Dict[str, Optional[str]]] = []
 
             if not cmd:
                 success = False
@@ -369,6 +387,12 @@ async def message(payload: MessagePayload):
                                 amt,
                                 "mint" if sub == "give" else "burn",
                             )
+                            actions.append({
+                                "src": None if sub == "give" else target_uuid,
+                                "dst": target_uuid if sub == "give" else None,
+                                "currency": currency,
+                                "amount": amt,
+                            })
                             scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
                 elif sub == "pay" and len(cmd) >= 6:
                     src_name = cmd[2].lower()
@@ -405,6 +429,12 @@ async def message(payload: MessagePayload):
                             amt,
                             "pay",
                         )
+                        actions.append({
+                            "src": src_uuid,
+                            "dst": dst_uuid,
+                            "currency": currency,
+                            "amount": amt,
+                        })
                         scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
                         scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
                 else:
@@ -446,6 +476,12 @@ async def message(payload: MessagePayload):
                         amt,
                         action if action == "pay" else "transfer",
                     )
+                    actions.append({
+                        "src": src_uuid,
+                        "dst": dst_uuid,
+                        "currency": currency,
+                        "amount": amt,
+                    })
                     scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
                     scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
             elif action in {"deposit", "withdraw"} and len(cmd) >= 5:
@@ -487,6 +523,12 @@ async def message(payload: MessagePayload):
                             amt,
                             action,
                         )
+                        actions.append({
+                            "src": src_uuid,
+                            "dst": dst_uuid,
+                            "currency": currency,
+                            "amount": amt,
+                        })
                         scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
                         scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
             elif action == "balance":
@@ -512,6 +554,60 @@ async def message(payload: MessagePayload):
                     else:
                         messages.append({"target": "chat", "text": t("balance.empty")})
                 scoreboards[exec_uuid] = get_scoreboard(cur, exec_uuid)
+            elif action == "account" and len(cmd) >= 3 and cmd[1].lower() == "create":
+                name = cmd[2].lower()
+                cur.execute("INSERT OR IGNORE INTO system_accounts(uuid) VALUES (?)", (name,))
+                cur.execute(
+                    "INSERT OR REPLACE INTO name_index(name, uuid) VALUES (?,?)",
+                    (name, name),
+                )
+                messages.append({"target": "chat", "text": t("account.created", id=name)})
+            elif action == "undo":
+                stack = undo_stacks.get(exec_uuid)
+                if stack:
+                    last = stack.pop()
+                    redo_stack[exec_uuid] = last
+                    for act in reversed(last):
+                        ensure_currency(cur, act["currency"])
+                        src, dst, curcode, amt = act["src"], act["dst"], act["currency"], act["amount"]
+                        if src and dst:
+                            transfer(cur, dst, src, curcode, amt)
+                            record_transaction(cur, payload.timestamp, dst, src, curcode, amt, "undo")
+                        elif src is None and dst:
+                            add_balance(cur, dst, curcode, -amt)
+                            record_transaction(cur, payload.timestamp, dst, None, curcode, amt, "undo")
+                        elif dst is None and src:
+                            add_balance(cur, src, curcode, amt)
+                            record_transaction(cur, payload.timestamp, None, src, curcode, amt, "undo")
+                        for u in filter(None, [src, dst]):
+                            scoreboards[u] = get_scoreboard(cur, u)
+                    messages.append({"target": "chat", "text": t("undo.done")})
+                else:
+                    success = False
+                    error_text = t("undo.none")
+            elif action == "redo":
+                last = redo_stack.get(exec_uuid)
+                if last:
+                    for act in last:
+                        ensure_currency(cur, act["currency"])
+                        src, dst, curcode, amt = act["src"], act["dst"], act["currency"], act["amount"]
+                        if src and dst:
+                            transfer(cur, src, dst, curcode, amt)
+                            record_transaction(cur, payload.timestamp, src, dst, curcode, amt, "redo")
+                        elif src is None and dst:
+                            add_balance(cur, dst, curcode, amt)
+                            record_transaction(cur, payload.timestamp, None, dst, curcode, amt, "redo")
+                        elif dst is None and src:
+                            add_balance(cur, src, curcode, -amt)
+                            record_transaction(cur, payload.timestamp, src, None, curcode, amt, "redo")
+                        for u in filter(None, [src, dst]):
+                            scoreboards[u] = get_scoreboard(cur, u)
+                    push_undo(exec_uuid, last)
+                    redo_stack[exec_uuid] = None
+                    messages.append({"target": "chat", "text": t("redo.done")})
+                else:
+                    success = False
+                    error_text = t("redo.none")
             elif action == "setbalance" and len(cmd) >= 4:
                 target_name = cmd[1].lower()
                 currency = cmd[2]
@@ -535,6 +631,12 @@ async def message(payload: MessagePayload):
                             abs(delta),
                             "setbalance",
                         )
+                        actions.append({
+                            "src": target_uuid if delta < 0 else None,
+                            "dst": target_uuid if delta > 0 else None,
+                            "currency": currency,
+                            "amount": abs(delta),
+                        })
                     messages.append({
                         "target": "chat",
                         "text": t(
@@ -581,6 +683,8 @@ async def message(payload: MessagePayload):
             else:
                 messages.append({"target": "chat", "text": f"Echo: {payload.command}"})
                 scoreboards[exec_uuid] = get_scoreboard(cur, exec_uuid)
+            if success and actions:
+                push_undo(exec_uuid, actions)
 
     if success:
         res = {"status": "success", "messages": messages}

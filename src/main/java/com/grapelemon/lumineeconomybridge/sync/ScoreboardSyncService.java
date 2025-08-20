@@ -34,6 +34,7 @@ public class ScoreboardSyncService {
         int[] current = callSync(() -> ScoreboardUtil.readBothSync(p));
         lastSentAbs.putIfAbsent(p.getUniqueId(), current);
         appliedFromPython.putIfAbsent(p.getUniqueId(), new int[]{0,0});
+        sendAbsolute(p);
     }
 
     public void cleanup(UUID id) {
