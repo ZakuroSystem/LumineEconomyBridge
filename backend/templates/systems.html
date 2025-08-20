@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>System Accounts</h2>
+<form method="post" class="row g-3 mb-4">
+  <div class="col-auto">
+    <input name="name" class="form-control" placeholder="account id">
+  </div>
+  <div class="col-auto"><button class="btn btn-primary">Create</button></div>
+</form>
+<table class="table table-striped">
+  <thead><tr><th>ID</th><th>Balances</th><th>History</th></tr></thead>
+  <tbody>
+  {% for s in systems %}
+    <tr>
+      <td>{{ s.name }}</td>
+      <td>
+        {% for cur, bal in accounts[s.uuid].items() %}
+          {{ cur }}: {{ bal }}<br/>
+        {% endfor %}
+      </td>
+      <td><a href="{{ url_for('transactions') }}?player={{ s.name }}">view</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

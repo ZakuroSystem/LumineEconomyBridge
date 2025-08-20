@@ -4,6 +4,7 @@ import time
 import os
 import json
 import shutil
+import requests
 
 app = Flask(__name__)
 app.secret_key = "lumineeconomy"
@@ -454,6 +455,141 @@ def currencies():
             """,
         ).fetchall()
     return render_template("currencies.html", currencies=rows)
+
+
+@app.route("/systems", methods=["GET", "POST"])
+def systems():
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        if name:
+            with get_db() as db:
+                db.execute("INSERT OR IGNORE INTO system_accounts(uuid) VALUES(?)", (name,))
+                db.execute(
+                    "INSERT OR REPLACE INTO name_index(name, uuid) VALUES(?,?)",
+                    (name, name),
+                )
+                db.commit()
+            flash("Created system account")
+        return redirect(url_for("systems"))
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT sa.uuid, COALESCE(ni.name, sa.uuid) AS name FROM system_accounts sa LEFT JOIN name_index ni ON sa.uuid=ni.uuid ORDER BY name"
+        ).fetchall()
+        balances = {}
+        for r in rows:
+            bal_rows = db.execute(
+                "SELECT currency, balance FROM accounts WHERE uuid=?", (r["uuid"],)
+            ).fetchall()
+            balances[r["uuid"]] = {b["currency"]: b["balance"] for b in bal_rows}
+    return render_template("systems.html", systems=rows, accounts=balances)
+
+
+@app.route("/command", methods=["GET", "POST"])
+def command():
+    output = None
+    if request.method == "POST":
+        cmd = request.form.get("command", "").strip()
+        if cmd:
+            try:
+                resp = requests.post(
+                    "http://127.0.0.1:5100/api/message",
+                    json={
+                        "player": "Server",
+                        "command": cmd,
+                        "timestamp": int(time.time()),
+                        "world": "world",
+                        "x": 0,
+                        "y": 0,
+                        "z": 0,
+                    },
+                    timeout=5,
+                )
+                data = resp.json()
+                output = "\n".join(
+                    m.get("text", "") for m in data.get("messages", [])
+                )
+            except Exception as e:
+                output = str(e)
+    return render_template("command.html", output=output)
+
+
+@app.route("/analytics")
+def analytics():
+    with get_db() as db:
+        supply_rows = db.execute(
+            """
+            SELECT date(timestamp,'unixepoch') AS day, currency,
+                   SUM(CASE WHEN from_account IS NULL THEN amount ELSE -amount END) AS delta
+            FROM transactions
+            WHERE from_account IS NULL OR to_account IS NULL
+            GROUP BY day, currency
+            ORDER BY day
+            """
+        ).fetchall()
+        days = sorted({r["day"] for r in supply_rows})
+        currencies = sorted({r["currency"] for r in supply_rows})
+        day_idx = {d: i for i, d in enumerate(days)}
+        cum = {c: 0 for c in currencies}
+        data = {c: [0] * len(days) for c in currencies}
+        for r in supply_rows:
+            i = day_idx[r["day"]]
+            c = r["currency"]
+            cum[c] += r["delta"]
+            data[c][i] = cum[c]
+        supply = {
+            "labels": days,
+            "datasets": [
+                {"label": c, "data": data[c]} for c in currencies
+            ],
+        }
+        tx_rows = db.execute(
+            "SELECT date(timestamp,'unixepoch') AS day, COUNT(*) cnt, SUM(amount) total FROM transactions GROUP BY day ORDER BY day"
+        ).fetchall()
+        tx = {
+            "labels": [r["day"] for r in tx_rows],
+            "datasets": [
+                {"label": "Amount", "data": [r["total"] for r in tx_rows]},
+                {"label": "Count", "data": [r["cnt"] for r in tx_rows]},
+            ],
+        }
+        top_rows = db.execute(
+            """
+            SELECT COALESCE(ni.name, a.uuid) AS name, SUM(a.balance) AS total
+            FROM accounts a
+            LEFT JOIN system_accounts sa ON sa.uuid=a.uuid
+            LEFT JOIN name_index ni ON ni.uuid=a.uuid
+            WHERE sa.uuid IS NULL
+            GROUP BY a.uuid
+            ORDER BY total DESC
+            LIMIT 10
+            """
+        ).fetchall()
+        top = {
+            "labels": [r["name"] for r in top_rows],
+            "datasets": [
+                {"label": "Balance", "data": [r["total"] for r in top_rows]}
+            ],
+        }
+        heat = [[0] * 24 for _ in range(7)]
+        heat_rows = db.execute(
+            "SELECT strftime('%w',timestamp,'unixepoch') d, strftime('%H',timestamp,'unixepoch') h, COUNT(*) c FROM transactions GROUP BY d,h"
+        ).fetchall()
+        max_heat = 0
+        for r in heat_rows:
+            d = int(r["d"])
+            h = int(r["h"])
+            c = r["c"]
+            heat[d][h] = c
+            if c > max_heat:
+                max_heat = c
+    return render_template(
+        "analytics.html",
+        supply_json=json.dumps(supply),
+        tx_json=json.dumps(tx),
+        top_json=json.dumps(top),
+        heat=heat,
+        max_heat=max_heat,
+    )
 
 
 if __name__ == "__main__":
