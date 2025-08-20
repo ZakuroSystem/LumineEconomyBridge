@@ -1,59 +1,130 @@
-currency:
-  create: "通貨 {currency} を作成しました。"
-  supply_header: "現在の通貨供給量:"
-  supply_entry: "{currency}: {amount}"
-money:
-  give: "{target} の {currency} を {amount} 付与しました。"
-  take: "{target} の {currency} を {amount} 減少しました。"
-  pay: "{src} から {dst} へ {amount} 支払いました。"
-deposit: "{src} から {dst} へ {amount} を入金しました。"
-withdraw: "{src} から {dst} へ {amount} を引き出しました。"
-transfer: "{src} から {dst} へ {amount} を送金しました。"
-receive: "{src} から {amount} を受け取りました。"
-balance:
-  single: "{currency}: {amount}"
-  all: "残高: {balances}"
-  empty: "残高は0です。"
-setbalance: "{target} の {currency} 残高を {amount} に設定しました。"
-history:
-  header: "{player} の最近の取引:"
-  entry: "{time}: {src}->{dst} {amount} {currency} ({reason})"
-backup:
-  created: "バックアップ {file} を作成しました。"
-restore:
-  done: "バックアップから復元しました。"
-account:
-  created: "システムアカウント {id} を作成しました。"
-undo:
-  done: "直前の操作を取り消しました。"
-  none: "取り消す操作がありません。"
-redo:
-  done: "取り消しをやり直しました。"
-  none: "やり直す操作がありません。"
-help:
-  header: "使用可能なコマンド:"
-  lines:
-    - "/le balance [currency]"
-    - "/le money give <player> <currency> <amount>"
-    - "/le money take <player> <currency> <amount>"
-    - "/le money pay <src> <dst> <currency> <amount>"
-    - "/le deposit <src> <dst> <currency> <amount>"
-    - "/le withdraw <src> <dst> <currency> <amount>"
-    - "/le transfer <src> <dst> <currency> <amount>"
-    - "/le setbalance <player> <currency> <amount>"
-    - "/le history <player> [limit]"
-    - "/le currency create <id> [symbol]"
-    - "/le currency supply [id]"
-    - "/le account create <id>"
-    - "/le backup"
-    - "/le restore <file>"
-    - "/le undo"
-    - "/le redo"
-  suggest: "詳細は /le help を実行してください。"
-error:
-  invalid_args: "引数が不正です。"
-  insufficient: "残高が不足しています。"
-  pay_failed: "支払いに失敗しました。"
-  no_command: "コマンドが指定されていません。"
-  no_backup: "バックアップが見つかりません。"
-  unknown_command: "不明なコマンドです。"
+en:
+  currency:
+    create: "Created currency {currency}."
+    supply_header: "Current currency supply:"
+    supply_entry: "{currency}: {amount}"
+  money:
+    give: "Gave {amount} {currency} to {target}."
+    take: "Removed {amount} {currency} from {target}."
+    pay: "{src} paid {dst} {amount}."
+  deposit: "{src} deposited {amount} to {dst}."
+  withdraw: "{src} withdrew {amount} from {dst}."
+  transfer: "{src} transferred {amount} to {dst}."
+  receive: "{src} sent you {amount}."
+  balance:
+    single: "{currency}: {amount}"
+    all: "Balances: {balances}"
+    empty: "No balance."
+  setbalance: "Set {target}'s {currency} balance to {amount}."
+  history:
+    header: "Recent transactions for {player}:"
+    entry: "{time}: {src}->{dst} {amount} {currency} ({reason})"
+  backup:
+    created: "Created backup {file}."
+  restore:
+    done: "Restored from backup."
+  account:
+    created: "Created system account {id}."
+  undo:
+    done: "Undid last action."
+    none: "Nothing to undo."
+  redo:
+    done: "Redid last action."
+    none: "Nothing to redo."
+  help:
+    header: "Available commands:"
+    lines:
+      - "/le balance [currency]"
+      - "/le money give <player> <currency> <amount>"
+      - "/le money take <player> <currency> <amount>"
+      - "/le money pay <src> <dst> <currency> <amount>"
+      - "/le deposit <src> <dst> <currency> <amount>"
+      - "/le withdraw <src> <dst> <currency> <amount>"
+      - "/le transfer <src> <dst> <currency> <amount>"
+      - "/le setbalance <player> <currency> <amount>"
+      - "/le history <player> [limit]"
+      - "/le currency create <id> [symbol]"
+      - "/le currency supply [id]"
+      - "/le account create <id>"
+      - "/le backup"
+      - "/le restore <file>"
+      - "/le undo"
+      - "/le redo"
+      - "/le lang <en|jp>"
+    suggest: "Use /le help for details."
+  error:
+    invalid_args: "Invalid arguments."
+    insufficient: "Insufficient funds."
+    pay_failed: "Payment failed."
+    no_command: "No command provided."
+    no_backup: "Backup not found."
+    unknown_command: "Unknown command."
+  lang:
+    set: "Language set to {code}."
+    invalid: "Invalid language."
+    switch_hint: "Type /le lang jp to switch to Japanese."
+jp:
+  currency:
+    create: "通貨 {currency} を作成しました。"
+    supply_header: "現在の通貨供給量:"
+    supply_entry: "{currency}: {amount}"
+  money:
+    give: "{target} の {currency} を {amount} 付与しました。"
+    take: "{target} の {currency} を {amount} 減少しました。"
+    pay: "{src} から {dst} へ {amount} 支払いました。"
+  deposit: "{src} から {dst} へ {amount} を入金しました。"
+  withdraw: "{src} から {dst} へ {amount} を引き出しました。"
+  transfer: "{src} から {dst} へ {amount} を送金しました。"
+  receive: "{src} から {amount} を受け取りました。"
+  balance:
+    single: "{currency}: {amount}"
+    all: "残高: {balances}"
+    empty: "残高は0です。"
+  setbalance: "{target} の {currency} 残高を {amount} に設定しました。"
+  history:
+    header: "{player} の最近の取引:"
+    entry: "{time}: {src}->{dst} {amount} {currency} ({reason})"
+  backup:
+    created: "バックアップ {file} を作成しました。"
+  restore:
+    done: "バックアップから復元しました。"
+  account:
+    created: "システムアカウント {id} を作成しました。"
+  undo:
+    done: "直前の操作を取り消しました。"
+    none: "取り消す操作がありません。"
+  redo:
+    done: "取り消しをやり直しました。"
+    none: "やり直す操作がありません。"
+  help:
+    header: "使用可能なコマンド:"
+    lines:
+      - "/le balance [currency]"
+      - "/le money give <player> <currency> <amount>"
+      - "/le money take <player> <currency> <amount>"
+      - "/le money pay <src> <dst> <currency> <amount>"
+      - "/le deposit <src> <dst> <currency> <amount>"
+      - "/le withdraw <src> <dst> <currency> <amount>"
+      - "/le transfer <src> <dst> <currency> <amount>"
+      - "/le setbalance <player> <currency> <amount>"
+      - "/le history <player> [limit]"
+      - "/le currency create <id> [symbol]"
+      - "/le currency supply [id]"
+      - "/le account create <id>"
+      - "/le backup"
+      - "/le restore <file>"
+      - "/le undo"
+      - "/le redo"
+      - "/le lang <en|jp>"
+    suggest: "詳細は /le help を実行してください。"
+  error:
+    invalid_args: "引数が不正です。"
+    insufficient: "残高が不足しています。"
+    pay_failed: "支払いに失敗しました。"
+    no_command: "コマンドが指定されていません。"
+    no_backup: "バックアップが見つかりません。"
+    unknown_command: "不明なコマンドです。"
+  lang:
+    set: "言語を {code} に設定しました。"
+    invalid: "無効な言語です。"
+    switch_hint: "日本語表示に変更するには /le lang jp と入力してください。"
