@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Optional, List, Union, Tuple
+from tile_store import TileStore
 import sqlite3
 import json
 from contextlib import closing, contextmanager, asynccontextmanager
@@ -278,6 +279,7 @@ with conn:
     )
 
 app = FastAPI()
+tile_store = TileStore("tiles")
 
 db_lock = threading.Lock()
 
@@ -2250,3 +2252,33 @@ async def shop_remove(payload: ShopRemovePayload):
     }
     append_log(log_entry)
     return {"status": "success", "grant": grants, "location": location}
+
+
+class TileCoord(BaseModel):
+    tx: int
+    tz: int
+
+
+class InvalidateRequest(BaseModel):
+    world: str
+    tiles: List[TileCoord]
+    reason: Optional[str] = None
+
+
+@app.get("/tiles/{world}/{tx}/{tz}")
+def get_tile(world: str, tx: int, tz: int):
+    data = tile_store.load_tile(world, tx, tz)
+    if data is None:
+        raise HTTPException(status_code=404, detail="tile not found")
+    return Response(content=data, media_type="application/octet-stream")
+
+
+@app.post("/tiles/invalidate")
+def invalidate_tiles(req: InvalidateRequest):
+    tile_store.invalidate(req.world, [t.dict() for t in req.tiles])
+    return {"status": "queued"}
+
+
+@app.get("/tiles/status")
+def tiles_status():
+    return tile_store.status()
