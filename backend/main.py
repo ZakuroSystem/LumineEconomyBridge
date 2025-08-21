@@ -69,6 +69,14 @@ with conn:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
     # schema upgrades
     try:
         conn.execute("ALTER TABLE accounts ADD COLUMN frozen INTEGER NOT NULL DEFAULT 0")
@@ -105,14 +113,6 @@ with conn:
         CREATE TABLE IF NOT EXISTS players (
             uuid TEXT PRIMARY KEY,
             last_seen INTEGER NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
         )
         """
     )
