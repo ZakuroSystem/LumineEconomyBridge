@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Response, HTTPException, Header, Depends
+from fastapi import FastAPI, Response, HTTPException, Header, Depends, Request
 from pydantic import BaseModel
 from typing import Dict, Optional, List, Union, Tuple
 from tile_store import TileStore
@@ -287,6 +287,20 @@ SHARED_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
 def verify_token(x_le_token: str = Header(...)) -> None:
     if SHARED_TOKEN and x_le_token != SHARED_TOKEN:
         raise HTTPException(status_code=401, detail="invalid token")
+
+
+async def _tile_worker() -> None:
+    """Background task processing dirty and queued tiles."""
+
+    while True:
+        tile_store.process_dirty()
+        tile_store.process_queue()
+        await asyncio.sleep(0.2)
+
+
+@app.on_event("startup")
+async def _start_tile_worker() -> None:
+    asyncio.create_task(_tile_worker())
 
 db_lock = threading.Lock()
 
@@ -623,6 +637,9 @@ def append_log(entry: Dict[str, Union[str, int, float]]) -> None:
 def sanitize_messages(msgs: List[Dict[str, str]]) -> None:
     for m in msgs:
         m["text"] = sanitize_text(m.get("text", ""))
+
+# attach logger to tile store once defined
+tile_store.log_fn = append_log
 
 
 BACKUP_DIR = "backups"
@@ -2270,6 +2287,38 @@ class InvalidateRequest(BaseModel):
     world: str
     tiles: List[TileCoord]
     reason: Optional[str] = None
+
+
+class ChunkData(BaseModel):
+    cx: int
+    cz: int
+    data: str
+
+
+class ChunkSnapshotRequest(BaseModel):
+    world: str
+    y_start: int = 250
+    chunks: List[ChunkData]
+    ts: int
+
+
+@app.post("/plugin/chunk_snapshot")
+def chunk_snapshot(
+    req: ChunkSnapshotRequest,
+    request: Request,
+    token: None = Depends(verify_token),
+):
+    for ch in req.chunks:
+        tile_store.save_chunk(req.world, ch.cx, ch.cz, ch.data)
+    append_log(
+        {
+            "type": "chunk_snapshot",
+            "world": req.world,
+            "chunks": len(req.chunks),
+            "ip": request.client.host if request.client else "",
+        }
+    )
+    return {"status": "stored", "chunks": len(req.chunks)}
 
 
 @app.get("/tiles/{world}/{tx}/{tz}")

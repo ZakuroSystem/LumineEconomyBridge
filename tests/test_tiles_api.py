@@ -29,7 +29,7 @@ def test_tile_endpoints_with_token():
 
         status = client.get("/tiles/status", headers=headers)
         assert status.status_code == 200
-        assert status.json()["tiles"] == 1
+        assert status.json()["tile_count"] == 1
 
         bad = client.get("/tiles/world/0/0", headers={"X-LE-Token": "bad"})
         assert bad.status_code == 401

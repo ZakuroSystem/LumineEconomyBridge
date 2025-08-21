@@ -30,4 +30,4 @@ def test_save_tile_creates_meta():
         assert not os.path.exists(path)
         assert not os.path.exists(meta_path)
         status = store.status()
-        assert status["regen_queue"] == 1
+        assert status["queue_len"] == 1

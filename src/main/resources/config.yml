@@ -6,3 +6,4 @@ sync:
   interval: 10
 mapcolor:
   port: 8765
+  debounce_ms: 1000

@@ -2,6 +2,9 @@ package com.grapelemon.lumineeconomybridge;
 
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
 import com.grapelemon.lumineeconomybridge.map.MapColorService;
+import com.grapelemon.lumineeconomybridge.map.SnapshotService;
+import com.grapelemon.lumineeconomybridge.map.TileDebounceManager;
+import com.grapelemon.lumineeconomybridge.map.BlockEventListener;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import okhttp3.OkHttpClient;
@@ -32,6 +35,8 @@ public class LumineEconomyBridge extends JavaPlugin {
     private long syncInterval = 10L;
 
     private MapColorService mapColorService;
+    private SnapshotService snapshotService;
+    private TileDebounceManager tileDebounceManager;
 
     private final Map<String, Long> grantTokens = new ConcurrentHashMap<>();
 
@@ -52,6 +57,7 @@ public class LumineEconomyBridge extends JavaPlugin {
 
         startBridge();
         startMapColorService();
+        startTileUpdates();
     }
 
     public void startBridge() {
@@ -128,6 +134,14 @@ public class LumineEconomyBridge extends JavaPlugin {
         }
     }
 
+    private void startTileUpdates() {
+        String token = getConfig().getString("api.token", "");
+        int debounce = getConfig().getInt("mapcolor.debounce_ms", 1000);
+        snapshotService = new SnapshotService(this, token, baseUrl);
+        tileDebounceManager = new TileDebounceManager(this, snapshotService, debounce);
+        getServer().getPluginManager().registerEvents(new BlockEventListener(tileDebounceManager), this);
+    }
+
     @Override
     public void onDisable() {
         stopBridge();
@@ -135,6 +149,8 @@ public class LumineEconomyBridge extends JavaPlugin {
             mapColorService.stop();
             mapColorService = null;
         }
+        snapshotService = null;
+        tileDebounceManager = null;
     }
 
     public void reloadBridge() {
