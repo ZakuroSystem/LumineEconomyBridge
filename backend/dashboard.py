@@ -8,6 +8,7 @@ from flask import (
     send_file,
     session,
     g,
+    abort,
 )
 import sqlite3
 import time
@@ -15,11 +16,17 @@ import os
 import json
 import shutil
 import requests
+import secrets
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = "lumineeconomy"
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=True,
+)
 DB_PATH = "economy.db"
 LOG_PATH = "economy_commands.log"
 BACKUP_DIR = "backups"
@@ -145,6 +152,33 @@ def load_user():
                 g.user = None
     else:
         g.user = None
+
+
+def generate_csrf_token() -> str:
+    token = secrets.token_hex(16)
+    session["_csrf_token"] = token
+    return token
+
+
+app.jinja_env.globals["csrf_token"] = generate_csrf_token
+
+
+@app.before_request
+def csrf_protect():
+    if request.method == "POST":
+        token = session.pop("_csrf_token", None)
+        if not token or token != request.form.get("_csrf_token"):
+            abort(400)
+
+
+@app.after_request
+def add_security_headers(resp):
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers[
+        "Content-Security-Policy"
+    ] = "default-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; script-src 'self' https://cdn.jsdelivr.net"
+    return resp
 
 
 def login_required(view):

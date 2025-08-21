@@ -13,6 +13,8 @@ import asyncio
 import secrets
 import base64
 import hashlib
+import re
+import html
 
 # SQLite persistence
 conn = sqlite3.connect(
@@ -506,13 +508,37 @@ def is_online(cur: sqlite3.Cursor, uuid: str, now: int) -> bool:
 
 
 def queue_message(cur: sqlite3.Cursor, msg: Dict[str, str]) -> None:
+    safe = dict(msg)
+    safe["text"] = sanitize_text(safe.get("text", ""))
     cur.execute(
         "INSERT INTO pending_messages(uuid, payload) VALUES(?, ?)",
-        (msg.get("player"), json.dumps(msg)),
+        (safe.get("player"), json.dumps(safe, ensure_ascii=False)),
     )
 
 
 LOG_PATH = "economy_commands.log"
+
+
+COLOR_CODE_PATTERN = re.compile(r"[&§][0-9A-FK-ORa-fk-or]")
+
+
+def sanitize_text(text: str) -> str:
+    """Strip color codes and escape HTML for safe logging/display."""
+    return html.escape(COLOR_CODE_PATTERN.sub("", text))
+
+
+def append_log(entry: Dict[str, Union[str, int, float]]) -> None:
+    safe_entry = {
+        k: sanitize_text(v) if isinstance(v, str) else v
+        for k, v in entry.items()
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(safe_entry, ensure_ascii=False) + "\n")
+
+
+def sanitize_messages(msgs: List[Dict[str, str]]) -> None:
+    for m in msgs:
+        m["text"] = sanitize_text(m.get("text", ""))
 
 
 BACKUP_DIR = "backups"
@@ -568,7 +594,7 @@ def restore_db(path: str) -> None:
         )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+conn.execute("PRAGMA synchronous=NORMAL")
 
 
 async def auto_backup_loop():
@@ -610,8 +636,7 @@ def log_command(payload: MessagePayload, success: bool, error: Optional[str] = N
     }
     if not success and error:
         entry["error"] = error
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    append_log(entry)
 
 
 def record_transaction(
@@ -1319,6 +1344,7 @@ async def message(payload: MessagePayload):
                 push_undo(exec_uuid, actions)
 
     if success:
+        sanitize_messages(messages)
         res = {"status": "success", "messages": messages}
         if scoreboards:
             res["scoreboards"] = scoreboards
@@ -1330,6 +1356,7 @@ async def message(payload: MessagePayload):
             t("error.unknown_command", lang=exec_lang),
         }:
             err_msgs.append({"target": "chat", "text": t("help.suggest", lang=exec_lang)})
+        sanitize_messages(err_msgs)
         res = {"status": "error", "messages": err_msgs}
 
     log_command(payload, success, error_text)
@@ -1374,6 +1401,7 @@ async def rewrite(payload: RewritePayload):
             "player": payload.player,
             "delay": 5,
         })
+    sanitize_messages(msgs)
     return {"status": "success", "messages": msgs}
 
 
@@ -1403,8 +1431,7 @@ async def shop_place(payload: ShopPlacePayload):
         "result": result,
         "latency_ms": latency_ms,
     }
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    append_log(log_entry)
     return {"status": result}
 
 
@@ -1421,8 +1448,7 @@ async def shop_ids():
         "count": len(ids),
         "latency_ms": latency_ms,
     }
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    append_log(log_entry)
     return {"ids": ids}
 
 
@@ -1466,8 +1492,7 @@ async def shop_items(shop_id: str):
         "status": result.get("status"),
         "latency_ms": latency_ms,
     }
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    append_log(log_entry)
     return result
 
 
@@ -1681,8 +1706,8 @@ async def shop_buy(payload: ShopBuyPayload):
         "y": location["y"] if location else None,
         "z": location["z"] if location else None,
     }
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    append_log(log_entry)
+    sanitize_messages(messages)
     return {
         "status": "success" if success else "error",
         "messages": messages,
@@ -1735,8 +1760,7 @@ async def shop_add_stock(payload: ShopAddStockPayload):
         "reason": reason,
         "latency_ms": latency_ms,
     }
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    append_log(log_entry)
     if result == "success":
         return {"status": "success", "item_key": item_key}
     return {"status": "error", "reason": reason}
@@ -1798,8 +1822,7 @@ async def shop_take_stock(payload: ShopTakeStockPayload):
         "reason": reason,
         "latency_ms": latency_ms,
     }
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    append_log(log_entry)
     if result == "success":
         return {"status": "success", "grant": grant}
     return {"status": "error", "reason": reason}
@@ -1845,8 +1868,7 @@ async def shop_set_price(payload: ShopSetPricePayload):
         "reason": reason,
         "latency_ms": latency_ms,
     }
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    append_log(log_entry)
     if result == "success":
         return {"status": "success"}
     return {"status": "error", "reason": reason}
@@ -1867,8 +1889,7 @@ async def shop_ping(payload: ShopPingPayload):
         "shop_id": payload.shop_id,
         "latency_ms": latency_ms,
     }
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    append_log(log_entry)
     return {"status": "ok"}
 
 
@@ -1900,8 +1921,7 @@ async def shop_reopen(payload: ShopReopenPayload):
         "reason": reason,
         "latency_ms": latency_ms,
     }
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    append_log(log_entry)
     if result == "success":
         return {"status": "success"}
     return {"status": "error", "reason": reason}
@@ -1949,6 +1969,5 @@ async def shop_remove(payload: ShopRemovePayload):
         "refund": payload.refund,
         "latency_ms": latency_ms,
     }
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    append_log(log_entry)
     return {"status": "success", "grant": grants, "location": location}

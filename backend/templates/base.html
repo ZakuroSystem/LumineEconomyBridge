@@ -64,8 +64,14 @@
     <script src="https://cdn.jsdelivr.net/npm/datatables.net@1.13.10/js/jquery.dataTables.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/datatables.net-bs5@1.13.10/js/dataTables.bootstrap5.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    {% set csrf_token_value = csrf_token() %}
     <script>
-      $(function(){ $('.datatable').DataTable(); });
+      $(function(){
+        $('.datatable').DataTable();
+        $('form[method="post"]').each(function(){
+          $(this).append('<input type="hidden" name="_csrf_token" value="{{ csrf_token_value }}">');
+        });
+      });
     </script>
     {% block scripts %}{% endblock %}
   </body>
