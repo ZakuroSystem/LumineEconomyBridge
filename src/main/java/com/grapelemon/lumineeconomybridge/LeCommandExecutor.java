@@ -14,6 +14,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.Location;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
@@ -382,6 +383,8 @@ public class LeCommandExecutor implements CommandExecutor {
                                     .url(plugin.getBaseUrl() + "/api/shop/set_price")
                                     .post(RequestBody.create(gson.toJson(payload), JSON))
                                     .build();
+                            final String fCurrency = currency;
+                            final int fAmount = amount;
                             plugin.getHttpClient().newCall(req).enqueue(new Callback() {
                                 @Override public void onFailure(Call call, IOException ex) {
                                     plugin.getLogger().warning("Set price failed: " + ex.getMessage());
@@ -394,6 +397,26 @@ public class LeCommandExecutor implements CommandExecutor {
                                         Bukkit.getScheduler().runTask(plugin, () -> {
                                             if ("success".equals(res.get("status").getAsString())) {
                                                 p.sendMessage(ChatColor.GREEN + "Price updated");
+                                                Inventory top = p.getOpenInventory().getTopInventory();
+                                                if (top.getHolder() instanceof com.grapelemon.lumineeconomybridge.shop.ShopMenuHolder holder && holder.getShopId().equals(shopId)) {
+                                                    for (Map.Entry<Integer, com.grapelemon.lumineeconomybridge.shop.ShopItem> en : holder.getItems().entrySet()) {
+                                                        if (en.getValue().getSaleName().equals(saleName)) {
+                                                            en.getValue().getPrices().put(fCurrency, fAmount);
+                                                            ItemStack stack = top.getItem(en.getKey());
+                                                            if (stack != null) {
+                                                                ItemMeta meta = stack.getItemMeta();
+                                                                java.util.List<String> lore = new java.util.ArrayList<>();
+                                                                lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + en.getValue().getSaleName());
+                                                                lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + en.getValue().getStock());
+                                                                for (Map.Entry<String, Integer> pp : en.getValue().getPrices().entrySet()) {
+                                                                    lore.add(ChatColor.GREEN + pp.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + pp.getValue());
+                                                                }
+                                                                meta.setLore(lore);
+                                                                stack.setItemMeta(meta);
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             } else {
                                                 p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
                                             }

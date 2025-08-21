@@ -19,8 +19,12 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockExplodeEvent;
+import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.Inventory;
@@ -46,6 +50,7 @@ public class ShopListener implements Listener {
     private final Gson gson = new Gson();
     private final NamespacedKey keyShop;
     private final NamespacedKey keyId;
+    private final NamespacedKey keyOwner;
     private static final long CACHE_MS = 3000;
     private final Map<String, CacheEntry> itemCache = new ConcurrentHashMap<>();
     private final Map<UUID, PendingSale> pendingSales = new ConcurrentHashMap<>();
@@ -56,12 +61,14 @@ public class ShopListener implements Listener {
         final ItemStack item;
         final int qty;
         final long deadline;
-        PendingSale(String shopId, String blob, ItemStack item, int qty, long deadline) {
+        final ShopMenuHolder holder;
+        PendingSale(String shopId, String blob, ItemStack item, int qty, long deadline, ShopMenuHolder holder) {
             this.shopId = shopId;
             this.blob = blob;
             this.item = item;
             this.qty = qty;
             this.deadline = deadline;
+            this.holder = holder;
         }
     }
 
@@ -69,6 +76,7 @@ public class ShopListener implements Listener {
         this.plugin = plugin;
         this.keyShop = new NamespacedKey(plugin, "le_shop");
         this.keyId = new NamespacedKey(plugin, "shop_id");
+        this.keyOwner = new NamespacedKey(plugin, "owner_uuid");
     }
 
     private static class CacheEntry {
@@ -114,6 +122,7 @@ public class ShopListener implements Listener {
             PersistentDataContainer tc = tile.getPersistentDataContainer();
             tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
             if (shopId != null) tc.set(keyId, PersistentDataType.STRING, shopId);
+            tc.set(keyOwner, PersistentDataType.STRING, e.getPlayer().getUniqueId().toString());
             tile.update(true);
         }
         OkHttpClient http = plugin.getHttpClient();
@@ -260,23 +269,38 @@ public class ShopListener implements Listener {
                 ItemStack item = itemFromBase64(blob);
                 ItemStack raw = item.clone();
                 ItemMeta meta = item.getItemMeta();
+                int stock = it.get("stock").getAsInt();
                 List<String> lore = new ArrayList<>();
-                lore.add("Name: " + saleName);
-                lore.add("Stock: " + it.get("stock").getAsInt());
+                lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + saleName);
+                lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + stock);
                 JsonObject prices = it.getAsJsonObject("prices");
                 Map<String, Integer> priceMap = new HashMap<>();
                 for (var en : prices.entrySet()) {
-                    lore.add(en.getKey() + ": " + en.getValue().getAsInt());
+                    lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + en.getValue().getAsInt());
                     priceMap.put(en.getKey(), en.getValue().getAsInt());
                 }
                 meta.setLore(lore);
                 item.setItemMeta(meta);
                 inv.setItem(idx, item);
-                holder.getItems().put(idx, new ShopItem(key, saleName, item, raw, priceMap));
+                holder.getItems().put(idx, new ShopItem(key, saleName, item, raw, stock, priceMap));
                 idx++;
             }
             p.openInventory(inv);
         });
+    }
+
+    private void refreshDisplay(ShopMenuHolder holder, int slot, ShopItem si) {
+        ItemStack stack = holder.getInventory().getItem(slot);
+        if (stack == null) return;
+        ItemMeta meta = stack.getItemMeta();
+        List<String> lore = new ArrayList<>();
+        lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + si.getSaleName());
+        lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + si.getStock());
+        for (var en : si.getPrices().entrySet()) {
+            lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + en.getValue());
+        }
+        meta.setLore(lore);
+        stack.setItemMeta(meta);
     }
 
     @EventHandler
@@ -285,10 +309,9 @@ public class ShopListener implements Listener {
             e.setCancelled(true);
             Player p = (Player) e.getWhoClicked();
             if (e.getSlot() == 2) {
-                handlePurchase(p, ch.getShopId(), ch.getItem());
+                handlePurchase(p, ch);
             } else if (e.getSlot() == 6) {
-                p.closeInventory();
-                openShop(p, ch.getShopId());
+                p.openInventory(ch.getOrigin().getInventory());
             }
             return;
         }
@@ -310,21 +333,22 @@ public class ShopListener implements Listener {
             e.setCancelled(true);
             ShopItem si = holder.getItems().get(e.getSlot());
             if (isOwner) {
-                handleOwnerWithdraw(p, holder, si);
+                handleOwnerWithdraw(p, holder, si, e.getSlot());
             } else {
-                openConfirm(p, holder.getShopId(), si);
+                openConfirm(p, holder, e.getSlot(), si);
             }
             return;
         }
         e.setCancelled(true);
     }
 
-    private void handlePurchase(Player p, String shopId, ShopItem si) {
+    private void handlePurchase(Player p, ConfirmMenuHolder ch) {
+        ShopItem si = ch.getItem();
         String currency = si.getPrices().keySet().stream().findFirst().orElse(null);
         if (currency == null) return;
         Map<String, Object> payload = new HashMap<>();
         payload.put("player_uuid", p.getUniqueId().toString());
-        payload.put("shop_id", shopId);
+        payload.put("shop_id", ch.getShopId());
         payload.put("item_key", si.getItemKey());
         payload.put("qty", 1);
         payload.put("currency", currency);
@@ -394,15 +418,17 @@ public class ShopListener implements Listener {
                                 }
                             }
                         }
-                        openShop(p, shopId);
+                        si.setStock(si.getStock() - 1);
+                        refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
+                        p.openInventory(ch.getOrigin().getInventory());
                     });
                 }
             }
         });
     }
 
-    private void openConfirm(Player p, String shopId, ShopItem si) {
-        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(shopId, si), 9, "Confirm");
+    private void openConfirm(Player p, ShopMenuHolder holder, int slot, ShopItem si) {
+        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(holder.getShopId(), holder, slot, si), 9, "Confirm");
         inv.setItem(4, si.getRawItem());
         ItemStack ok = new ItemStack(Material.GREEN_STAINED_GLASS_PANE);
         ItemMeta om = ok.getItemMeta();
@@ -417,6 +443,7 @@ public class ShopListener implements Listener {
         p.openInventory(inv);
     }
 
+
     private void handleOwnerDeposit(Player p, ShopMenuHolder holder, ItemStack stack) {
         String blob = itemToBase64(stack);
         String key = sha256(Base64.getDecoder().decode(blob));
@@ -425,6 +452,9 @@ public class ShopListener implements Listener {
             ItemStack refund = stack.clone();
             int qty = stack.getAmount();
             stack.setAmount(0);
+            existing.setStock(existing.getStock() + qty);
+            int slot = holder.getItems().entrySet().stream().filter(en -> en.getValue() == existing).map(Map.Entry::getKey).findFirst().orElse(-1);
+            if (slot >= 0) refreshDisplay(holder, slot, existing);
             Map<String, Object> payload = new HashMap<>();
             payload.put("owner_uuid", p.getUniqueId().toString());
             payload.put("shop_id", holder.getShopId());
@@ -446,6 +476,8 @@ public class ShopListener implements Listener {
             plugin.getHttpClient().newCall(req).enqueue(new Callback() {
                 @Override public void onFailure(Call call, IOException ex) {
                     plugin.getLogger().warning("Add stock failed: " + ex.getMessage());
+                    existing.setStock(existing.getStock() - qty);
+                    if (slot >= 0) Bukkit.getScheduler().runTask(plugin, () -> refreshDisplay(holder, slot, existing));
                     Bukkit.getScheduler().runTask(plugin, () -> p.getInventory().addItem(refund));
                 }
                 @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
@@ -454,7 +486,7 @@ public class ShopListener implements Listener {
             ItemStack refund = stack.clone();
             int qty = stack.getAmount();
             stack.setAmount(0);
-            PendingSale pending = new PendingSale(holder.getShopId(), blob, refund, qty, System.currentTimeMillis() + 20000);
+            PendingSale pending = new PendingSale(holder.getShopId(), blob, refund, qty, System.currentTimeMillis() + 20000, holder);
             pendingSales.put(p.getUniqueId(), pending);
             p.sendMessage(ChatColor.YELLOW + "Enter sale name and price (e.g. apple 100)");
             Bukkit.getScheduler().runTaskLater(plugin, () -> {
@@ -468,7 +500,7 @@ public class ShopListener implements Listener {
         }
     }
 
-    private void handleOwnerWithdraw(Player p, ShopMenuHolder holder, ShopItem si) {
+    private void handleOwnerWithdraw(Player p, ShopMenuHolder holder, ShopItem si, int slot) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("owner_uuid", p.getUniqueId().toString());
         payload.put("shop_id", holder.getShopId());
@@ -496,6 +528,15 @@ public class ShopListener implements Listener {
                                 ItemStack item = si.getRawItem().clone();
                                 item.setAmount(gg.get("qty").getAsInt());
                                 Bukkit.getScheduler().runTask(plugin, () -> p.getInventory().addItem(item));
+                            }
+                        });
+                        si.setStock(Math.max(0, si.getStock() - 1));
+                        Bukkit.getScheduler().runTask(plugin, () -> {
+                            if (si.getStock() <= 0) {
+                                holder.getInventory().setItem(slot, null);
+                                holder.getItems().remove(slot);
+                            } else {
+                                refreshDisplay(holder, slot, si);
                             }
                         });
                     }
@@ -546,5 +587,93 @@ public class ShopListener implements Listener {
             @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
         });
         e.getPlayer().sendMessage(ChatColor.GREEN + "Registered");
+        ShopMenuHolder holder = ps.holder;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Inventory inv = holder.getInventory();
+            int slot = inv.firstEmpty();
+            if (slot >= 0) {
+                Map<String, Integer> priceMap = new HashMap<>();
+                priceMap.put("", price);
+                ItemStack display = ps.item.clone();
+                ItemMeta meta = display.getItemMeta();
+                List<String> lore = new ArrayList<>();
+                lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + saleName);
+                lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + ps.qty);
+                lore.add(ChatColor.GREEN + "Price: " + ChatColor.YELLOW + price);
+                meta.setLore(lore);
+                display.setItemMeta(meta);
+                inv.setItem(slot, display);
+                holder.getItems().put(slot, new ShopItem(sha256(Base64.getDecoder().decode(ps.blob)), saleName, display, ps.item, ps.qty, priceMap));
+            }
+        });
+    }
+
+    @EventHandler
+    public void onMoveItem(InventoryMoveItemEvent e) {
+        if (isShopInventory(e.getDestination()) || isShopInventory(e.getSource())) {
+            e.setCancelled(true);
+        }
+    }
+
+    private boolean isShopInventory(Inventory inv) {
+        if (inv == null) return false;
+        var holder = inv.getHolder();
+        if (holder instanceof TileState tile) {
+            PersistentDataContainer c = tile.getPersistentDataContainer();
+            return c.has(keyShop, PersistentDataType.BYTE);
+        }
+        return false;
+    }
+
+    @EventHandler
+    public void onBlockBreak(BlockBreakEvent e) {
+        Block b = e.getBlock();
+        if (!isShopBlock(b)) return;
+        TileState tile = (TileState) b.getState();
+        String owner = tile.getPersistentDataContainer().get(keyOwner, PersistentDataType.STRING);
+        String shopId = tile.getPersistentDataContainer().get(keyId, PersistentDataType.STRING);
+        if (owner != null && !e.getPlayer().getUniqueId().toString().equals(owner)) {
+            e.setCancelled(true);
+            e.getPlayer().sendMessage(ChatColor.RED + "You are not the owner");
+            return;
+        }
+        notifyRemove(owner, shopId);
+        Player op = Bukkit.getPlayer(UUID.fromString(owner));
+        if (op != null && op != e.getPlayer()) op.sendMessage(ChatColor.RED + "Your shop " + shopId + " was removed");
+    }
+
+    @EventHandler
+    public void onBlockExplode(BlockExplodeEvent e) {
+        e.blockList().removeIf(this::isShopBlock);
+    }
+
+    @EventHandler
+    public void onEntityExplode(EntityExplodeEvent e) {
+        e.blockList().removeIf(this::isShopBlock);
+    }
+
+    private boolean isShopBlock(Block b) {
+        if (b.getType() != Material.BARREL) return false;
+        BlockState state = b.getState();
+        if (state instanceof TileState tile) {
+            return tile.getPersistentDataContainer().has(keyShop, PersistentDataType.BYTE);
+        }
+        return false;
+    }
+
+    private void notifyRemove(String owner, String shopId) {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null || owner == null || shopId == null) return;
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("owner_uuid", owner);
+        payload.put("shop_id", shopId);
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/remove")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        http.newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException ex) { }
+            @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
+        });
     }
 }
