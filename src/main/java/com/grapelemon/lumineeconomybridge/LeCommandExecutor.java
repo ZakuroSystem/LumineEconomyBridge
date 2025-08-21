@@ -20,6 +20,7 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.NamespacedKey;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.TileState;
+import org.bukkit.ChatColor;
 import net.md_5.bungee.api.ChatMessageType;
 import net.md_5.bungee.api.chat.TextComponent;
 
@@ -79,7 +80,14 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(Lang.get("error-unavailable"));
                         return true;
                     }
-                    if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
+                    if (args.length >= 2 && args[1].equalsIgnoreCase("help")) {
+                        p.sendMessage(ChatColor.GOLD + "/le shop create <id> - Create a shop barrel / ショップ樽を作成");
+                        p.sendMessage(ChatColor.GOLD + "/le shop add <id> <qty> - Deposit items / 在庫追加");
+                        p.sendMessage(ChatColor.GOLD + "/le shop take <id> <item> <qty> - Withdraw stock / 在庫回収");
+                        p.sendMessage(ChatColor.GOLD + "/le shop price <id> <hand|item> <currency> <amount> - Set price / 価格設定");
+                        p.sendMessage(ChatColor.GOLD + "/le shop remove <id> [refund] - Remove shop / 撤去");
+                        p.sendMessage(ChatColor.GOLD + "/le shop reopen <id> - Reopen suspended shop / 再開");
+                    } else if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
                         String shopId = args[2];
                         ItemStack barrel = new ItemStack(Material.BARREL);
                         ItemMeta meta = barrel.getItemMeta();
@@ -100,14 +108,14 @@ public class LeCommandExecutor implements CommandExecutor {
                         }
                         barrel.setItemMeta(meta);
                         p.getInventory().addItem(barrel);
-                        p.sendMessage("Shop barrel created: " + shopId);
+                        p.sendMessage(ChatColor.GREEN + "Shop barrel created: " + shopId);
                     } else if (args.length >= 4 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
                         int qty;
-                        try { qty = Integer.parseInt(args[3]); } catch (NumberFormatException ex) { p.sendMessage("Invalid qty"); return true; }
+                        try { qty = Integer.parseInt(args[3]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid qty"); return true; }
                         ItemStack hand = p.getInventory().getItemInMainHand();
-                        if (hand.getType() == Material.AIR) { p.sendMessage("Hold item in hand"); return true; }
-                        if (hand.getAmount() < qty) { p.sendMessage("Not enough items"); return true; }
+                        if (hand.getType() == Material.AIR) { p.sendMessage(ChatColor.RED + "Hold item in hand"); return true; }
+                        if (hand.getAmount() < qty) { p.sendMessage(ChatColor.RED + "Not enough items"); return true; }
                         String blob = itemToBase64(hand);
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("owner_uuid", p.getUniqueId().toString());
@@ -135,12 +143,12 @@ public class LeCommandExecutor implements CommandExecutor {
                                             hand.setAmount(hand.getAmount() - qty);
                                             p.getInventory().setItemInMainHand(hand.getAmount() > 0 ? hand : null);
                                             if (res.has("item_key")) {
-                                                p.sendMessage("Stock added: " + res.get("item_key").getAsString());
+                                                p.sendMessage(ChatColor.GREEN + "Stock added: " + res.get("item_key").getAsString());
                                             } else {
-                                                p.sendMessage("Stock added");
+                                                p.sendMessage(ChatColor.GREEN + "Stock added");
                                             }
                                         } else {
-                                            p.sendMessage("Failed: " + res.get("reason").getAsString());
+                                            p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
                                         }
                                     });
                                 }
@@ -150,7 +158,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         String shopId = args[2];
                         String itemKey = args[3];
                         int qty;
-                        try { qty = Integer.parseInt(args[4]); } catch (NumberFormatException ex) { p.sendMessage("Invalid qty"); return true; }
+                        try { qty = Integer.parseInt(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid qty"); return true; }
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("owner_uuid", p.getUniqueId().toString());
                         payload.put("shop_id", shopId);
@@ -182,9 +190,9 @@ public class LeCommandExecutor implements CommandExecutor {
                                                     }
                                                 });
                                             }
-                                            p.sendMessage("Stock taken");
+                                            p.sendMessage(ChatColor.GREEN + "Stock taken");
                                         } else {
-                                            p.sendMessage("Failed: " + res.get("reason").getAsString());
+                                            p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
                                         }
                                     });
                                 }
@@ -264,9 +272,9 @@ public class LeCommandExecutor implements CommandExecutor {
                                                     }
                                                 });
                                             }
-                                            p.sendMessage("Removed");
+                                            p.sendMessage(ChatColor.GREEN + "Removed");
                                         } else {
-                                            p.sendMessage("Failed: " + res.get("reason").getAsString());
+                                            p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
                                         }
                                     });
                                 }
@@ -277,14 +285,14 @@ public class LeCommandExecutor implements CommandExecutor {
                         String itemKey;
                         if (args[3].equalsIgnoreCase("hand")) {
                             ItemStack hand = p.getInventory().getItemInMainHand();
-                            if (hand.getType() == Material.AIR) { p.sendMessage("Hold item in hand"); return true; }
+                            if (hand.getType() == Material.AIR) { p.sendMessage(ChatColor.RED + "Hold item in hand"); return true; }
                             itemKey = computeItemKey(hand);
                         } else {
                             itemKey = args[3];
                         }
                         String currency = args[4];
                         int amount;
-                        try { amount = Integer.parseInt(args[5]); } catch (NumberFormatException ex) { p.sendMessage("Invalid amount"); return true; }
+                        try { amount = Integer.parseInt(args[5]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid amount"); return true; }
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("owner_uuid", p.getUniqueId().toString());
                         payload.put("shop_id", shopId);
@@ -306,16 +314,16 @@ public class LeCommandExecutor implements CommandExecutor {
                                     JsonObject res = JsonParser.parseString(body).getAsJsonObject();
                                     Bukkit.getScheduler().runTask(plugin, () -> {
                                         if ("success".equals(res.get("status").getAsString())) {
-                                            p.sendMessage("Price updated");
+                                            p.sendMessage(ChatColor.GREEN + "Price updated");
                                         } else {
-                                            p.sendMessage("Failed: " + res.get("reason").getAsString());
+                                            p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
                                         }
                                     });
                                 }
                             }
                         });
                     } else {
-                        p.sendMessage("Usage: /le shop <create|add|take|price> ...");
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le shop <create|add|take|price|remove|reopen|help> ...");
                     }
                     return true;
                 }

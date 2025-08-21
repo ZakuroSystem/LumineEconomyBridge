@@ -15,7 +15,7 @@ public class LeTabCompleter implements TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-              return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo", "help", "lang", "backup", "restore", "weblink")
+              return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo", "help", "lang", "backup", "restore", "weblink", "shop")
                       .filter(s -> s.startsWith(args[0].toLowerCase()))
                       .toList();
         }
@@ -41,6 +41,11 @@ public class LeTabCompleter implements TabCompleter {
             }
             if (first.equals("money")) {
                 return Stream.of("give", "take", "pay", "top")
+                        .filter(s -> s.startsWith(args[1].toLowerCase()))
+                        .toList();
+            }
+            if (first.equals("shop")) {
+                return Stream.of("create", "add", "take", "price", "remove", "reopen", "help")
                         .filter(s -> s.startsWith(args[1].toLowerCase()))
                         .toList();
             }

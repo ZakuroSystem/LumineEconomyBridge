@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>My Shops</h2>
+<table class="table table-striped datatable">
+  <thead>
+    <tr><th>ID</th><th>Status</th><th>Last Activity</th><th>Sales</th><th>Revenue</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for s in shops %}
+    <tr>
+      <td>{{ s.shop_id }}</td>
+      <td>{{ s.status }}</td>
+      <td>{{ s.last_activity_at|fmt_ts }}</td>
+      <td>{{ s.sales }}</td>
+      <td>{{ s.revenue }}</td>
+      <td><a class="btn btn-sm btn-primary" href="{{ url_for('portal_shop', shop_id=s.shop_id) }}">Manage</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

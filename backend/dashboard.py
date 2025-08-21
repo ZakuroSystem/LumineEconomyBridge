@@ -767,6 +767,161 @@ def shop_detail(shop_id: str):
     return render_template("shop_detail.html", shop=shop, items=items, sales=sales)
 
 
+@app.route("/portal")
+@login_required
+def portal_index():
+    if not g.user["uuid"]:
+        flash("Link your account first")
+        return redirect(url_for("index"))
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT shop_id, status, last_activity_at FROM shops WHERE owner_uuid=?",
+            (g.user["uuid"],),
+        ).fetchall()
+        stats_rows = db.execute(
+            """
+            SELECT shop_id, COUNT(*) AS cnt, COALESCE(SUM(total_price),0) AS total
+            FROM shop_tx WHERE result='success' AND shop_id IN (
+                SELECT shop_id FROM shops WHERE owner_uuid=?
+            )
+            GROUP BY shop_id
+            """,
+            (g.user["uuid"],),
+        ).fetchall()
+    stats = {r["shop_id"]: r for r in stats_rows}
+    shops = []
+    for r in rows:
+        info = dict(r)
+        s = stats.get(r["shop_id"], {"cnt": 0, "total": 0})
+        info["sales"] = s["cnt"]
+        info["revenue"] = s["total"]
+        shops.append(info)
+    return render_template("my_shops.html", shops=shops)
+
+
+@app.route("/portal/<shop_id>", methods=["GET", "POST"])
+@login_required
+def portal_shop(shop_id: str):
+    if not g.user["uuid"]:
+        flash("Link your account first")
+        return redirect(url_for("portal_index"))
+    with get_db() as db:
+        shop = db.execute(
+            "SELECT shop_id, owner_uuid, status, last_activity_at FROM shops WHERE shop_id=?",
+            (shop_id,),
+        ).fetchone()
+        if not shop or shop["owner_uuid"] != g.user["uuid"]:
+            flash("Access denied")
+            return redirect(url_for("portal_index"))
+        if request.method == "POST":
+            action = request.form.get("action")
+            cur = db.cursor()
+            if action == "set_stock":
+                item_key = request.form["item_key"]
+                try:
+                    stock = int(request.form["stock"])
+                except ValueError:
+                    stock = 0
+                ts = int(time.time())
+                cur.execute(
+                    """
+                    INSERT INTO shop_stock(shop_id,item_key,stock,updated_at)
+                    VALUES (?,?,?,?)
+                    ON CONFLICT(shop_id,item_key)
+                    DO UPDATE SET stock=excluded.stock, updated_at=excluded.updated_at
+                    """,
+                    (shop_id, item_key, stock, ts),
+                )
+            elif action == "set_price":
+                item_key = request.form["item_key"]
+                currency = request.form["currency"].strip()
+                try:
+                    price = int(request.form["price"])
+                except ValueError:
+                    price = 0
+                cur.execute(
+                    """
+                    INSERT INTO shop_prices(shop_id,item_key,currency,price)
+                    VALUES (?,?,?,?)
+                    ON CONFLICT(shop_id,item_key,currency)
+                    DO UPDATE SET price=excluded.price
+                    """,
+                    (shop_id, item_key, currency, price),
+                )
+            db.commit()
+            flash("Updated")
+            return redirect(url_for("portal_shop", shop_id=shop_id))
+        item_rows = db.execute(
+            """
+            SELECT si.item_key, si.material, si.display_name, ss.stock
+            FROM shop_stock ss JOIN shop_items si ON ss.item_key=si.item_key
+            WHERE ss.shop_id=?
+            """,
+            (shop_id,),
+        ).fetchall()
+        items = []
+        for r in item_rows:
+            price_rows = db.execute(
+                "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                (shop_id, r["item_key"]),
+            ).fetchall()
+            items.append(
+                {
+                    "item_key": r["item_key"],
+                    "material": r["material"],
+                    "display_name": r["display_name"],
+                    "stock": r["stock"],
+                    "prices": {p["currency"]: p["price"] for p in price_rows},
+                }
+            )
+        sales = db.execute(
+            """
+            SELECT timestamp, buyer_uuid, item_key, qty, currency, total_price
+            FROM shop_tx WHERE shop_id=? AND result='success'
+            ORDER BY id DESC LIMIT 100
+            """,
+            (shop_id,),
+        ).fetchall()
+        series = db.execute(
+            """
+            SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch') AS day, SUM(total_price) total
+            FROM shop_tx WHERE shop_id=? AND result='success'
+            GROUP BY day ORDER BY day
+            """,
+            (shop_id,),
+        ).fetchall()
+    labels = [r["day"] for r in series]
+    data = [r["total"] for r in series]
+    return render_template(
+        "my_shop_detail.html",
+        shop=shop,
+        items=items,
+        sales=sales,
+        chart_labels=json.dumps(labels),
+        chart_data=json.dumps(data),
+    )
+
+
+@app.route("/shopstats")
+@login_required
+def shop_stats():
+    with get_db() as db:
+        rows = db.execute(
+            """
+            SELECT s.shop_id, COALESCE(SUM(t.total_price),0) AS revenue, COUNT(t.id) AS cnt
+            FROM shops s LEFT JOIN shop_tx t ON s.shop_id=t.shop_id AND t.result='success'
+            GROUP BY s.shop_id ORDER BY revenue DESC LIMIT 10
+            """
+        ).fetchall()
+    labels = [r["shop_id"] for r in rows]
+    revenue = [r["revenue"] for r in rows]
+    return render_template(
+        "shop_stats.html",
+        rows=rows,
+        chart_labels=json.dumps(labels),
+        chart_data=json.dumps(revenue),
+    )
+
 @app.route("/command", methods=["GET", "POST"])
 @admin_required
 def command():
