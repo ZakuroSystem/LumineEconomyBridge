@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Dict, Optional, List, Union
 import sqlite3
 import json
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, asynccontextmanager
 import yaml
 import os
 import time
@@ -352,11 +352,12 @@ async def auto_backup_loop():
         await asyncio.sleep(interval)
         backup_db()
         trim_backups(get_setting("auto_backup_keep", 10))
-
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     asyncio.create_task(auto_backup_loop())
+    yield
+
+app.router.lifespan_context = lifespan
 
 
 def log_command(payload: MessagePayload, success: bool, error: Optional[str] = None) -> None:
