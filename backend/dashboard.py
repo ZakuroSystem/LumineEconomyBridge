@@ -157,8 +157,10 @@ def load_user():
 
 
 def generate_csrf_token() -> str:
-    token = secrets.token_hex(16)
-    session["_csrf_token"] = token
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_hex(16)
+        session["_csrf_token"] = token
     return token
 
 
