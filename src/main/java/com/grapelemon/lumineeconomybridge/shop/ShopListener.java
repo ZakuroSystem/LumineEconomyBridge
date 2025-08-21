@@ -178,6 +178,7 @@ public class ShopListener implements Listener {
             return;
         }
         OkHttpClient http = plugin.getHttpClient();
+        sendPing(shopId);
         HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
                 .addQueryParameter("shop_id", shopId)
                 .build();

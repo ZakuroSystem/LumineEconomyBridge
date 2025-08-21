@@ -42,7 +42,8 @@ public final class ScoreboardUtil {
         for (Objective obj : sb.getObjectives()) {
             String name = obj.getName();
             if (name.startsWith("currency")) {
-                result.put(name, obj.getScore(entry).getScore());
+                String cur = name.startsWith("currency_") ? name.substring(9) : name;
+                result.put(cur, obj.getScore(entry).getScore());
             }
         }
         return result;
@@ -55,7 +56,8 @@ public final class ScoreboardUtil {
         Scoreboard sb = p.getScoreboard() != null ? p.getScoreboard() : Bukkit.getScoreboardManager().getMainScoreboard();
         String entry = p.getName();
         for (Map.Entry<String, Integer> e : values.entrySet()) {
-            writeCurrency(sb, e.getKey(), e.getKey(), entry, e.getValue());
+            String objName = e.getKey().startsWith("currency") ? e.getKey() : "currency_" + e.getKey();
+            writeCurrency(sb, objName, objName, entry, e.getValue());
         }
     }
 }

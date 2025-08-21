@@ -78,6 +78,12 @@ with conn:
         conn.execute("ALTER TABLE currencies ADD COLUMN symbol TEXT")
     except sqlite3.OperationalError:
         pass
+    conn.execute(
+        "INSERT OR IGNORE INTO currencies(name, symbol) VALUES('thy', '\u00A5')"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO settings(key, value) VALUES('default_currency', 'thy')"
+    )
     try:
         conn.execute("ALTER TABLE currencies ADD COLUMN description TEXT")
     except sqlite3.OperationalError:
@@ -540,7 +546,7 @@ def get_default_currency(cur: sqlite3.Cursor) -> str:
     row = cur.execute(
         "SELECT value FROM settings WHERE key='default_currency'"
     ).fetchone()
-    return resolve_currency(cur, row["value"]) if row else "currency1"
+    return resolve_currency(cur, row["value"]) if row else "thy"
 
 
 def get_uuid(name: str) -> Optional[str]:
@@ -625,8 +631,7 @@ def list_balances(cur: sqlite3.Cursor, uuid: str) -> Dict[str, int]:
 
 
 def get_scoreboard(cur: sqlite3.Cursor, uuid: str) -> Dict[str, int]:
-    balances = list_balances(cur, uuid)
-    return {k: v for k, v in balances.items() if k in ("currency1", "currency2")}
+    return list_balances(cur, uuid)
 
 
 def format_amount(cur: sqlite3.Cursor, amount: int, currency: str) -> str:
@@ -864,31 +869,38 @@ async def message(payload: MessagePayload):
     error_text = None
     exec_lang = get_lang(payload.player)
 
-    def parse_amount(index: int) -> Optional[int]:
-        if len(cmd) <= index:
-            return None
-        try:
-            amt = int(cmd[index])
-        except ValueError:
-            return None
-        return amt if amt > 0 else None
-
-    def parse_amount_any(index: int) -> Optional[int]:
-        if len(cmd) <= index:
-            return None
-        try:
-            return int(cmd[index])
-        except ValueError:
-            return None
-
-    def parse_currency_amount(start: int) -> Tuple[str, Optional[int]]:
-        if len(cmd) > start and is_currency(cur, cmd[start]):
-            currency = resolve_currency(cur, cmd[start])
-            amt = parse_amount(start + 1)
+    def parse_amount_token(token: str, base: Optional[int], positive_only: bool = True) -> Optional[int]:
+        if token.endswith('%'):
+            if base is None:
+                return None
+            try:
+                pct = float(token[:-1])
+            except ValueError:
+                return None
+            amt = int(base * pct / 100)
         else:
-            currency = get_default_currency(cur)
-            amt = parse_amount(start)
-        return currency, amt
+            try:
+                amt = int(token)
+            except ValueError:
+                return None
+        if positive_only and amt <= 0:
+            return None
+        return amt
+
+    def parse_amount(index: int, base: Optional[int] = None) -> Optional[int]:
+        if len(cmd) <= index:
+            return None
+        return parse_amount_token(cmd[index], base, True)
+
+    def parse_amount_any(index: int, base: Optional[int] = None) -> Optional[int]:
+        if len(cmd) <= index:
+            return None
+        return parse_amount_token(cmd[index], base, False)
+
+    def extract_currency(start: int) -> Tuple[str, int, bool]:
+        if len(cmd) > start and is_currency(cur, cmd[start]):
+            return resolve_currency(cur, cmd[start]), start + 1, True
+        return get_default_currency(cur), start, False
 
     if action == "lang":
         if len(cmd) >= 2 and cmd[1] in {"en", "jp"}:
@@ -945,12 +957,15 @@ async def message(payload: MessagePayload):
                     messages.append({"target": "chat", "text": t("currency.create", lang=exec_lang, currency=cname)})
                 elif sub == "default" and len(cmd) >= 3:
                     cname = resolve_currency(cur, cmd[2])
-                    ensure_currency(cur, cname)
-                    cur.execute(
-                        "INSERT OR REPLACE INTO settings(key,value) VALUES('default_currency', ?)",
-                        (cname,),
-                    )
-                    messages.append({"target": "chat", "text": t("currency.default", lang=exec_lang, currency=cname)})
+                    if not is_currency(cur, cname):
+                        success = False
+                        error_text = t("error.invalid_currency", lang=exec_lang)
+                    else:
+                        cur.execute(
+                            "INSERT OR REPLACE INTO settings(key,value) VALUES('default_currency', ?)",
+                            (cname,),
+                        )
+                        messages.append({"target": "chat", "text": t("currency.default", lang=exec_lang, currency=cname)})
                 elif sub == "supply":
                     if len(cmd) >= 3:
                         cname = resolve_currency(cur, cmd[2])
@@ -993,13 +1008,18 @@ async def message(payload: MessagePayload):
                 sub = cmd[1].lower()
                 if sub in {"give", "take"} and len(cmd) >= 4:
                     target_name = cmd[2].lower()
-                    currency, amt = parse_currency_amount(3)
+                    currency, amt_idx, _ = extract_currency(3)
                     target_uuid = get_uuid(target_name)
-                    if amt is None or target_uuid is None:
+                    base = get_balance(cur, target_uuid, currency) if target_uuid else None
+                    amt = parse_amount(amt_idx, base)
+                    if (
+                        amt is None
+                        or target_uuid is None
+                        or not is_currency(cur, currency)
+                    ):
                         success = False
-                        error_text = t("error.invalid_args", lang=exec_lang)
+                        error_text = t("error.invalid_args", lang=exec_lang) if amt is None or target_uuid is None else t("error.invalid_currency", lang=exec_lang)
                     else:
-                        ensure_currency(cur, currency)
                         if is_frozen(cur, target_uuid, currency):
                             success = False
                             error_text = t("error.frozen", lang=exec_lang)
@@ -1071,23 +1091,26 @@ async def message(payload: MessagePayload):
                     else:
                         currency = get_default_currency(cur)
                     if success:
-                        ensure_currency(cur, currency)
-                        offset = (page - 1) * 10
-                        rows = cur.execute(
-                            "SELECT n.name, a.balance FROM accounts a JOIN name_index n ON a.uuid=n.uuid WHERE a.currency=? ORDER BY a.balance DESC LIMIT 10 OFFSET ?",
-                            (currency, offset),
-                        ).fetchall()
-                        messages.append(
-                            {
-                                "target": "chat",
-                                "text": t(
-                                    "money.top_header",
-                                    lang=exec_lang,
-                                    currency=currency,
-                                    page=page,
-                                ),
-                            }
-                        )
+                        if not is_currency(cur, currency):
+                            success = False
+                            error_text = t("error.invalid_currency", lang=exec_lang)
+                        else:
+                            offset = (page - 1) * 10
+                            rows = cur.execute(
+                                "SELECT n.name, a.balance FROM accounts a JOIN name_index n ON a.uuid=n.uuid WHERE a.currency=? ORDER BY a.balance DESC LIMIT 10 OFFSET ?",
+                                (currency, offset),
+                            ).fetchall()
+                            messages.append(
+                                {
+                                    "target": "chat",
+                                    "text": t(
+                                        "money.top_header",
+                                        lang=exec_lang,
+                                        currency=currency,
+                                        page=page,
+                                    ),
+                                }
+                            )
                         if rows:
                             for idx, r in enumerate(rows, start=offset + 1):
                                 messages.append(
@@ -1108,31 +1131,34 @@ async def message(payload: MessagePayload):
                     if len(cmd) >= 6:
                         src_name = cmd[2].lower()
                         dst_name = cmd[3].lower()
-                        currency, amt = parse_currency_amount(4)
+                        currency, amt_idx, _ = extract_currency(4)
                     elif len(cmd) == 5:
                         if is_currency(cur, cmd[3]):
                             src_name = payload.executor.lower()
                             dst_name = cmd[2].lower()
-                            currency, amt = parse_currency_amount(3)
+                            currency, amt_idx, _ = extract_currency(3)
                         else:
-                            src_name = cmd[2].lower()
-                            dst_name = cmd[3].lower()
-                            currency, amt = parse_currency_amount(4)
+                            src_name = payload.executor.lower()
+                            dst_name = cmd[2].lower()
+                            currency = get_default_currency(cur)
+                            amt_idx = 3
                     else:  # len == 4
                         src_name = payload.executor.lower()
                         dst_name = cmd[2].lower()
-                        currency, amt = parse_currency_amount(3)
+                        currency, amt_idx, _ = extract_currency(3)
                     src_uuid = get_uuid(src_name)
                     dst_uuid = get_uuid(dst_name)
+                    base = get_balance(cur, src_uuid, currency) if src_uuid else None
+                    amt = parse_amount(amt_idx, base)
                     if (
                         amt is None
                         or src_uuid is None
                         or dst_uuid is None
+                        or not is_currency(cur, currency)
                     ):
                         success = False
-                        error_text = t("error.invalid_args", lang=exec_lang)
+                        error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                     else:
-                        ensure_currency(cur, currency)
                         if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
                             success = False
                             error_text = t("error.frozen", lang=exec_lang)
@@ -1188,18 +1214,20 @@ async def message(payload: MessagePayload):
             elif action in {"pay", "transfer"} and len(cmd) >= 4:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
-                currency, amt = parse_currency_amount(3)
+                currency, amt_idx, _ = extract_currency(3)
                 src_uuid = get_uuid(src_name)
                 dst_uuid = get_uuid(dst_name)
+                base = get_balance(cur, src_uuid, currency) if src_uuid else None
+                amt = parse_amount(amt_idx, base)
                 if (
                     amt is None
                     or src_uuid is None
                     or dst_uuid is None
+                    or not is_currency(cur, currency)
                 ):
                     success = False
-                    error_text = t("error.invalid_args", lang=exec_lang)
+                    error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                 else:
-                    ensure_currency(cur, currency)
                     if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
                         success = False
                         error_text = t("error.frozen", lang=exec_lang)
@@ -1253,18 +1281,19 @@ async def message(payload: MessagePayload):
             elif action in {"deposit", "withdraw"} and len(cmd) >= 4:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
-                currency, amt = parse_currency_amount(3)
+                currency, amt_idx, _ = extract_currency(3)
                 src_uuid = get_uuid(src_name)
                 dst_uuid = get_uuid(dst_name)
+                amt = parse_amount(amt_idx)
                 if (
                     amt is None
                     or src_uuid is None
                     or dst_uuid is None
+                    or not is_currency(cur, currency)
                 ):
                     success = False
-                    error_text = t("error.invalid_args", lang=exec_lang)
+                    error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                 else:
-                    ensure_currency(cur, currency)
                     if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
                         success = False
                         error_text = t("error.frozen", lang=exec_lang)
@@ -1279,40 +1308,40 @@ async def message(payload: MessagePayload):
                                 "text": t(
                                     action,
                                     lang=exec_lang,
-                                src=src_name,
-                                dst=dst_name,
-                                amount=format_amount(cur, amt, currency),
-                            ),
-                        })
-                        messages.append(
-                            {
-                                "target": "chat",
-                                "player": dst_uuid,
-                                "text": t(
-                                    "receive",
-                                    lang=get_lang(dst_uuid),
                                     src=src_name,
+                                    dst=dst_name,
                                     amount=format_amount(cur, amt, currency),
                                 ),
-                            }
-                        )
-                        record_transaction(
-                            cur,
-                            payload.timestamp,
-                            src_uuid,
-                            dst_uuid,
-                            currency,
-                            amt,
-                            action,
-                        )
-                        actions.append({
-                            "src": src_uuid,
-                            "dst": dst_uuid,
-                            "currency": currency,
-                            "amount": amt,
-                        })
-                        scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
-                        scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
+                            })
+                            messages.append(
+                                {
+                                    "target": "chat",
+                                    "player": dst_uuid,
+                                    "text": t(
+                                        "receive",
+                                        lang=get_lang(dst_uuid),
+                                        src=src_name,
+                                        amount=format_amount(cur, amt, currency),
+                                    ),
+                                }
+                            )
+                            record_transaction(
+                                cur,
+                                payload.timestamp,
+                                src_uuid,
+                                dst_uuid,
+                                currency,
+                                amt,
+                                action,
+                            )
+                            actions.append({
+                                "src": src_uuid,
+                                "dst": dst_uuid,
+                                "currency": currency,
+                                "amount": amt,
+                            })
+                            scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
+                            scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
             elif action == "balance":
                 target_name = None
                 currency = None
@@ -1324,44 +1353,47 @@ async def message(payload: MessagePayload):
                         currency = resolve_currency(cur, cmd[1])
                     else:
                         target_name = cmd[1].lower()
-                ensure_currency(cur, currency) if currency else None
-                target_uuid = get_uuid(target_name) if target_name else exec_uuid
-                if target_uuid is None:
+                if currency and not is_currency(cur, currency):
                     success = False
-                    error_text = t("error.invalid_args", lang=exec_lang)
+                    error_text = t("error.invalid_currency", lang=exec_lang)
                 else:
-                    if currency:
-                        bal = get_balance(cur, target_uuid, currency)
-                        key = "balance.other_single" if target_uuid != exec_uuid else "balance.single"
-                        messages.append(
-                            {
-                                "target": "chat",
-                                "text": t(
-                                    key,
-                                    lang=exec_lang,
-                                    player=target_name or payload.executor,
-                                    currency=currency,
-                                    amount=format_amount(cur, bal, currency),
-                                ),
-                            }
-                        )
+                    target_uuid = get_uuid(target_name) if target_name else exec_uuid
+                    if target_uuid is None:
+                        success = False
+                        error_text = t("error.invalid_args", lang=exec_lang)
                     else:
-                        bals = list_balances(cur, target_uuid)
-                        if bals:
-                            balances = ", ".join(
-                                f"§e{k}§7={format_amount(cur, v, k)}§a" for k, v in bals.items()
-                            )
-                            key = "balance.other_all" if target_uuid != exec_uuid else "balance.all"
+                        if currency:
+                            bal = get_balance(cur, target_uuid, currency)
+                            key = "balance.other_single" if target_uuid != exec_uuid else "balance.single"
                             messages.append(
                                 {
                                     "target": "chat",
-                                    "text": t(key, lang=exec_lang, player=target_name or payload.executor, balances=balances),
+                                    "text": t(
+                                        key,
+                                        lang=exec_lang,
+                                        player=target_name or payload.executor,
+                                        currency=currency,
+                                        amount=format_amount(cur, bal, currency),
+                                    ),
                                 }
                             )
                         else:
-                            key = "balance.other_empty" if target_uuid != exec_uuid else "balance.empty"
-                            messages.append({"target": "chat", "text": t(key, lang=exec_lang, player=target_name or payload.executor)})
-                    scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
+                            bals = list_balances(cur, target_uuid)
+                            if bals:
+                                balances = ", ".join(
+                                    f"§e{k}§7={format_amount(cur, v, k)}§a" for k, v in bals.items()
+                                )
+                                key = "balance.other_all" if target_uuid != exec_uuid else "balance.all"
+                                messages.append(
+                                    {
+                                        "target": "chat",
+                                        "text": t(key, lang=exec_lang, player=target_name or payload.executor, balances=balances),
+                                    }
+                                )
+                            else:
+                                key = "balance.other_empty" if target_uuid != exec_uuid else "balance.empty"
+                                messages.append({"target": "chat", "text": t(key, lang=exec_lang, player=target_name or payload.executor)})
+                        scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
             elif action == "account" and len(cmd) >= 3 and cmd[1].lower() == "create":
                 name = cmd[2].lower()
                 cur.execute("INSERT OR IGNORE INTO system_accounts(uuid) VALUES (?)", (name,))
@@ -1376,7 +1408,8 @@ async def message(payload: MessagePayload):
                     last = stack.pop()
                     redo_stack[exec_uuid] = last
                     for act in reversed(last):
-                        ensure_currency(cur, act["currency"])
+                        if not is_currency(cur, act["currency"]):
+                            continue
                         src, dst, curcode, amt = act["src"], act["dst"], act["currency"], act["amount"]
                         if src and dst:
                             transfer(cur, dst, src, curcode, amt)
@@ -1397,7 +1430,8 @@ async def message(payload: MessagePayload):
                 last = redo_stack.get(exec_uuid)
                 if last:
                     for act in last:
-                        ensure_currency(cur, act["currency"])
+                        if not is_currency(cur, act["currency"]):
+                            continue
                         src, dst, curcode, amt = act["src"], act["dst"], act["currency"], act["amount"]
                         if src and dst:
                             transfer(cur, src, dst, curcode, amt)
@@ -1418,18 +1452,18 @@ async def message(payload: MessagePayload):
                     error_text = t("redo.none", lang=exec_lang)
             elif action == "setbalance" and len(cmd) >= 3:
                 target_name = cmd[1].lower()
-                if len(cmd) >= 4 and is_currency(cur, cmd[2]):
-                    currency = resolve_currency(cur, cmd[2])
-                    amt = parse_amount_any(3)
-                else:
-                    currency = get_default_currency(cur)
-                    amt = parse_amount_any(2)
+                currency, amt_idx, _ = extract_currency(2)
                 target_uuid = get_uuid(target_name)
-                if amt is None or target_uuid is None:
+                base = get_balance(cur, target_uuid, currency) if target_uuid else None
+                amt = parse_amount_any(amt_idx, base)
+                if (
+                    amt is None
+                    or target_uuid is None
+                    or not is_currency(cur, currency)
+                ):
                     success = False
-                    error_text = t("error.invalid_args", lang=exec_lang)
+                    error_text = t("error.invalid_args", lang=exec_lang) if amt is None or target_uuid is None else t("error.invalid_currency", lang=exec_lang)
                 else:
-                    ensure_currency(cur, currency)
                     old = get_balance(cur, target_uuid, currency)
                     set_balance(cur, target_uuid, currency, amt)
                     delta = amt - old
@@ -1529,8 +1563,8 @@ async def message(payload: MessagePayload):
 async def sync(payload: DeltaPayload):
     with transaction() as cur:
         for k, v in payload.delta.items():
-            ensure_currency(cur, k)
-            add_balance(cur, payload.player, k, v)
+            if is_currency(cur, k):
+                add_balance(cur, payload.player, k, v)
         cur.execute(
             "INSERT OR REPLACE INTO players(uuid, last_seen) VALUES (?, ?)",
             (payload.player, payload.timestamp),
@@ -1543,8 +1577,8 @@ async def rewrite(payload: RewritePayload):
     msgs = []
     with transaction() as cur:
         for k, v in payload.scoreboard.items():
-            ensure_currency(cur, k)
-            set_balance(cur, payload.player, k, v)
+            if is_currency(cur, k):
+                set_balance(cur, payload.player, k, v)
         cur.execute(
             "INSERT OR REPLACE INTO players(uuid, last_seen) VALUES (?, ?)",
             (payload.player, payload.timestamp),
@@ -2073,19 +2107,22 @@ async def shop_set_price(payload: ShopSetPricePayload):
                 result = "error"
                 reason = "item_not_found"
             else:
-                ensure_currency(cur, payload.currency)
-                ts = int(time.time())
-                cur.execute(
-                    """
-                    INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
-                    ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
-                    """,
-                    (payload.shop_id, item_key, payload.currency, payload.price),
-                )
-                cur.execute(
-                    "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-                    (ts, payload.shop_id),
-                )
+                if not is_currency(cur, payload.currency):
+                    result = "error"
+                    reason = "invalid_currency"
+                else:
+                    ts = int(time.time())
+                    cur.execute(
+                        """
+                        INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
+                        ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
+                        """,
+                        (payload.shop_id, item_key, payload.currency, payload.price),
+                    )
+                    cur.execute(
+                        "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                        (ts, payload.shop_id),
+                    )
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_set_price",
