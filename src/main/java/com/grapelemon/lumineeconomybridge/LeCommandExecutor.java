@@ -75,6 +75,10 @@ public class LeCommandExecutor implements CommandExecutor {
                     return true;
                 }
                 case "shop" -> {
+                    if (!plugin.isActive() || plugin.getHttpClient() == null) {
+                        p.sendMessage(Lang.get("error-unavailable"));
+                        return true;
+                    }
                     if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
                         String shopId = args[2];
                         ItemStack barrel = new ItemStack(Material.BARREL);
@@ -130,7 +134,11 @@ public class LeCommandExecutor implements CommandExecutor {
                                         if ("success".equals(res.get("status").getAsString())) {
                                             hand.setAmount(hand.getAmount() - qty);
                                             p.getInventory().setItemInMainHand(hand.getAmount() > 0 ? hand : null);
-                                            p.sendMessage("Stock added");
+                                            if (res.has("item_key")) {
+                                                p.sendMessage("Stock added: " + res.get("item_key").getAsString());
+                                            } else {
+                                                p.sendMessage("Stock added");
+                                            }
                                         } else {
                                             p.sendMessage("Failed: " + res.get("reason").getAsString());
                                         }
@@ -162,13 +170,15 @@ public class LeCommandExecutor implements CommandExecutor {
                                     String body = response.body() != null ? response.body().string() : "{}";
                                     JsonObject res = JsonParser.parseString(body).getAsJsonObject();
                                     Bukkit.getScheduler().runTask(plugin, () -> {
-                                        if (res.has("grant")) {
-                                            res.getAsJsonArray("grant").forEach(g -> {
-                                                JsonObject gg = g.getAsJsonObject();
-                                                ItemStack item = itemFromBase64(gg.get("nbt_blob").getAsString());
-                                                item.setAmount(gg.get("qty").getAsInt());
-                                                p.getInventory().addItem(item);
-                                            });
+                                        if ("success".equals(res.get("status").getAsString())) {
+                                            if (res.has("grant")) {
+                                                res.getAsJsonArray("grant").forEach(g -> {
+                                                    JsonObject gg = g.getAsJsonObject();
+                                                    ItemStack item = itemFromBase64(gg.get("nbt_blob").getAsString());
+                                                    item.setAmount(gg.get("qty").getAsInt());
+                                                    p.getInventory().addItem(item);
+                                                });
+                                            }
                                             p.sendMessage("Stock taken");
                                         } else {
                                             p.sendMessage("Failed: " + res.get("reason").getAsString());
