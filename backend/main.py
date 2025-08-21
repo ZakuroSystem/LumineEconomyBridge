@@ -129,6 +129,15 @@ with conn:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS account_links (
+            user_uuid TEXT NOT NULL,
+            system_uuid TEXT NOT NULL,
+            PRIMARY KEY(user_uuid, system_uuid)
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS player_lang (
             uuid TEXT PRIMARY KEY,
             lang TEXT NOT NULL
@@ -589,6 +598,16 @@ def get_name(uuid: str) -> Optional[str]:
         return row["name"] if row else None
 
 
+def has_link(cur: sqlite3.Cursor, user_uuid: str, system_uuid: str) -> bool:
+    return (
+        cur.execute(
+            "SELECT 1 FROM account_links WHERE user_uuid=? AND system_uuid=?",
+            (user_uuid, system_uuid),
+        ).fetchone()
+        is not None
+    )
+
+
 def is_shop_owner(cur: sqlite3.Cursor, shop_id: str, uuid: str) -> bool:
     if cur.execute(
         "SELECT 1 FROM shop_owners WHERE shop_id=? AND owner_uuid=?",
@@ -972,6 +991,12 @@ async def message(payload: MessagePayload):
             )
 
             exec_uuid = payload.player
+            is_exec_admin = (
+                cur.execute(
+                    "SELECT 1 FROM admin_users WHERE name=?", (payload.executor.lower(),)
+                ).fetchone()
+                is not None
+            )
             actions: List[Dict[str, Optional[str]]] = []
 
             if not cmd:
@@ -1177,6 +1202,156 @@ async def message(payload: MessagePayload):
                         currency, amt_idx, _ = extract_currency(3)
                     src_uuid = get_uuid(src_name)
                     dst_uuid = get_uuid(dst_name)
+                    if (
+                        not is_exec_admin
+                        and src_uuid != exec_uuid
+                        and not has_link(cur, exec_uuid, src_uuid)
+                    ):
+                        success = False
+                        error_text = t("error.no_permission", lang=exec_lang)
+                    else:
+                        base = get_balance(cur, src_uuid, currency) if src_uuid else None
+                        amt = parse_amount(amt_idx, base)
+                        if (
+                            amt is None
+                            or src_uuid is None
+                            or dst_uuid is None
+                            or not is_currency(cur, currency)
+                        ):
+                            success = False
+                            error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
+                        else:
+                            if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
+                                success = False
+                                error_text = t("error.frozen", lang=exec_lang)
+                            elif get_balance(cur, src_uuid, currency) < amt:
+                                success = False
+                                error_text = t("error.insufficient", lang=exec_lang)
+                            elif not transfer(cur, src_uuid, dst_uuid, currency, amt):
+                                success = False
+                                error_text = t("error.pay_failed", lang=exec_lang)
+                            else:
+                                messages.append({
+                                    "target": "chat",
+                                    "text": t(
+                                        "money.pay",
+                                        lang=exec_lang,
+                                        src=src_name,
+                                        dst=dst_name,
+                                        amount=format_amount(cur, amt, currency),
+                                    ),
+                                })
+                                messages.append(
+                                    {
+                                        "target": "chat",
+                                        "player": dst_uuid,
+                                        "text": t(
+                                            "receive",
+                                            lang=get_lang(dst_uuid),
+                                            src=src_name,
+                                            amount=format_amount(cur, amt, currency),
+                                        ),
+                                    }
+                                )
+                                record_transaction(
+                                    cur,
+                                    payload.timestamp,
+                                    src_uuid,
+                                    dst_uuid,
+                                    currency,
+                                    amt,
+                                    "pay",
+                                )
+                                actions.append({
+                                    "src": src_uuid,
+                                    "dst": dst_uuid,
+                                    "currency": currency,
+                                    "amount": amt,
+                                })
+                                scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
+                                scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
+                else:
+                    success = False
+                    error_text = t("error.invalid_args", lang=exec_lang)
+            elif action == "pay" and len(cmd) >= 3 and parse_amount_token(cmd[2], None) is not None:
+                dst_name = cmd[1].lower()
+                currency = resolve_currency(cur, cmd[3]) if len(cmd) >= 4 else get_default_currency(cur)
+                src_uuid = exec_uuid
+                dst_uuid = get_uuid(dst_name)
+                base = get_balance(cur, src_uuid, currency)
+                amt = parse_amount_token(cmd[2], base)
+                if (
+                    amt is None
+                    or dst_uuid is None
+                    or not is_currency(cur, currency)
+                ):
+                    success = False
+                    error_text = t("error.invalid_args", lang=exec_lang) if amt is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
+                else:
+                    if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
+                        success = False
+                        error_text = t("error.frozen", lang=exec_lang)
+                    elif get_balance(cur, src_uuid, currency) < amt:
+                        success = False
+                        error_text = t("error.insufficient", lang=exec_lang)
+                    elif not transfer(cur, src_uuid, dst_uuid, currency, amt):
+                        success = False
+                        error_text = t("error.pay_failed", lang=exec_lang)
+                    else:
+                        messages.append({
+                            "target": "chat",
+                            "text": t(
+                                "money.pay",
+                                lang=exec_lang,
+                                src=payload.executor.lower(),
+                                dst=dst_name,
+                                amount=format_amount(cur, amt, currency),
+                            ),
+                        })
+                        messages.append(
+                            {
+                                "target": "chat",
+                                "player": dst_uuid,
+                                "text": t(
+                                    "receive",
+                                    lang=get_lang(dst_uuid),
+                                    src=payload.executor.lower(),
+                                    amount=format_amount(cur, amt, currency),
+                                ),
+                            }
+                        )
+                        record_transaction(
+                            cur,
+                            payload.timestamp,
+                            src_uuid,
+                            dst_uuid,
+                            currency,
+                            amt,
+                            "pay",
+                        )
+                        actions.append({
+                            "src": src_uuid,
+                            "dst": dst_uuid,
+                            "currency": currency,
+                            "amount": amt,
+                        })
+                        scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
+                        scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
+            elif action in {"pay", "transfer"} and len(cmd) >= 4:
+                src_name = cmd[1].lower()
+                dst_name = cmd[2].lower()
+                currency, amt_idx, _ = extract_currency(3)
+                src_uuid = get_uuid(src_name)
+                dst_uuid = get_uuid(dst_name)
+                if (
+                    not is_exec_admin
+                    and src_uuid is not None
+                    and src_uuid != exec_uuid
+                    and not has_link(cur, exec_uuid, src_uuid)
+                ):
+                    success = False
+                    error_text = t("error.no_permission", lang=exec_lang)
+                else:
                     base = get_balance(cur, src_uuid, currency) if src_uuid else None
                     amt = parse_amount(amt_idx, base)
                     if (
@@ -1198,10 +1373,11 @@ async def message(payload: MessagePayload):
                             success = False
                             error_text = t("error.pay_failed", lang=exec_lang)
                         else:
+                            msg_key = "money.pay" if action == "pay" else "transfer"
                             messages.append({
                                 "target": "chat",
                                 "text": t(
-                                    "money.pay",
+                                    msg_key,
                                     lang=exec_lang,
                                     src=src_name,
                                     dst=dst_name,
@@ -1227,7 +1403,7 @@ async def message(payload: MessagePayload):
                                 dst_uuid,
                                 currency,
                                 amt,
-                                "pay",
+                                action if action == "pay" else "transfer",
                             )
                             actions.append({
                                 "src": src_uuid,
@@ -1237,140 +1413,79 @@ async def message(payload: MessagePayload):
                             })
                             scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
                             scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
-                else:
-                    success = False
-                    error_text = t("error.invalid_args", lang=exec_lang)
-            elif action in {"pay", "transfer"} and len(cmd) >= 4:
-                src_name = cmd[1].lower()
-                dst_name = cmd[2].lower()
-                currency, amt_idx, _ = extract_currency(3)
-                src_uuid = get_uuid(src_name)
-                dst_uuid = get_uuid(dst_name)
-                base = get_balance(cur, src_uuid, currency) if src_uuid else None
-                amt = parse_amount(amt_idx, base)
-                if (
-                    amt is None
-                    or src_uuid is None
-                    or dst_uuid is None
-                    or not is_currency(cur, currency)
-                ):
-                    success = False
-                    error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
-                else:
-                    if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
-                        success = False
-                        error_text = t("error.frozen", lang=exec_lang)
-                    elif get_balance(cur, src_uuid, currency) < amt:
-                        success = False
-                        error_text = t("error.insufficient", lang=exec_lang)
-                    elif not transfer(cur, src_uuid, dst_uuid, currency, amt):
-                        success = False
-                        error_text = t("error.pay_failed", lang=exec_lang)
-                    else:
-                        msg_key = "money.pay" if action == "pay" else "transfer"
-                        messages.append({
-                            "target": "chat",
-                            "text": t(
-                                msg_key,
-                                lang=exec_lang,
-                                src=src_name,
-                                dst=dst_name,
-                                amount=format_amount(cur, amt, currency),
-                            ),
-                        })
-                        messages.append(
-                            {
-                                "target": "chat",
-                                "player": dst_uuid,
-                                "text": t(
-                                    "receive",
-                                    lang=get_lang(dst_uuid),
-                                    src=src_name,
-                                    amount=format_amount(cur, amt, currency),
-                                ),
-                            }
-                        )
-                        record_transaction(
-                            cur,
-                            payload.timestamp,
-                            src_uuid,
-                            dst_uuid,
-                            currency,
-                            amt,
-                            action if action == "pay" else "transfer",
-                        )
-                        actions.append({
-                            "src": src_uuid,
-                            "dst": dst_uuid,
-                            "currency": currency,
-                            "amount": amt,
-                        })
-                        scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
-                        scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
             elif action in {"deposit", "withdraw"} and len(cmd) >= 4:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
                 currency, amt_idx, _ = extract_currency(3)
                 src_uuid = get_uuid(src_name)
                 dst_uuid = get_uuid(dst_name)
-                amt = parse_amount(amt_idx)
                 if (
-                    amt is None
-                    or src_uuid is None
-                    or dst_uuid is None
-                    or not is_currency(cur, currency)
+                    not is_exec_admin
+                    and src_uuid is not None
+                    and src_uuid != exec_uuid
+                    and not has_link(cur, exec_uuid, src_uuid)
                 ):
                     success = False
-                    error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
+                    error_text = t("error.no_permission", lang=exec_lang)
                 else:
-                    if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
+                    amt = parse_amount(amt_idx)
+                    if (
+                        amt is None
+                        or src_uuid is None
+                        or dst_uuid is None
+                        or not is_currency(cur, currency)
+                    ):
                         success = False
-                        error_text = t("error.frozen", lang=exec_lang)
+                        error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                     else:
-                        ok = transfer(cur, src_uuid, dst_uuid, currency, amt)
-                        if not ok:
+                        if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
                             success = False
-                            error_text = t("error.insufficient", lang=exec_lang)
+                            error_text = t("error.frozen", lang=exec_lang)
                         else:
-                            messages.append({
-                                "target": "chat",
-                                "text": t(
-                                    action,
-                                    lang=exec_lang,
-                                    src=src_name,
-                                    dst=dst_name,
-                                    amount=format_amount(cur, amt, currency),
-                                ),
-                            })
-                            messages.append(
-                                {
+                            ok = transfer(cur, src_uuid, dst_uuid, currency, amt)
+                            if not ok:
+                                success = False
+                                error_text = t("error.insufficient", lang=exec_lang)
+                            else:
+                                messages.append({
                                     "target": "chat",
-                                    "player": dst_uuid,
                                     "text": t(
-                                        "receive",
-                                        lang=get_lang(dst_uuid),
+                                        action,
+                                        lang=exec_lang,
                                         src=src_name,
+                                        dst=dst_name,
                                         amount=format_amount(cur, amt, currency),
                                     ),
-                                }
-                            )
-                            record_transaction(
-                                cur,
-                                payload.timestamp,
-                                src_uuid,
-                                dst_uuid,
-                                currency,
-                                amt,
-                                action,
-                            )
-                            actions.append({
-                                "src": src_uuid,
-                                "dst": dst_uuid,
-                                "currency": currency,
-                                "amount": amt,
-                            })
-                            scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
-                            scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
+                                })
+                                messages.append(
+                                    {
+                                        "target": "chat",
+                                        "player": dst_uuid,
+                                        "text": t(
+                                            "receive",
+                                            lang=get_lang(dst_uuid),
+                                            src=src_name,
+                                            amount=format_amount(cur, amt, currency),
+                                        ),
+                                    }
+                                )
+                                record_transaction(
+                                    cur,
+                                    payload.timestamp,
+                                    src_uuid,
+                                    dst_uuid,
+                                    currency,
+                                    amt,
+                                    action,
+                                )
+                                actions.append({
+                                    "src": src_uuid,
+                                    "dst": dst_uuid,
+                                    "currency": currency,
+                                    "amount": amt,
+                                })
+                                scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
+                                scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
             elif action == "balance":
                 target_name = None
                 currency = None
@@ -1423,6 +1538,37 @@ async def message(payload: MessagePayload):
                                 key = "balance.other_empty" if target_uuid != exec_uuid else "balance.empty"
                                 messages.append({"target": "chat", "text": t(key, lang=exec_lang, player=target_name or payload.executor)})
                         scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
+            elif action == "account" and len(cmd) >= 4 and cmd[1].lower() == "connect":
+                user_name = cmd[2].lower()
+                sys_name = cmd[3].lower()
+                user_uuid = get_uuid(user_name)
+                sys_uuid = get_uuid(sys_name)
+                if (
+                    user_uuid is None
+                    or sys_uuid is None
+                    or cur.execute(
+                        "SELECT 1 FROM system_accounts WHERE uuid=?", (sys_uuid,)
+                    ).fetchone()
+                    is None
+                ):
+                    success = False
+                    error_text = t("error.invalid_args", lang=exec_lang)
+                else:
+                    cur.execute(
+                        "INSERT OR REPLACE INTO account_links(user_uuid, system_uuid) VALUES (?,?)",
+                        (user_uuid, sys_uuid),
+                    )
+                    messages.append(
+                        {
+                            "target": "chat",
+                            "text": t(
+                                "account.connected",
+                                lang=exec_lang,
+                                user=user_name,
+                                system=sys_name,
+                            ),
+                        }
+                    )
             elif action == "account" and len(cmd) >= 3 and cmd[1].lower() == "create":
                 name = cmd[2].lower()
                 cur.execute("INSERT OR IGNORE INTO system_accounts(uuid) VALUES (?)", (name,))

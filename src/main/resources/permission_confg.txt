@@ -3,3 +3,7 @@
 search=user
 shop=user
 lang=user
+pay=user
+deposit=user
+withdraw=user
+transfer=user

@@ -1,5 +1,29 @@
 {% extends 'base.html' %}
 {% block content %}
+<h2>My Accounts</h2>
+{% if systems %}
+  {% for a in systems %}
+    <h4>{{ a.name }}</h4>
+    <table class="table">
+      <thead><tr><th>Currency</th><th>Balance</th></tr></thead>
+      <tbody>
+      {% for b in a.balances %}
+        <tr><td>{{ b['currency'] }}</td><td>{{ b['balance'] }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <form method="post" action="{{ url_for('portal_pay') }}" class="row g-2 mb-4">
+      <input type="hidden" name="src" value="{{ a.uuid }}">
+      <div class="col-md-3"><input name="dst" class="form-control" placeholder="recipient"></div>
+      <div class="col-md-3"><input name="amount" class="form-control" placeholder="amount"></div>
+      <div class="col-md-3"><input name="currency" class="form-control" placeholder="currency"></div>
+      <div class="col-md-3"><button class="btn btn-primary w-100" type="submit">Pay</button></div>
+    </form>
+  {% endfor %}
+{% else %}
+  <p>No linked system accounts.</p>
+{% endif %}
+
 <h2>My Shops</h2>
 <table class="table table-striped datatable">
   <thead>

@@ -45,6 +45,7 @@ en:
       - "§e/le money give <player> [currency] <amount>§r"
       - "§e/le money take <player> [currency] <amount>§r"
       - "§e/le money pay [src] <dst> [currency] <amount>§r"
+      - "§e/le pay <dst> <amount> [currency]§r"
       - "§e/le money top [currency] [page]§r"
       - "§e/le deposit <src> <dst> [currency] <amount>§r"
       - "§e/le withdraw <src> <dst> [currency] <amount>§r"
@@ -71,12 +72,15 @@ en:
     unknown_command: "§cUnknown command.§r"
     frozen: "§cAccount is frozen.§r"
     invalid_currency: "§cUnknown currency.§r"
+    no_permission: "§cNo permission.§r"
   lang:
     set: "§aEconomy language set to §e{code}§a.§r"
     invalid: "§cInvalid language.§r"
     switch_hint: "§eType /le lang jp to switch the economy language to Japanese.§r"
   web:
     token: "§aUse this token on the website: §e{token}§r"
+  account:
+    connected: "§aLinked system account §e{system}§a to §e{user}§a.§r"
 jp:
   currency:
     create: "§a通貨 §e{currency}§a を作成しました。§r"
@@ -124,6 +128,7 @@ jp:
       - "§e/le money give <player> [currency] <amount>§r"
       - "§e/le money take <player> [currency] <amount>§r"
       - "§e/le money pay [src] <dst> [currency] <amount>§r"
+      - "§e/le pay <dst> <amount> [currency]§r"
       - "§e/le money top [currency] [page]§r"
       - "§e/le deposit <src> <dst> [currency] <amount>§r"
       - "§e/le withdraw <src> <dst> [currency] <amount>§r"
@@ -150,9 +155,12 @@ jp:
     unknown_command: "§c不明なコマンドです。§r"
     frozen: "§cアカウントは凍結されています。§r"
     invalid_currency: "§c存在しない通貨です。§r"
+    no_permission: "§c権限がありません。§r"
   lang:
     set: "§a経済システムの言語を §e{code}§a に設定しました。§r"
     invalid: "§c無効な言語です。§r"
     switch_hint: "§e経済システムの表示言語を日本語に変更するには /le lang jp と入力してください。§r"
   web:
     token: "§a以下のトークンをWebサイトで使用してください: §e{token}§r"
+  account:
+    connected: "§aシステムアカウント §e{system}§a を §e{user}§a に紐づけました。§r"

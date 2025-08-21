@@ -94,6 +94,11 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS admin_users (
                 name TEXT PRIMARY KEY
             );
+            CREATE TABLE IF NOT EXISTS account_links (
+                user_uuid TEXT NOT NULL,
+                system_uuid TEXT NOT NULL,
+                PRIMARY KEY(user_uuid, system_uuid)
+            );
             """
         )
         try:
@@ -856,6 +861,21 @@ def portal_index():
             """,
             (g.user["uuid"],),
         ).fetchall()
+        sys_rows = db.execute(
+            """
+            SELECT l.system_uuid AS uuid, COALESCE(n.name, l.system_uuid) AS name
+            FROM account_links l LEFT JOIN name_index n ON n.uuid=l.system_uuid
+            WHERE l.user_uuid=?
+            """,
+            (g.user["uuid"],),
+        ).fetchall()
+        systems = []
+        for r in sys_rows:
+            bals = db.execute(
+                "SELECT currency, balance FROM accounts WHERE uuid=?",
+                (r["uuid"],),
+            ).fetchall()
+            systems.append({"uuid": r["uuid"], "name": r["name"], "balances": bals})
     stats = {r["shop_id"]: r for r in stats_rows}
     shops = []
     for r in rows:
@@ -864,7 +884,44 @@ def portal_index():
         info["sales"] = s["cnt"]
         info["revenue"] = s["total"]
         shops.append(info)
-    return render_template("my_shops.html", shops=shops)
+    return render_template("my_shops.html", shops=shops, systems=systems, user=g.user)
+
+
+@app.route("/portal/pay", methods=["POST"])
+@login_required
+def portal_pay():
+    if not g.user["uuid"]:
+        flash("Link your account first")
+        return redirect(url_for("portal_index"))
+    src = request.form.get("src", g.user["uuid"]).strip()
+    dst = request.form.get("dst", "").strip().lower()
+    amount = request.form.get("amount", "").strip()
+    currency = request.form.get("currency", "").strip()
+    if not dst or not amount:
+        flash("Missing fields")
+        return redirect(url_for("portal_index"))
+    with get_db() as db:
+        if src != g.user["uuid"]:
+            row = db.execute(
+                "SELECT 1 FROM account_links WHERE user_uuid=? AND system_uuid=?",
+                (g.user["uuid"], src),
+            ).fetchone()
+            if row is None:
+                flash("Access denied")
+                return redirect(url_for("portal_index"))
+    cmd = f"pay {src} {dst} {currency} {amount}" if src != g.user["uuid"] else f"pay {dst} {amount} {currency}".strip()
+    payload = {
+        "player": g.user["uuid"],
+        "executor": g.user["username"],
+        "command": cmd.strip(),
+        "timestamp": int(time.time()),
+        "location": {"world": "world", "x": 0, "y": 0, "z": 0},
+    }
+    try:
+        requests.post("http://127.0.0.1:5100/api/message", json=payload, timeout=5)
+    except Exception as e:
+        flash(str(e))
+    return redirect(url_for("portal_index"))
 
 
 @app.route("/portal/<shop_id>", methods=["GET", "POST"])

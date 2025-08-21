@@ -92,7 +92,7 @@ public class LeTabCompleter implements TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-              return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo", "help", "lang", "backup", "restore", "weblink", "shop")
+              return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo", "help", "lang", "backup", "restore", "weblink", "shop", "pay")
                       .filter(s -> s.startsWith(args[0].toLowerCase()))
                       .toList();
         }
@@ -112,7 +112,7 @@ public class LeTabCompleter implements TabCompleter {
                         .toList();
             }
             if (first.equals("account")) {
-                return Stream.of("create")
+                return Stream.of("create", "connect")
                         .filter(s -> s.startsWith(args[1].toLowerCase()))
                         .toList();
             }
@@ -120,6 +120,14 @@ public class LeTabCompleter implements TabCompleter {
                 return Stream.of("give", "take", "pay", "top")
                         .filter(s -> s.startsWith(args[1].toLowerCase()))
                         .toList();
+            }
+            if (first.equals("pay")) {
+                List<String> names = new ArrayList<>();
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    names.add(p.getName());
+                }
+                names.removeIf(n -> !n.toLowerCase().startsWith(args[1].toLowerCase()));
+                return names;
             }
             if (first.equals("shop")) {
                 return Stream.of("create", "add", "take", "price", "remove", "partner", "reopen", "help")
