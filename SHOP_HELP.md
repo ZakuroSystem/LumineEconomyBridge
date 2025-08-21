@@ -9,3 +9,5 @@
 §a/le shop reopen §e<id> §7- Reopen suspended shop / 再開
 §a/le shop partner add §e<id> <player> §7- Add co-owner / 共同オーナー追加
 §a/le shop partner remove §e<id> <player> §7- Remove co-owner / 共同オーナー削除
+§a/le search §e<item> [currency] [min] [max] §7- Search shops / 検索
+§a/le admin add §e<player> §7- Add dashboard admin / 管理者追加

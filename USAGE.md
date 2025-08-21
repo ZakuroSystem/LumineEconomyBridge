@@ -21,8 +21,10 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le account create <id>` – Create a system account.
 - `/le backup` / `/le restore <file>` – Backup or restore the database.
 - `/le undo` / `/le redo` – Undo or redo recent operations.
- - `/le help` – Show in‑game help.
- - `/le weblink` – Generate a token to link your account with the web dashboard.
+- `/le help` – Show in‑game help.
+- `/le weblink` – Generate a token to link your account with the web dashboard.
+- `/le search <item> [currency] [min] [max]` – Search public shops for an item.
+- `/le admin add <player>` – Grant a player access to the admin dashboard.
 
 ## Notes
 - All command validation and economy processing happen on the Python backend.

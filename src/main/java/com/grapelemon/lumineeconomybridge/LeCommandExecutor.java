@@ -76,6 +76,90 @@ public class LeCommandExecutor implements CommandExecutor {
                     p.sendMessage(Lang.get("bridge-reloaded"));
                     return true;
                 }
+                case "admin" -> {
+                    if (!plugin.isActive() || plugin.getHttpClient() == null) {
+                        p.sendMessage(Lang.get("error-unavailable"));
+                        return true;
+                    }
+                    if (args.length >= 3 && args[1].equalsIgnoreCase("add")) {
+                        String target = args[2];
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("name", target);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/admin/add")
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Add admin failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (response.isSuccessful()) {
+                                            p.sendMessage(ChatColor.GREEN + "Admin added" + ChatColor.RESET);
+                                        } else {
+                                            p.sendMessage(ChatColor.RED + "Failed" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else {
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le admin add <player>" + ChatColor.RESET);
+                    }
+                    return true;
+                }
+                case "search" -> {
+                    if (!plugin.isActive() || plugin.getHttpClient() == null) {
+                        p.sendMessage(Lang.get("error-unavailable"));
+                        return true;
+                    }
+                    if (args.length >= 2) {
+                        String item = args[1];
+                        HttpUrl.Builder url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shops/search").newBuilder();
+                        url.addQueryParameter("item", item);
+                        if (args.length >= 3) url.addQueryParameter("currency", args[2]);
+                        if (args.length >= 4) url.addQueryParameter("min_price", args[3]);
+                        if (args.length >= 5) url.addQueryParameter("max_price", args[4]);
+                        Request req = new Request.Builder().url(url.build()).get().build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Search failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "[]";
+                                    var arr = JsonParser.parseString(body).getAsJsonArray();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (arr.size() == 0) {
+                                            p.sendMessage(ChatColor.YELLOW + "No results / 該当なし" + ChatColor.RESET);
+                                        } else {
+                                            int limit = Math.min(10, arr.size());
+                                            for (int i = 0; i < limit; i++) {
+                                                JsonObject r = arr.get(i).getAsJsonObject();
+                                                String msg = ChatColor.GREEN + r.get("item").getAsString() + ChatColor.WHITE +
+                                                        " @ " + ChatColor.YELLOW + r.get("price").getAsInt() + " " +
+                                                        r.get("currency").getAsString() + ChatColor.WHITE + " - " +
+                                                        ChatColor.AQUA + r.get("shop_id").getAsString() + ChatColor.WHITE +
+                                                        " (" + r.get("world").getAsString() + " " + r.get("x").getAsInt() +
+                                                        "," + r.get("y").getAsInt() + "," + r.get("z").getAsInt() + ")";
+                                                p.sendMessage(msg);
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else {
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le search <item> [currency] [min] [max]" + ChatColor.RESET);
+                    }
+                    return true;
+                }
                 case "shop" -> {
                     if (!plugin.isActive() || plugin.getHttpClient() == null) {
                         p.sendMessage(Lang.get("error-unavailable"));

@@ -672,7 +672,9 @@ def queue_message(cur: sqlite3.Cursor, msg: Dict[str, str]) -> None:
 LOG_PATH = "economy_commands.log"
 
 
-COLOR_CODE_PATTERN = re.compile(r"[&§][0-9A-FK-ORa-fk-or]")
+# Strip only ampersand-based color codes; preserve the '§' symbol for
+# downstream formatting where desired
+COLOR_CODE_PATTERN = re.compile(r"&[0-9A-FK-ORa-fk-or]")
 
 
 def sanitize_text(text: str) -> str:
