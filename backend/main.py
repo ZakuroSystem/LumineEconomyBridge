@@ -124,6 +124,14 @@ with conn:
 
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS admin_users (
+            name TEXT PRIMARY KEY
+        )
+        """
+    )
+
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS shops (
             shop_id TEXT PRIMARY KEY,
             owner_uuid TEXT NOT NULL,
@@ -371,6 +379,10 @@ class ShopReopenPayload(BaseModel):
 class ShopRemovePayload(BaseModel):
     shop_id: str
     refund: bool = False
+
+
+class AdminUserPayload(BaseModel):
+    name: str
 
 
 def ensure_currency(cur: sqlite3.Cursor, currency: str, symbol: Optional[str] = None) -> None:
@@ -626,6 +638,28 @@ def push_undo(executor: str, actions: List[Dict[str, Optional[str]]]) -> None:
     if len(stack) > 5:
         stack.pop(0)
     redo_stack[executor] = None
+
+
+@app.get("/api/admin/list")
+async def get_admin_list():
+    rows = conn.execute("SELECT name FROM admin_users").fetchall()
+    return {"admins": [r["name"] for r in rows]}
+
+
+@app.post("/api/admin/add")
+async def add_admin(payload: AdminUserPayload):
+    with conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO admin_users(name) VALUES(?)", (payload.name,)
+        )
+    return {"status": "success"}
+
+
+@app.post("/api/admin/remove")
+async def remove_admin(payload: AdminUserPayload):
+    with conn:
+        conn.execute("DELETE FROM admin_users WHERE name=?", (payload.name,))
+    return {"status": "success"}
 
 
 @app.get("/api/config")

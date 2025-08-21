@@ -81,6 +81,9 @@ def init_db() -> None:
                 uuid TEXT NOT NULL,
                 expires INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS admin_users (
+                name TEXT PRIMARY KEY
+            );
             """
         )
         try:
@@ -115,10 +118,31 @@ def load_user():
     username = session.get("user")
     if username:
         with get_db() as db:
-            g.user = db.execute(
+            row = db.execute(
                 "SELECT username, uuid, is_admin FROM users WHERE username=?",
                 (username,),
             ).fetchone()
+            if row:
+                is_admin = bool(row["is_admin"])
+                if not is_admin:
+                    is_admin = (
+                        db.execute(
+                            "SELECT 1 FROM admin_users WHERE name=?",
+                            (row["username"],),
+                        ).fetchone()
+                        is not None
+                    )
+                g.user = {
+                    "username": row["username"],
+                    "uuid": row["uuid"],
+                    "is_admin": is_admin,
+                }
+                if is_admin:
+                    session.setdefault("admin_mode", True)
+                else:
+                    session.pop("admin_mode", None)
+            else:
+                g.user = None
     else:
         g.user = None
 
@@ -136,7 +160,7 @@ def login_required(view):
 def admin_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
-        if g.user is None or not g.user["is_admin"]:
+        if g.user is None or not g.user["is_admin"] or not session.get("admin_mode", False):
             flash("Admin login required")
             return redirect(url_for("index") if g.user else url_for("login"))
         return view(*args, **kwargs)
@@ -146,7 +170,7 @@ def admin_required(view):
 
 @app.context_processor
 def inject_user():
-    return {"user": g.user}
+    return {"user": g.user, "admin_mode": session.get("admin_mode", False)}
 
 
 def get_setting(key: str, default: int) -> int:
@@ -252,7 +276,17 @@ def register():
 @app.route("/logout")
 def logout():
     session.pop("user", None)
+    session.pop("admin_mode", None)
     return redirect(url_for("login"))
+
+
+@app.route("/mode-toggle")
+@login_required
+def toggle_mode():
+    if not g.user["is_admin"]:
+        return redirect(url_for("index"))
+    session["admin_mode"] = not session.get("admin_mode", False)
+    return redirect(request.referrer or url_for("index"))
 
 
 @app.route("/me")
@@ -278,7 +312,7 @@ def profile():
 @app.route("/")
 @login_required
 def index():
-    if not g.user["is_admin"]:
+    if not g.user["is_admin"] or not session.get("admin_mode", False):
         return redirect(url_for("profile"))
     with get_db() as db:
         currencies = [r["name"] for r in db.execute("SELECT name FROM currencies WHERE active=1 ORDER BY name").fetchall()]
