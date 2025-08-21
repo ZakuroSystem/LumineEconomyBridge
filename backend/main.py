@@ -16,6 +16,7 @@ import base64
 import hashlib
 import re
 import html
+from email.utils import parsedate_to_datetime, formatdate
 
 # SQLite persistence
 conn = sqlite3.connect(
@@ -282,11 +283,26 @@ app = FastAPI()
 tile_store = TileStore("tiles")
 
 SHARED_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
+RATE_LIMIT: Dict[str, Tuple[float, int]] = {}
+RATE_LIMIT_MAX = 10
 
 
 def verify_token(x_le_token: str = Header(...)) -> None:
     if SHARED_TOKEN and x_le_token != SHARED_TOKEN:
         raise HTTPException(status_code=401, detail="invalid token")
+
+
+def check_rate_limit(ip: str) -> None:
+    """Very small per-IP rate limiter for snapshot posts."""
+
+    now = time.time()
+    window_start, count = RATE_LIMIT.get(ip, (now, 0))
+    if now - window_start >= 1:
+        RATE_LIMIT[ip] = (now, 1)
+        return
+    if count >= RATE_LIMIT_MAX:
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+    RATE_LIMIT[ip] = (window_start, count + 1)
 
 
 async def _tile_worker() -> None:
@@ -2308,6 +2324,8 @@ def chunk_snapshot(
     request: Request,
     token: None = Depends(verify_token),
 ):
+    ip = request.client.host if request.client else ""
+    check_rate_limit(ip)
     for ch in req.chunks:
         tile_store.save_chunk(req.world, ch.cx, ch.cz, ch.data)
     append_log(
@@ -2315,18 +2333,39 @@ def chunk_snapshot(
             "type": "chunk_snapshot",
             "world": req.world,
             "chunks": len(req.chunks),
-            "ip": request.client.host if request.client else "",
+            "ip": ip,
         }
     )
     return {"status": "stored", "chunks": len(req.chunks)}
 
 
-@app.get("/tiles/{world}/{tx}/{tz}")
-def get_tile(world: str, tx: int, tz: int, token: None = Depends(verify_token)):
+@app.api_route("/tiles/{world}/{tx}/{tz}", methods=["GET", "HEAD"])
+def get_tile(
+    world: str,
+    tx: int,
+    tz: int,
+    request: Request,
+    token: None = Depends(verify_token),
+):
     data = tile_store.load_tile(world, tx, tz)
     if data is None:
         raise HTTPException(status_code=404, detail="tile not found")
-    return Response(content=data, media_type="application/octet-stream")
+    meta = tile_store.tile_meta(world, tx, tz)
+    last = meta.get("last_updated", 0)
+    if_modified = request.headers.get("if-modified-since")
+    if if_modified and last:
+        try:
+            ims = parsedate_to_datetime(if_modified)
+            if last // 1000 <= int(ims.timestamp()):
+                return Response(status_code=304)
+        except Exception:
+            pass
+    headers = {}
+    if last:
+        headers["Last-Modified"] = formatdate(last / 1000, usegmt=True)
+    if request.method == "HEAD":
+        return Response(status_code=200, headers=headers)
+    return Response(content=data, media_type="application/octet-stream", headers=headers)
 
 
 @app.post("/tiles/invalidate")

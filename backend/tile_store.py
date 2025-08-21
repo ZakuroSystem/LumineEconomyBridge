@@ -39,6 +39,18 @@ class TileStore:
         with open(path, "rb") as f:
             return f.read()
 
+    def tile_meta(self, world: str, tx: int, tz: int) -> Dict:
+        """Return metadata dictionary for a tile if available."""
+
+        meta_path = self.tile_path(world, tx, tz) + ".meta.json"
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as mf:
+                    return json.load(mf)
+            except Exception:
+                pass
+        return {}
+
     def save_tile(
         self, world: str, tx: int, tz: int, indices: Iterable[int]
     ) -> None:

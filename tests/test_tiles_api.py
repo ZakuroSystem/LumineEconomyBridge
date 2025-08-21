@@ -27,6 +27,15 @@ def test_tile_endpoints_with_token():
         assert resp.status_code == 200
         assert len(resp.content) > 24
 
+        head = client.head("/tiles/world/0/0", headers=headers)
+        assert head.status_code == 200
+        assert "Last-Modified" in head.headers
+        lm = head.headers["Last-Modified"]
+        not_mod = client.get(
+            "/tiles/world/0/0", headers={**headers, "If-Modified-Since": lm}
+        )
+        assert not_mod.status_code == 304
+
         status = client.get("/tiles/status", headers=headers)
         assert status.status_code == 200
         assert status.json()["tile_count"] == 1

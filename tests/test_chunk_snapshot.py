@@ -44,4 +44,23 @@ def test_chunk_snapshot_merge():
         assert all(i == 5 for i in indices)
 
         status = client.get("/tiles/status", headers=headers)
-        assert status.json()["queue_len"] == 0
+    assert status.json()["queue_len"] == 0
+
+
+def test_chunk_snapshot_rate_limit():
+    with tempfile.TemporaryDirectory() as d:
+        main.tile_store.base_dir = d
+        main.tile_store._regen_queue.clear()
+        main.tile_store._dirty.clear()
+        main.RATE_LIMIT.clear()
+
+        data = base64.b64encode(bytes([1] * 256)).decode()
+        payload = {"world": "w", "y_start": 250, "chunks": [{"cx": 0, "cz": 0, "data": data}], "ts": 0}
+
+        client = TestClient(app)
+        headers = {"X-LE-Token": main.SHARED_TOKEN}
+        for _ in range(10):
+            r = client.post("/plugin/chunk_snapshot", json=payload, headers=headers)
+            assert r.status_code == 200
+        resp = client.post("/plugin/chunk_snapshot", json=payload, headers=headers)
+        assert resp.status_code == 429
