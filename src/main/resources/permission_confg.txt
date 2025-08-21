@@ -1,0 +1,5 @@
+# command=permission (admin or user)
+# unspecified commands default to admin
+search=user
+shop=user
+lang=user

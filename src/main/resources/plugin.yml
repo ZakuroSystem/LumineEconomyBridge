@@ -12,3 +12,5 @@ commands:
 permissions:
   lumineeconomy.le:
     default: true
+  lumineeconomy.admin:
+    default: op

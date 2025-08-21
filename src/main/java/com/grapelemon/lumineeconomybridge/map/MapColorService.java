@@ -1,6 +1,7 @@
 package com.grapelemon.lumineeconomybridge.map;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpExchange;
@@ -17,7 +18,7 @@ import java.net.InetSocketAddress;
 public class MapColorService {
     private final JavaPlugin plugin;
     private final HttpServer server;
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     private final String token;
     private final int[][] palette;
 

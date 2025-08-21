@@ -4,6 +4,7 @@ import com.grapelemon.lumineeconomybridge.Lang;
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import okhttp3.*;
@@ -48,7 +49,7 @@ import java.util.UUID;
 public class ShopListener implements Listener {
     private final LumineEconomyBridge plugin;
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     private final NamespacedKey keyShop;
     private final NamespacedKey keyId;
     private final NamespacedKey keyOwner;

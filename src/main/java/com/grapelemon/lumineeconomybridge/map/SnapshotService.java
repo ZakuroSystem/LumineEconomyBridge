@@ -1,6 +1,7 @@
 package com.grapelemon.lumineeconomybridge.map;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.bukkit.World;
@@ -21,7 +22,7 @@ public class SnapshotService {
     private final JavaPlugin plugin;
     private final String token;
     private final String baseUrl;
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     private final HttpClient client = HttpClient.newHttpClient();
 
     public SnapshotService(JavaPlugin plugin, String token, String baseUrl) {

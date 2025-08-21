@@ -2,6 +2,7 @@ package com.grapelemon.lumineeconomybridge.sync;
 
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import okhttp3.*;
@@ -18,7 +19,7 @@ public class ScoreboardSyncService {
     private final OkHttpClient http;
     private final String baseUrl;
     private final LumineEconomyBridge plugin;
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
     // 同期用の状態

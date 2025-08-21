@@ -23,8 +23,6 @@ import asyncio
 import secrets
 import base64
 import hashlib
-import re
-import html
 import httpx
 from email.utils import parsedate_to_datetime, formatdate
 
@@ -689,14 +687,9 @@ def queue_message(cur: sqlite3.Cursor, msg: Dict[str, str]) -> None:
 LOG_PATH = "economy_commands.log"
 
 
-# Strip only ampersand-based color codes; preserve the '§' symbol for
-# downstream formatting where desired
-COLOR_CODE_PATTERN = re.compile(r"&[0-9A-FK-ORa-fk-or]")
-
-
+# No escaping or color stripping so Java can render text exactly
 def sanitize_text(text: str) -> str:
-    """Strip color codes and escape HTML for safe logging/display."""
-    return html.escape(COLOR_CODE_PATTERN.sub("", text))
+    return text
 
 
 def append_log(entry: Dict[str, Union[str, int, float]]) -> None:

@@ -2,6 +2,7 @@ package com.grapelemon.lumineeconomybridge;
 
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import okhttp3.*;
@@ -37,7 +38,7 @@ public class LeCommandExecutor implements CommandExecutor {
 
     private final LumineEconomyBridge plugin;
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     public LeCommandExecutor(LumineEconomyBridge plugin) {
         this.plugin = plugin;
@@ -47,6 +48,12 @@ public class LeCommandExecutor implements CommandExecutor {
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         if (!(sender instanceof Player p)) {
             sender.sendMessage(Lang.get("player-only"));
+            return true;
+        }
+
+        String sub = args.length > 0 ? args[0].toLowerCase() : "";
+        if (plugin.requiresAdmin(sub) && !p.hasPermission("lumineeconomy.admin")) {
+            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
             return true;
         }
 
