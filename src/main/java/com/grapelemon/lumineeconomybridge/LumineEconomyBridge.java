@@ -14,6 +14,8 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class LumineEconomyBridge extends JavaPlugin {
 
@@ -27,6 +29,8 @@ public class LumineEconomyBridge extends JavaPlugin {
     private String baseUrl;
     private int timeout = 2000;
     private long syncInterval = 10L;
+
+    private final Map<String, Long> grantTokens = new ConcurrentHashMap<>();
 
     @Override
     public void onEnable() {
@@ -125,4 +129,12 @@ public class LumineEconomyBridge extends JavaPlugin {
     public String getBaseUrl() { return baseUrl; }
 
     public boolean isActive() { return syncService != null; }
+
+    public boolean consumeGrantToken(String token) {
+        long now = System.currentTimeMillis();
+        grantTokens.entrySet().removeIf(e -> e.getValue() < now);
+        if (grantTokens.containsKey(token)) return false;
+        grantTokens.put(token, now + 30000);
+        return true;
+    }
 }

@@ -186,6 +186,7 @@ with conn:
         """
         CREATE TABLE IF NOT EXISTS shop_tx (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_tx_id TEXT UNIQUE,
             shop_id TEXT NOT NULL,
             buyer_uuid TEXT NOT NULL,
             item_key TEXT NOT NULL,
@@ -194,9 +195,21 @@ with conn:
             total_price INTEGER NOT NULL,
             timestamp INTEGER NOT NULL,
             result TEXT NOT NULL,
-            reason TEXT
+            reason TEXT,
+            grant_token TEXT
         )
         """
+    )
+    try:
+        conn.execute("ALTER TABLE shop_tx ADD COLUMN client_tx_id TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE shop_tx ADD COLUMN grant_token TEXT")
+    except sqlite3.OperationalError:
+        pass
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_shop_tx_client ON shop_tx(client_tx_id)"
     )
 
 app = FastAPI()
@@ -295,6 +308,7 @@ class ShopBuyPayload(BaseModel):
     qty: int
     currency: str
     timestamp: int
+    client_tx_id: str
 
 
 class ShopAddStockPayload(BaseModel):
@@ -1203,114 +1217,172 @@ async def shop_items(shop_id: str):
 
 @app.post("/api/shop/buy")
 async def shop_buy(payload: ShopBuyPayload):
+    start = time.time()
     messages: List[Dict[str, str]] = []
     scoreboards: Dict[str, Dict[str, int]] = {}
     grant: List[Dict[str, str]] = []
     success = False
     reason: Optional[str] = None
     total_price = 0
+    grant_token: Optional[str] = None
     with transaction() as cur:
-        shop = cur.execute(
-            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
-            (payload.shop_id,),
+        existing = cur.execute(
+            "SELECT * FROM shop_tx WHERE client_tx_id=?",
+            (payload.client_tx_id,),
         ).fetchone()
-        if not shop:
-            reason = "shop_not_found"
-        elif shop["status"] != "active":
-            reason = "shop_suspended"
-        else:
-            owner = shop["owner_uuid"]
-            stock_row = cur.execute(
-                "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
-                (payload.shop_id, payload.item_key),
+        if existing:
+            success = existing["result"] == "success"
+            reason = existing["reason"]
+            total_price = existing["total_price"]
+            grant_token = existing["grant_token"]
+            shop = cur.execute(
+                "SELECT owner_uuid FROM shops WHERE shop_id=?",
+                (existing["shop_id"],),
             ).fetchone()
-            if not stock_row or stock_row["stock"] < payload.qty:
-                reason = "insufficient_stock"
+            owner = shop["owner_uuid"] if shop else None
+            if success and grant_token:
+                grant.append(
+                    {
+                        "item_key": existing["item_key"],
+                        "qty": existing["qty"],
+                        "grant_token": grant_token,
+                    }
+                )
+                if owner:
+                    scoreboards[existing["buyer_uuid"]] = get_scoreboard(
+                        cur, existing["buyer_uuid"]
+                    )
+                    scoreboards[owner] = get_scoreboard(cur, owner)
+                messages.append(
+                    {
+                        "target": "chat",
+                        "player": existing["buyer_uuid"],
+                        "text": f"Purchased x{existing['qty']}",
+                    }
+                )
+                if owner:
+                    messages.append(
+                        {
+                            "target": "chat",
+                            "player": owner,
+                            "text": f"Sold x{existing['qty']}",
+                        }
+                    )
             else:
-                price_row = cur.execute(
-                    "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
-                    (payload.shop_id, payload.item_key, payload.currency),
+                messages.append(
+                    {
+                        "target": "chat",
+                        "player": existing["buyer_uuid"],
+                        "text": f"Purchase failed: {reason}",
+                    }
+                )
+        else:
+            shop = cur.execute(
+                "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+                (payload.shop_id,),
+            ).fetchone()
+            if not shop:
+                reason = "shop_not_found"
+            elif shop["status"] != "active":
+                reason = "shop_suspended"
+            else:
+                owner = shop["owner_uuid"]
+                stock_row = cur.execute(
+                    "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                    (payload.shop_id, payload.item_key),
                 ).fetchone()
-                if not price_row:
-                    reason = "invalid_currency"
+                if not stock_row or stock_row["stock"] < payload.qty:
+                    reason = "insufficient_stock"
                 else:
-                    total_price = price_row["price"] * payload.qty
-                    if get_balance(cur, payload.player_uuid, payload.currency) < total_price:
-                        reason = "insufficient_funds"
-                    elif not transfer(
-                        cur, payload.player_uuid, owner, payload.currency, total_price
-                    ):
-                        reason = "transfer_failed"
+                    price_row = cur.execute(
+                        "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
+                        (payload.shop_id, payload.item_key, payload.currency),
+                    ).fetchone()
+                    if not price_row:
+                        reason = "invalid_currency"
                     else:
-                        cur.execute(
-                            "UPDATE shop_stock SET stock=stock-? WHERE shop_id=? AND item_key=?",
-                            (payload.qty, payload.shop_id, payload.item_key),
-                        )
-                        cur.execute(
-                            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-                            (payload.timestamp, payload.shop_id),
-                        )
-                        cur.execute(
-                            "INSERT INTO shop_tx(shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result) VALUES(?,?,?,?,?,?,?,?)",
-                            (
-                                payload.shop_id,
-                                payload.player_uuid,
-                                payload.item_key,
-                                payload.qty,
-                                payload.currency,
-                                total_price,
-                                payload.timestamp,
-                                "success",
-                            ),
-                        )
-                        success = True
-                        messages.append(
-                            {
-                                "target": "chat",
-                                "player": payload.player_uuid,
-                                "text": f"Purchased x{payload.qty}",
-                            }
-                        )
-                        messages.append(
-                            {
-                                "target": "chat",
-                                "player": owner,
-                                "text": f"Sold x{payload.qty}",
-                            }
-                        )
-                        scoreboards[payload.player_uuid] = get_scoreboard(
-                            cur, payload.player_uuid
-                        )
-                        scoreboards[owner] = get_scoreboard(cur, owner)
-                        grant.append(
-                            {
-                                "item_key": payload.item_key,
-                                "qty": payload.qty,
-                                "grant_token": secrets.token_hex(8),
-                            }
-                        )
-        if not success:
-            cur.execute(
-                "INSERT INTO shop_tx(shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,reason) VALUES(?,?,?,?,?,?,?,?,?)",
-                (
-                    payload.shop_id,
-                    payload.player_uuid,
-                    payload.item_key,
-                    payload.qty,
-                    payload.currency,
-                    total_price,
-                    payload.timestamp,
-                    "fail",
-                    reason,
-                ),
-            )
-            messages.append(
-                {
-                    "target": "chat",
-                    "player": payload.player_uuid,
-                    "text": f"Purchase failed: {reason}",
-                }
-            )
+                        total_price = price_row["price"] * payload.qty
+                        if get_balance(cur, payload.player_uuid, payload.currency) < total_price:
+                            reason = "insufficient_funds"
+                        elif not transfer(
+                            cur, payload.player_uuid, owner, payload.currency, total_price
+                        ):
+                            reason = "transfer_failed"
+                        else:
+                            grant_token = secrets.token_hex(8)
+                            cur.execute(
+                                "UPDATE shop_stock SET stock=stock-? WHERE shop_id=? AND item_key=?",
+                                (payload.qty, payload.shop_id, payload.item_key),
+                            )
+                            cur.execute(
+                                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                                (payload.timestamp, payload.shop_id),
+                            )
+                            cur.execute(
+                                "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,grant_token) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                                (
+                                    payload.client_tx_id,
+                                    payload.shop_id,
+                                    payload.player_uuid,
+                                    payload.item_key,
+                                    payload.qty,
+                                    payload.currency,
+                                    total_price,
+                                    payload.timestamp,
+                                    "success",
+                                    grant_token,
+                                ),
+                            )
+                            success = True
+                            messages.append(
+                                {
+                                    "target": "chat",
+                                    "player": payload.player_uuid,
+                                    "text": f"Purchased x{payload.qty}",
+                                }
+                            )
+                            messages.append(
+                                {
+                                    "target": "chat",
+                                    "player": owner,
+                                    "text": f"Sold x{payload.qty}",
+                                }
+                            )
+                            scoreboards[payload.player_uuid] = get_scoreboard(
+                                cur, payload.player_uuid
+                            )
+                            scoreboards[owner] = get_scoreboard(cur, owner)
+                            grant.append(
+                                {
+                                    "item_key": payload.item_key,
+                                    "qty": payload.qty,
+                                    "grant_token": grant_token,
+                                }
+                            )
+            if not success:
+                cur.execute(
+                    "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,reason) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        payload.client_tx_id,
+                        payload.shop_id,
+                        payload.player_uuid,
+                        payload.item_key,
+                        payload.qty,
+                        payload.currency,
+                        total_price,
+                        payload.timestamp,
+                        "fail",
+                        reason,
+                    ),
+                )
+                messages.append(
+                    {
+                        "target": "chat",
+                        "player": payload.player_uuid,
+                        "text": f"Purchase failed: {reason}",
+                    }
+                )
+    latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_buy",
         "timestamp": payload.timestamp,
@@ -1322,6 +1394,8 @@ async def shop_buy(payload: ShopBuyPayload):
         "total_price": total_price,
         "result": "success" if success else "error",
         "reason": reason,
+        "client_tx_id": payload.client_tx_id,
+        "latency_ms": latency_ms,
     }
     with open(LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")

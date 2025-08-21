@@ -30,6 +30,8 @@ import java.time.Instant;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.UUID;
 
 public class ShopListener implements Listener {
     private final LumineEconomyBridge plugin;
@@ -37,11 +39,19 @@ public class ShopListener implements Listener {
     private final Gson gson = new Gson();
     private final NamespacedKey keyShop;
     private final NamespacedKey keyId;
+    private static final long CACHE_MS = 3000;
+    private final Map<String, CacheEntry> itemCache = new ConcurrentHashMap<>();
 
     public ShopListener(LumineEconomyBridge plugin) {
         this.plugin = plugin;
         this.keyShop = new NamespacedKey(plugin, "le_shop");
         this.keyId = new NamespacedKey(plugin, "shop_id");
+    }
+
+    private static class CacheEntry {
+        final JsonObject data;
+        final long timestamp;
+        CacheEntry(JsonObject data, long timestamp) { this.data = data; this.timestamp = timestamp; }
     }
 
     private ItemStack itemFromBase64(String data) {
@@ -108,6 +118,13 @@ public class ShopListener implements Listener {
             p.sendMessage(Lang.get("error-unavailable"));
             return;
         }
+        CacheEntry ce = itemCache.get(shopId);
+        long now = System.currentTimeMillis();
+        if (ce != null && now - ce.timestamp < CACHE_MS) {
+            buildInventory(p, shopId, ce.data);
+            sendPing(shopId);
+            return;
+        }
         OkHttpClient http = plugin.getHttpClient();
         HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
                 .addQueryParameter("shop_id", shopId)
@@ -137,57 +154,65 @@ public class ShopListener implements Listener {
                         });
                         return;
                     }
-                    JsonObject dataObj = obj;
-                    // ping to keep shop active
-                    Map<String, Object> ping = new HashMap<>();
-                    ping.put("shop_id", shopId);
-                    ping.put("timestamp", System.currentTimeMillis() / 1000);
-                    Request pingReq = new Request.Builder()
-                            .url(plugin.getBaseUrl() + "/api/shop/ping")
-                            .post(RequestBody.create(gson.toJson(ping), JSON))
-                            .build();
-                    http.newCall(pingReq).enqueue(new Callback() {
-                        @Override public void onFailure(Call call, IOException e) { plugin.getLogger().warning("Ping failed: " + e.getMessage()); }
-                        @Override public void onResponse(Call call, Response res) throws IOException { res.close(); }
-                    });
-                    Bukkit.getScheduler().runTask(plugin, () -> {
-                        var arr = dataObj.getAsJsonArray("items");
-                        int size = ((arr.size() + 1 + 8) / 9) * 9;
-                        if (size < 9) size = 9;
-                        ShopMenuHolder holder = new ShopMenuHolder(shopId);
-                        Inventory inv = Bukkit.createInventory(holder, size, "Shop " + shopId);
-                        holder.setInventory(inv);
-                        int idx = 0;
-                        for (var el : arr) {
-                            if (idx >= size - 1) break;
-                            JsonObject it = el.getAsJsonObject();
-                            String key = it.get("item_key").getAsString();
-                            String blob = it.get("nbt_blob").getAsString();
-                            ItemStack item = itemFromBase64(blob);
-                            ItemMeta meta = item.getItemMeta();
-                            List<String> lore = new ArrayList<>();
-                            lore.add("Stock: " + it.get("stock").getAsInt());
-                            JsonObject prices = it.getAsJsonObject("prices");
-                            Map<String, Integer> priceMap = new HashMap<>();
-                            for (var en : prices.entrySet()) {
-                                lore.add(en.getKey() + ": " + en.getValue().getAsInt());
-                                priceMap.put(en.getKey(), en.getValue().getAsInt());
-                            }
-                            meta.setLore(lore);
-                            item.setItemMeta(meta);
-                            inv.setItem(idx, item);
-                            holder.getItems().put(idx, new ShopItem(key, item, priceMap));
-                            idx++;
-                        }
-                        ItemStack confirm = new ItemStack(Material.EMERALD);
-                        ItemMeta cm = confirm.getItemMeta();
-                        cm.setDisplayName("Purchase");
-                        confirm.setItemMeta(cm);
-                        inv.setItem(size - 1, confirm);
-                        p.openInventory(inv);
-                    });
+                    itemCache.put(shopId, new CacheEntry(obj, System.currentTimeMillis()));
+                    buildInventory(p, shopId, obj);
+                    sendPing(shopId);
                 }
             }
+        });
+    }
+
+    private void sendPing(String shopId) {
+        OkHttpClient http = plugin.getHttpClient();
+        Map<String, Object> ping = new HashMap<>();
+        ping.put("shop_id", shopId);
+        ping.put("timestamp", System.currentTimeMillis() / 1000);
+        Request pingReq = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/ping")
+                .post(RequestBody.create(gson.toJson(ping), JSON))
+                .build();
+        http.newCall(pingReq).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException e) { plugin.getLogger().warning("Ping failed: " + e.getMessage()); }
+            @Override public void onResponse(Call call, Response res) throws IOException { res.close(); }
+        });
+    }
+
+    private void buildInventory(Player p, String shopId, JsonObject dataObj) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            var arr = dataObj.getAsJsonArray("items");
+            int size = ((arr.size() + 1 + 8) / 9) * 9;
+            if (size < 9) size = 9;
+            ShopMenuHolder holder = new ShopMenuHolder(shopId);
+            Inventory inv = Bukkit.createInventory(holder, size, "Shop " + shopId);
+            holder.setInventory(inv);
+            int idx = 0;
+            for (var el : arr) {
+                if (idx >= size - 1) break;
+                JsonObject it = el.getAsJsonObject();
+                String key = it.get("item_key").getAsString();
+                String blob = it.get("nbt_blob").getAsString();
+                ItemStack item = itemFromBase64(blob);
+                ItemMeta meta = item.getItemMeta();
+                List<String> lore = new ArrayList<>();
+                lore.add("Stock: " + it.get("stock").getAsInt());
+                JsonObject prices = it.getAsJsonObject("prices");
+                Map<String, Integer> priceMap = new HashMap<>();
+                for (var en : prices.entrySet()) {
+                    lore.add(en.getKey() + ": " + en.getValue().getAsInt());
+                    priceMap.put(en.getKey(), en.getValue().getAsInt());
+                }
+                meta.setLore(lore);
+                item.setItemMeta(meta);
+                inv.setItem(idx, item);
+                holder.getItems().put(idx, new ShopItem(key, item, priceMap));
+                idx++;
+            }
+            ItemStack confirm = new ItemStack(Material.EMERALD);
+            ItemMeta cm = confirm.getItemMeta();
+            cm.setDisplayName("Purchase");
+            confirm.setItemMeta(cm);
+            inv.setItem(size - 1, confirm);
+            p.openInventory(inv);
         });
     }
 
@@ -229,6 +254,7 @@ public class ShopListener implements Listener {
             payload.put("qty", qty);
             payload.put("currency", currency);
             payload.put("timestamp", System.currentTimeMillis() / 1000);
+            payload.put("client_tx_id", UUID.randomUUID().toString());
             Request req = new Request.Builder()
                     .url(plugin.getBaseUrl() + "/api/shop/buy")
                     .post(RequestBody.create(gson.toJson(payload), JSON))
@@ -263,13 +289,16 @@ public class ShopListener implements Listener {
                                 if (res.has("grant")) {
                                     res.getAsJsonArray("grant").forEach(g -> {
                                         JsonObject gg = g.getAsJsonObject();
-                                        String ik = gg.get("item_key").getAsString();
-                                        int qty2 = gg.get("qty").getAsInt();
-                                        ShopItem item = holder.getItems().values().stream().filter(it -> it.getItemKey().equals(ik)).findFirst().orElse(null);
-                                        if (item != null) {
-                                            ItemStack stack = item.getItem().clone();
-                                            stack.setAmount(qty2);
-                                            p.getInventory().addItem(stack);
+                                        String token = gg.get("grant_token").getAsString();
+                                        if (plugin.consumeGrantToken(token)) {
+                                            String ik = gg.get("item_key").getAsString();
+                                            int qty2 = gg.get("qty").getAsInt();
+                                            ShopItem item = holder.getItems().values().stream().filter(it -> it.getItemKey().equals(ik)).findFirst().orElse(null);
+                                            if (item != null) {
+                                                ItemStack stack = item.getItem().clone();
+                                                stack.setAmount(qty2);
+                                                p.getInventory().addItem(stack);
+                                            }
                                         }
                                     });
                                 }

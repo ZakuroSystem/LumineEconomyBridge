@@ -174,9 +174,12 @@ public class LeCommandExecutor implements CommandExecutor {
                                             if (res.has("grant")) {
                                                 res.getAsJsonArray("grant").forEach(g -> {
                                                     JsonObject gg = g.getAsJsonObject();
-                                                    ItemStack item = itemFromBase64(gg.get("nbt_blob").getAsString());
-                                                    item.setAmount(gg.get("qty").getAsInt());
-                                                    p.getInventory().addItem(item);
+                                                    String token = gg.get("grant_token").getAsString();
+                                                    if (plugin.consumeGrantToken(token)) {
+                                                        ItemStack item = itemFromBase64(gg.get("nbt_blob").getAsString());
+                                                        item.setAmount(gg.get("qty").getAsInt());
+                                                        p.getInventory().addItem(item);
+                                                    }
                                                 });
                                             }
                                             p.sendMessage("Stock taken");
@@ -240,9 +243,12 @@ public class LeCommandExecutor implements CommandExecutor {
                                             if (refund && res.has("grant")) {
                                                 res.getAsJsonArray("grant").forEach(g -> {
                                                     JsonObject gg = g.getAsJsonObject();
-                                                    ItemStack item = itemFromBase64(gg.get("nbt_blob").getAsString());
-                                                    item.setAmount(gg.get("qty").getAsInt());
-                                                    p.getInventory().addItem(item);
+                                                    String token = gg.get("grant_token").getAsString();
+                                                    if (plugin.consumeGrantToken(token)) {
+                                                        ItemStack item = itemFromBase64(gg.get("nbt_blob").getAsString());
+                                                        item.setAmount(gg.get("qty").getAsInt());
+                                                        p.getInventory().addItem(item);
+                                                    }
                                                 });
                                             }
                                             p.sendMessage("Removed");
