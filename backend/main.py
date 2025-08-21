@@ -12,6 +12,7 @@ import threading
 import asyncio
 import secrets
 import base64
+import hashlib
 
 # SQLite persistence
 conn = sqlite3.connect(
@@ -294,6 +295,30 @@ class ShopBuyPayload(BaseModel):
     qty: int
     currency: str
     timestamp: int
+
+
+class ShopAddStockPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    nbt_blob: str
+    material: str
+    display_name: Optional[str]
+    qty: int
+
+
+class ShopTakeStockPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    item_key: str
+    qty: int
+
+
+class ShopSetPricePayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    item_key: str
+    currency: str
+    price: int
 
 
 def ensure_currency(cur: sqlite3.Cursor, currency: str, symbol: Optional[str] = None) -> None:
@@ -1278,3 +1303,95 @@ async def shop_buy(payload: ShopBuyPayload):
         "scoreboards": scoreboards,
         "grant": grant,
     }
+
+
+@app.post("/api/shop/add_stock")
+async def shop_add_stock(payload: ShopAddStockPayload):
+    blob = base64.b64decode(payload.nbt_blob)
+    item_key = hashlib.sha256(blob).hexdigest()
+    with transaction() as cur:
+        shop = cur.execute(
+            "SELECT owner_uuid FROM shops WHERE shop_id=?", (payload.shop_id,)
+        ).fetchone()
+        if not shop or shop["owner_uuid"] != payload.owner_uuid:
+            return {"status": "error", "reason": "not_owner"}
+        ts = int(time.time())
+        cur.execute(
+            "INSERT OR IGNORE INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+            (item_key, payload.material, payload.display_name, blob),
+        )
+        cur.execute(
+            """
+            INSERT INTO shop_stock(shop_id, item_key, stock, updated_at) VALUES(?,?,?,?)
+            ON CONFLICT(shop_id,item_key) DO UPDATE SET stock=stock+excluded.stock, updated_at=excluded.updated_at
+            """,
+            (payload.shop_id, item_key, payload.qty, ts),
+        )
+        cur.execute(
+            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+            (ts, payload.shop_id),
+        )
+    return {"status": "success", "item_key": item_key}
+
+
+@app.post("/api/shop/take_stock")
+async def shop_take_stock(payload: ShopTakeStockPayload):
+    grant: List[Dict[str, str]] = []
+    with transaction() as cur:
+        shop = cur.execute(
+            "SELECT owner_uuid FROM shops WHERE shop_id=?", (payload.shop_id,)
+        ).fetchone()
+        if not shop or shop["owner_uuid"] != payload.owner_uuid:
+            return {"status": "error", "reason": "not_owner"}
+        row = cur.execute(
+            "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+            (payload.shop_id, payload.item_key),
+        ).fetchone()
+        if not row or row["stock"] < payload.qty:
+            return {"status": "error", "reason": "insufficient_stock"}
+        ts = int(time.time())
+        cur.execute(
+            "UPDATE shop_stock SET stock=stock-?, updated_at=? WHERE shop_id=? AND item_key=?",
+            (payload.qty, ts, payload.shop_id, payload.item_key),
+        )
+        cur.execute(
+            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+            (ts, payload.shop_id),
+        )
+        item = cur.execute(
+            "SELECT nbt_blob FROM shop_items WHERE item_key=?", (payload.item_key,)
+        ).fetchone()
+        if item:
+            grant.append(
+                {
+                    "item_key": payload.item_key,
+                    "qty": payload.qty,
+                    "nbt_blob": base64.b64encode(item["nbt_blob"]).decode("ascii"),
+                    "grant_token": secrets.token_hex(8),
+                }
+            )
+    return {"status": "success", "grant": grant}
+
+
+@app.post("/api/shop/set_price")
+async def shop_set_price(payload: ShopSetPricePayload):
+    with transaction() as cur:
+        shop = cur.execute(
+            "SELECT owner_uuid FROM shops WHERE shop_id=?", (payload.shop_id,)
+        ).fetchone()
+        if not shop or shop["owner_uuid"] != payload.owner_uuid:
+            return {"status": "error", "reason": "not_owner"}
+        ensure_currency(cur, payload.currency)
+        ts = int(time.time())
+        cur.execute(
+            """
+            INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
+            ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
+            """,
+            (payload.shop_id, payload.item_key, payload.currency, payload.price),
+        )
+        cur.execute(
+            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+            (ts, payload.shop_id),
+        )
+    return {"status": "success"}
