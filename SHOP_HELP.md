@@ -11,3 +11,5 @@
 §a/le shop partner remove §e<id> <player> §7- Remove co-owner / 共同オーナー削除
 §a/le search §e<item> [currency] [min] [max] §7- Search shops / 検索
 §a/le admin add §e<player> §7- Add dashboard admin / 管理者追加
+
+Players can sell items to shops by shift-clicking matching items from their inventory into the shop chest; a confirmation menu will appear. / プレイヤーはインベントリからショップのチェストへシフトクリックすると同じ手順でアイテムを販売できます。

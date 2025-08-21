@@ -73,7 +73,8 @@ def init_db() -> None:
             );
             CREATE TABLE IF NOT EXISTS players (
                 uuid TEXT PRIMARY KEY,
-                last_seen INTEGER NOT NULL
+                last_seen INTEGER NOT NULL,
+                lang_hint INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -105,6 +106,10 @@ def init_db() -> None:
             pass
         try:
             db.execute("ALTER TABLE currencies ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("ALTER TABLE players ADD COLUMN lang_hint INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass
         try:

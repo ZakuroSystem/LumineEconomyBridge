@@ -312,7 +312,11 @@ public class ShopListener implements Listener {
             e.setCancelled(true);
             Player p = (Player) e.getWhoClicked();
             if (e.getSlot() == 2) {
-                handlePurchase(p, ch);
+                if (ch.isSelling()) {
+                    handleSell(p, ch);
+                } else {
+                    handlePurchase(p, ch);
+                }
             } else if (e.getSlot() == 6) {
                 p.openInventory(ch.getOrigin().getInventory());
             }
@@ -332,7 +336,7 @@ public class ShopListener implements Listener {
             if (isOwner) {
                 handleOwnerDeposit(p, holder, stack);
             } else {
-                p.sendMessage(ChatColor.RED + "This item cannot be sold here / このアイテムはここでは売れません" + ChatColor.RESET);
+                handlePlayerSell(p, holder, stack);
             }
             return;
         }
@@ -435,7 +439,7 @@ public class ShopListener implements Listener {
     }
 
     private void openConfirm(Player p, ShopMenuHolder holder, int slot, ShopItem si) {
-        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(holder.getShopId(), holder, slot, si), 9, "Confirm");
+        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(holder.getShopId(), holder, slot, si, false), 9, "Confirm");
         inv.setItem(4, si.getRawItem());
         ItemStack ok = new ItemStack(Material.GREEN_STAINED_GLASS_PANE);
         ItemMeta om = ok.getItemMeta();
@@ -448,6 +452,90 @@ public class ShopListener implements Listener {
         cancel.setItemMeta(cm);
         inv.setItem(6, cancel);
         p.openInventory(inv);
+    }
+
+    private void openSellConfirm(Player p, ShopMenuHolder holder, int slot, ShopItem si) {
+        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(holder.getShopId(), holder, slot, si, true), 9, "Confirm");
+        inv.setItem(4, si.getRawItem());
+        ItemStack ok = new ItemStack(Material.GREEN_STAINED_GLASS_PANE);
+        ItemMeta om = ok.getItemMeta();
+        om.setDisplayName(ChatColor.GREEN + "Sell");
+        ok.setItemMeta(om);
+        inv.setItem(2, ok);
+        ItemStack cancel = new ItemStack(Material.RED_STAINED_GLASS_PANE);
+        ItemMeta cm = cancel.getItemMeta();
+        cm.setDisplayName(ChatColor.RED + "Cancel");
+        cancel.setItemMeta(cm);
+        inv.setItem(6, cancel);
+        p.openInventory(inv);
+    }
+
+    private void handlePlayerSell(Player p, ShopMenuHolder holder, ItemStack stack) {
+        String blob = itemToBase64(stack);
+        String key = sha256(Base64.getDecoder().decode(blob));
+        for (var en : holder.getItems().entrySet()) {
+            if (en.getValue().getItemKey().equals(key)) {
+                openSellConfirm(p, holder, en.getKey(), en.getValue());
+                return;
+            }
+        }
+        p.sendMessage(ChatColor.RED + "This item cannot be sold here / このアイテムはここでは売れません" + ChatColor.RESET);
+    }
+
+    private void handleSell(Player p, ConfirmMenuHolder ch) {
+        ShopItem si = ch.getItem();
+        String currency = si.getPrices().keySet().stream().findFirst().orElse(null);
+        if (currency == null) return;
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("player_uuid", p.getUniqueId().toString());
+        payload.put("shop_id", ch.getShopId());
+        payload.put("item_key", si.getItemKey());
+        payload.put("qty", 1);
+        payload.put("currency", currency);
+        payload.put("timestamp", System.currentTimeMillis() / 1000);
+        payload.put("client_tx_id", UUID.randomUUID().toString());
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/sell")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        ItemStack remove = si.getRawItem().clone();
+        remove.setAmount(1);
+        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException ex) {
+                plugin.getLogger().warning("Sell failed: " + ex.getMessage());
+                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+            }
+
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    String body = response.body() != null ? response.body().string() : "{}";
+                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (res.has("messages")) {
+                            res.getAsJsonArray("messages").forEach(m -> {
+                                JsonObject msg = m.getAsJsonObject();
+                                String text = msg.has("text") ? ChatColor.translateAlternateColorCodes('&', msg.get("text").getAsString()) : "";
+                                Player recv = p;
+                                if (msg.has("player")) {
+                                    try {
+                                        UUID id = UUID.fromString(msg.get("player").getAsString());
+                                        Player other = Bukkit.getPlayer(id);
+                                        if (other != null) recv = other; else return;
+                                    } catch (IllegalArgumentException ignored) { return; }
+                                }
+                                recv.sendMessage(text);
+                            });
+                        }
+                        if ("success".equals(res.get("status").getAsString())) {
+                            p.getInventory().removeItem(remove);
+                            si.setStock(si.getStock() + 1);
+                            refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
+                            p.openInventory(ch.getOrigin().getInventory());
+                        }
+                    });
+                }
+            }
+        });
     }
 
 
