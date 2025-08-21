@@ -1469,11 +1469,18 @@ async def shop_ids():
 async def shop_items(shop_id: str):
     start = time.time()
     with transaction() as cur:
-        srow = cur.execute("SELECT status,last_activity_at FROM shops WHERE shop_id=?", (shop_id,)).fetchone()
+        srow = cur.execute(
+            "SELECT owner_uuid,status,last_activity_at FROM shops WHERE shop_id=?",
+            (shop_id,),
+        ).fetchone()
         if not srow:
             result = {"status": "error", "reason": "shop_not_found"}
         elif srow["status"] != "active":
-            result = {"status": srow["status"], "last_activity_at": srow["last_activity_at"]}
+            result = {
+                "status": srow["status"],
+                "last_activity_at": srow["last_activity_at"],
+                "owner_uuid": srow["owner_uuid"],
+            }
         else:
             rows = cur.execute(
                 "SELECT st.item_key, st.sale_name, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
@@ -1497,7 +1504,11 @@ async def shop_items(shop_id: str):
                         "prices": prices,
                     }
                 )
-            result = {"status": "active", "items": items}
+            result = {
+                "status": "active",
+                "owner_uuid": srow["owner_uuid"],
+                "items": items,
+            }
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_items",

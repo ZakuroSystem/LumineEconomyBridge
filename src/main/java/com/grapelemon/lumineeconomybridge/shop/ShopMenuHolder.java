@@ -13,6 +13,7 @@ public class ShopMenuHolder implements InventoryHolder {
     private Inventory inventory;
     private String currency;
     private int quantity = 1;
+    private String ownerUuid;
 
     public ShopMenuHolder(String shopId) {
         this.shopId = shopId;
@@ -45,6 +46,14 @@ public class ShopMenuHolder implements InventoryHolder {
 
     public void setInventory(Inventory inventory) {
         this.inventory = inventory;
+    }
+
+    public String getOwnerUuid() {
+        return ownerUuid;
+    }
+
+    public void setOwnerUuid(String ownerUuid) {
+        this.ownerUuid = ownerUuid;
     }
 
     public String getCurrency() {

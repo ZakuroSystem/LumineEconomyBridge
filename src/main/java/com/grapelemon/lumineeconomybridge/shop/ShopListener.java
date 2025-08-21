@@ -19,7 +19,9 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
@@ -32,6 +34,8 @@ import org.bukkit.ChatColor;
 import java.time.Instant;
 
 import java.io.IOException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.UUID;
@@ -44,6 +48,22 @@ public class ShopListener implements Listener {
     private final NamespacedKey keyId;
     private static final long CACHE_MS = 3000;
     private final Map<String, CacheEntry> itemCache = new ConcurrentHashMap<>();
+    private final Map<UUID, PendingSale> pendingSales = new ConcurrentHashMap<>();
+
+    private static class PendingSale {
+        final String shopId;
+        final String blob;
+        final ItemStack item;
+        final int qty;
+        final long deadline;
+        PendingSale(String shopId, String blob, ItemStack item, int qty, long deadline) {
+            this.shopId = shopId;
+            this.blob = blob;
+            this.item = item;
+            this.qty = qty;
+            this.deadline = deadline;
+        }
+    }
 
     public ShopListener(LumineEconomyBridge plugin) {
         this.plugin = plugin;
@@ -60,6 +80,26 @@ public class ShopListener implements Listener {
     private ItemStack itemFromBase64(String data) {
         byte[] bytes = Base64.getDecoder().decode(data);
         return ItemStack.deserializeBytes(bytes);
+    }
+
+    private String itemToBase64(ItemStack item) {
+        ItemStack clone = item.clone();
+        clone.setAmount(1);
+        return Base64.getEncoder().encodeToString(clone.serializeAsBytes());
+    }
+
+    private String sha256(byte[] data) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(data);
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            return "";
+        }
     }
 
     @EventHandler
@@ -183,9 +223,12 @@ public class ShopListener implements Listener {
     private void buildInventory(Player p, String shopId, JsonObject dataObj) {
         Bukkit.getScheduler().runTask(plugin, () -> {
             var arr = dataObj.getAsJsonArray("items");
-            int size = ((arr.size() + 1 + 8) / 9) * 9;
+            int size = ((arr.size() + 8) / 9) * 9;
             if (size < 9) size = 9;
             ShopMenuHolder holder = new ShopMenuHolder(shopId);
+            if (dataObj.has("owner_uuid")) {
+                holder.setOwnerUuid(dataObj.get("owner_uuid").getAsString());
+            }
             Inventory inv = Bukkit.createInventory(holder, size, "Shop " + shopId);
             holder.setInventory(inv);
             int idx = 0;
@@ -196,6 +239,7 @@ public class ShopListener implements Listener {
                 String saleName = it.has("sale_name") ? it.get("sale_name").getAsString() : "";
                 String blob = it.get("nbt_blob").getAsString();
                 ItemStack item = itemFromBase64(blob);
+                ItemStack raw = item.clone();
                 ItemMeta meta = item.getItemMeta();
                 List<String> lore = new ArrayList<>();
                 lore.add("Name: " + saleName);
@@ -209,184 +253,279 @@ public class ShopListener implements Listener {
                 meta.setLore(lore);
                 item.setItemMeta(meta);
                 inv.setItem(idx, item);
-                holder.getItems().put(idx, new ShopItem(key, saleName, item, priceMap));
+                holder.getItems().put(idx, new ShopItem(key, saleName, item, raw, priceMap));
                 idx++;
             }
-            ItemStack confirm = new ItemStack(Material.EMERALD);
-            ItemMeta cm = confirm.getItemMeta();
-            cm.setDisplayName("Purchase");
-            confirm.setItemMeta(cm);
-            inv.setItem(size - 1, confirm);
             p.openInventory(inv);
         });
     }
 
     @EventHandler
     public void onClick(InventoryClickEvent e) {
+        if (e.getInventory().getHolder() instanceof ConfirmMenuHolder ch) {
+            e.setCancelled(true);
+            Player p = (Player) e.getWhoClicked();
+            if (e.getSlot() == 2) {
+                handlePurchase(p, ch.getShopId(), ch.getItem());
+            } else if (e.getSlot() == 6) {
+                p.closeInventory();
+                openShop(p, ch.getShopId());
+            }
+            return;
+        }
         if (!(e.getInventory().getHolder() instanceof ShopMenuHolder holder)) return;
-        e.setCancelled(true);
         Player p = (Player) e.getWhoClicked();
-        if (e.getSlot() == e.getInventory().getSize() - 1) {
-            ShopItem si = holder.getSelectedItem();
-            if (si == null) return;
-            if (e.isRightClick() && !e.isShiftClick()) {
-                List<String> curList = new ArrayList<>(si.getPrices().keySet());
-                if (curList.isEmpty()) return;
-                String cur = holder.getCurrency();
-                int idx = cur == null ? -1 : curList.indexOf(cur);
-                idx = (idx + 1) % curList.size();
-                holder.setCurrency(curList.get(idx));
-                refreshConfirm(holder);
-                return;
+        boolean isOwner = p.getUniqueId().toString().equals(holder.getOwnerUuid());
+        if (e.getClickedInventory() == p.getInventory() && e.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY) {
+            ItemStack stack = e.getCurrentItem();
+            if (stack == null) return;
+            e.setCancelled(true);
+            if (isOwner) {
+                handleOwnerDeposit(p, holder, stack);
+            } else {
+                p.sendMessage(ChatColor.RED + "This item cannot be sold here");
             }
-            if (e.isShiftClick()) {
-                int q = holder.getQuantity();
-                if (e.isRightClick()) q--; else q++;
-                holder.setQuantity(q);
-                refreshConfirm(holder);
-                return;
+            return;
+        }
+        if (e.getClickedInventory() == e.getView().getTopInventory() && holder.getItems().containsKey(e.getSlot())) {
+            e.setCancelled(true);
+            ShopItem si = holder.getItems().get(e.getSlot());
+            if (isOwner) {
+                handleOwnerWithdraw(p, holder, si);
+            } else {
+                openConfirm(p, holder.getShopId(), si);
             }
-            String currency = holder.getCurrency();
-            if (currency == null) {
-                currency = si.getPrices().keySet().stream().findFirst().orElse(null);
-                if (currency == null) return;
+            return;
+        }
+        e.setCancelled(true);
+    }
+
+    private void handlePurchase(Player p, String shopId, ShopItem si) {
+        String currency = si.getPrices().keySet().stream().findFirst().orElse(null);
+        if (currency == null) return;
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("player_uuid", p.getUniqueId().toString());
+        payload.put("shop_id", shopId);
+        payload.put("item_key", si.getItemKey());
+        payload.put("qty", 1);
+        payload.put("currency", currency);
+        payload.put("timestamp", System.currentTimeMillis() / 1000);
+        payload.put("client_tx_id", UUID.randomUUID().toString());
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/buy")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException ex) {
+                plugin.getLogger().warning("Buy failed: " + ex.getMessage());
+                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
             }
-            int qty = holder.getQuantity();
+
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    String body = response.body() != null ? response.body().string() : "{}";
+                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (res.has("messages")) {
+                            res.getAsJsonArray("messages").forEach(m -> {
+                                JsonObject msg = m.getAsJsonObject();
+                                String text = msg.has("text") ? ChatColor.translateAlternateColorCodes('&', msg.get("text").getAsString()) : "";
+                                Player recv = p;
+                                if (msg.has("player")) {
+                                    try {
+                                        UUID id = UUID.fromString(msg.get("player").getAsString());
+                                        Player other = Bukkit.getPlayer(id);
+                                        if (other != null) recv = other; else return;
+                                    } catch (IllegalArgumentException ignored) { return; }
+                                }
+                                recv.sendMessage(text);
+                            });
+                        }
+                        if ("success".equals(res.get("status").getAsString())) {
+                            if (res.has("grant")) {
+                                res.getAsJsonArray("grant").forEach(g -> {
+                                    JsonObject gg = g.getAsJsonObject();
+                                    String token = gg.get("grant_token").getAsString();
+                                    if (plugin.consumeGrantToken(token)) {
+                                        String ik = gg.get("item_key").getAsString();
+                                        int qty2 = gg.get("qty").getAsInt();
+                                        if (si.getItemKey().equals(ik)) {
+                                            ItemStack stack = si.getRawItem().clone();
+                                            stack.setAmount(qty2);
+                                            p.getInventory().addItem(stack);
+                                        }
+                                    }
+                                });
+                            }
+                            if (res.has("scoreboards")) {
+                                ScoreboardSyncService sync = plugin.getSyncService();
+                                if (sync != null) {
+                                    res.getAsJsonObject("scoreboards").entrySet().forEach(en -> {
+                                        try {
+                                            UUID pid = UUID.fromString(en.getKey());
+                                            Player target = Bukkit.getPlayer(pid);
+                                            if (target != null) {
+                                                Map<String, Integer> updates = new HashMap<>();
+                                                en.getValue().getAsJsonObject().entrySet().forEach(e1 -> updates.put(e1.getKey(), e1.getValue().getAsInt()));
+                                                sync.applyFromPython(target, updates);
+                                            }
+                                        } catch (IllegalArgumentException ignored) {
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        openShop(p, shopId);
+                    });
+                }
+            }
+        });
+    }
+
+    private void openConfirm(Player p, String shopId, ShopItem si) {
+        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(shopId, si), 9, "Confirm");
+        inv.setItem(4, si.getRawItem());
+        ItemStack ok = new ItemStack(Material.GREEN_STAINED_GLASS_PANE);
+        ItemMeta om = ok.getItemMeta();
+        om.setDisplayName(ChatColor.GREEN + "Buy");
+        ok.setItemMeta(om);
+        inv.setItem(2, ok);
+        ItemStack cancel = new ItemStack(Material.RED_STAINED_GLASS_PANE);
+        ItemMeta cm = cancel.getItemMeta();
+        cm.setDisplayName(ChatColor.RED + "Cancel");
+        cancel.setItemMeta(cm);
+        inv.setItem(6, cancel);
+        p.openInventory(inv);
+    }
+
+    private void handleOwnerDeposit(Player p, ShopMenuHolder holder, ItemStack stack) {
+        String blob = itemToBase64(stack);
+        String key = sha256(Base64.getDecoder().decode(blob));
+        ShopItem existing = holder.getItems().values().stream().filter(it -> it.getItemKey().equals(key)).findFirst().orElse(null);
+        if (existing != null) {
+            ItemStack refund = stack.clone();
+            int qty = stack.getAmount();
+            stack.setAmount(0);
             Map<String, Object> payload = new HashMap<>();
-            payload.put("player_uuid", p.getUniqueId().toString());
+            payload.put("owner_uuid", p.getUniqueId().toString());
             payload.put("shop_id", holder.getShopId());
-            payload.put("item_key", si.getItemKey());
+            payload.put("nbt_blob", blob);
             payload.put("qty", qty);
+            payload.put("material", stack.getType().name());
+            String dn = stack.getItemMeta() != null ? stack.getItemMeta().getDisplayName() : "";
+            payload.put("display_name", dn);
+            payload.put("sale_name", existing.getSaleName());
+            String currency = existing.getPrices().keySet().stream().findFirst().orElse(null);
             payload.put("currency", currency);
+            int price = currency != null ? existing.getPrices().get(currency) : 0;
+            payload.put("price", price);
             payload.put("timestamp", System.currentTimeMillis() / 1000);
-            payload.put("client_tx_id", UUID.randomUUID().toString());
             Request req = new Request.Builder()
-                    .url(plugin.getBaseUrl() + "/api/shop/buy")
+                    .url(plugin.getBaseUrl() + "/api/shop/add_stock")
                     .post(RequestBody.create(gson.toJson(payload), JSON))
                     .build();
             plugin.getHttpClient().newCall(req).enqueue(new Callback() {
                 @Override public void onFailure(Call call, IOException ex) {
-                    plugin.getLogger().warning("Buy failed: " + ex.getMessage());
-                    Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                    plugin.getLogger().warning("Add stock failed: " + ex.getMessage());
+                    Bukkit.getScheduler().runTask(plugin, () -> p.getInventory().addItem(refund));
                 }
+                @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
+            });
+        } else {
+            ItemStack refund = stack.clone();
+            int qty = stack.getAmount();
+            stack.setAmount(0);
+            PendingSale pending = new PendingSale(holder.getShopId(), blob, refund, qty, System.currentTimeMillis() + 20000);
+            pendingSales.put(p.getUniqueId(), pending);
+            p.sendMessage(ChatColor.YELLOW + "Enter sale name and price (e.g. apple 100)");
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                PendingSale ps = pendingSales.get(p.getUniqueId());
+                if (ps != null && ps.deadline <= System.currentTimeMillis()) {
+                    pendingSales.remove(p.getUniqueId());
+                    p.sendMessage(ChatColor.RED + "Timed out");
+                    p.getInventory().addItem(ps.item);
+                }
+            }, 20 * 20);
+        }
+    }
 
-                @Override public void onResponse(Call call, Response response) throws IOException {
-                    try (response) {
-                        String body = response.body() != null ? response.body().string() : "{}";
-                        JsonObject res = JsonParser.parseString(body).getAsJsonObject();
-                        Bukkit.getScheduler().runTask(plugin, () -> {
-                            if (res.has("messages")) {
-                                res.getAsJsonArray("messages").forEach(m -> {
-                                    JsonObject msg = m.getAsJsonObject();
-                                    String text = msg.has("text") ? ChatColor.translateAlternateColorCodes('&', msg.get("text").getAsString()) : "";
-                                    Player recv = p;
-                                    if (msg.has("player")) {
-                                        try {
-                                            UUID id = UUID.fromString(msg.get("player").getAsString());
-                                            Player other = Bukkit.getPlayer(id);
-                                            if (other != null) recv = other; else return;
-                                        } catch (IllegalArgumentException ignored) { return; }
-                                    }
-                                    recv.sendMessage(text);
-                                });
-                            }
-                            if ("success".equals(res.get("status").getAsString())) {
-                                if (res.has("grant")) {
-                                    res.getAsJsonArray("grant").forEach(g -> {
-                                        JsonObject gg = g.getAsJsonObject();
-                                        String token = gg.get("grant_token").getAsString();
-                                        if (plugin.consumeGrantToken(token)) {
-                                            String ik = gg.get("item_key").getAsString();
-                                            int qty2 = gg.get("qty").getAsInt();
-                                            ShopItem item = holder.getItems().values().stream().filter(it -> it.getItemKey().equals(ik)).findFirst().orElse(null);
-                                            if (item != null) {
-                                                ItemStack stack = item.getItem().clone();
-                                                stack.setAmount(qty2);
-                                                p.getInventory().addItem(stack);
-                                            }
-                                        }
-                                    });
-                                }
-                                if (res.has("scoreboards")) {
-                                    ScoreboardSyncService sync = plugin.getSyncService();
-                                    if (sync != null) {
-                                        res.getAsJsonObject("scoreboards").entrySet().forEach(en -> {
-                                            try {
-                                                UUID pid = UUID.fromString(en.getKey());
-                                                Player target = Bukkit.getPlayer(pid);
-                                                if (target != null) {
-                                                    Map<String, Integer> updates = new HashMap<>();
-                                                    en.getValue().getAsJsonObject().entrySet().forEach(e1 -> updates.put(e1.getKey(), e1.getValue().getAsInt()));
-                                                    sync.applyFromPython(target, updates);
-                                                }
-                                            } catch (IllegalArgumentException ignored) {
-                                            }
-                                        });
-                                    }
-                                }
+    private void handleOwnerWithdraw(Player p, ShopMenuHolder holder, ShopItem si) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("owner_uuid", p.getUniqueId().toString());
+        payload.put("shop_id", holder.getShopId());
+        payload.put("item_key", si.getItemKey());
+        payload.put("qty", 1);
+        payload.put("timestamp", System.currentTimeMillis() / 1000);
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/take_stock")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException ex) {
+                plugin.getLogger().warning("Take stock failed: " + ex.getMessage());
+            }
+
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    String body = response.body() != null ? response.body().string() : "{}";
+                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                    if ("success".equals(res.get("status").getAsString()) && res.has("grant")) {
+                        res.getAsJsonArray("grant").forEach(g -> {
+                            JsonObject gg = g.getAsJsonObject();
+                            String token = gg.get("grant_token").getAsString();
+                            if (plugin.consumeGrantToken(token)) {
+                                ItemStack item = si.getRawItem().clone();
+                                item.setAmount(gg.get("qty").getAsInt());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.getInventory().addItem(item));
                             }
                         });
                     }
                 }
-            });
-        } else if (holder.getItems().containsKey(e.getSlot())) {
-            Inventory inv = e.getInventory();
-            int prev = holder.getSelected();
-            if (prev != -1) {
-                ItemStack prevStack = inv.getItem(prev);
-                if (prevStack != null) {
-                    ItemMeta pm = prevStack.getItemMeta();
-                    if (pm != null) {
-                        for (var en : new HashSet<>(pm.getEnchants().keySet())) {
-                            pm.removeEnchant(en);
-                        }
-                        pm.removeItemFlags(ItemFlag.HIDE_ENCHANTS);
-                        prevStack.setItemMeta(pm);
-                    }
-                }
             }
-            holder.setSelected(e.getSlot());
-            ItemStack newStack = inv.getItem(e.getSlot());
-            if (newStack != null) {
-                ItemMeta nm = newStack.getItemMeta();
-                if (nm != null) {
-                    // Use a universally available enchantment to create a glow effect
-                    nm.addEnchant(Enchantment.UNBREAKING, 1, true);
-                    nm.addItemFlags(ItemFlag.HIDE_ENCHANTS);
-                    newStack.setItemMeta(nm);
-                }
-            }
-            holder.setQuantity(1);
-            ShopItem si = holder.getSelectedItem();
-            String cur = si.getPrices().keySet().stream().findFirst().orElse(null);
-            holder.setCurrency(cur);
-            refreshConfirm(holder);
-        }
+        });
     }
 
-    private void refreshConfirm(ShopMenuHolder holder) {
-        Inventory inv = holder.getInventory();
-        if (inv == null) return;
-        int slot = inv.getSize() - 1;
-        ItemStack confirm = inv.getItem(slot);
-        if (confirm == null || confirm.getType() != Material.EMERALD) {
-            confirm = new ItemStack(Material.EMERALD);
+    @EventHandler
+    public void onChat(AsyncPlayerChatEvent e) {
+        PendingSale ps = pendingSales.remove(e.getPlayer().getUniqueId());
+        if (ps == null) return;
+        e.setCancelled(true);
+        String[] parts = e.getMessage().split(" ");
+        if (parts.length < 2) {
+            e.getPlayer().sendMessage(ChatColor.RED + "Cancelled");
+            Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
+            return;
         }
-        ItemMeta cm = confirm.getItemMeta();
-        List<String> lore = new ArrayList<>();
-        ShopItem si = holder.getSelectedItem();
-        if (si != null && holder.getCurrency() != null) {
-            int unit = si.getPrices().getOrDefault(holder.getCurrency(), 0);
-            int total = unit * holder.getQuantity();
-            lore.add("Qty: " + holder.getQuantity());
-            lore.add(holder.getCurrency() + ": " + total);
+        String saleName = parts[0];
+        int price;
+        try { price = Integer.parseInt(parts[1]); } catch (NumberFormatException ex) {
+            e.getPlayer().sendMessage(ChatColor.RED + "Cancelled");
+            Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
+            return;
         }
-        lore.add("");
-        lore.add("Right-click to change currency");
-        lore.add("Shift-click to change quantity");
-        cm.setDisplayName("Purchase");
-        cm.setLore(lore);
-        confirm.setItemMeta(cm);
-        inv.setItem(slot, confirm);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("owner_uuid", e.getPlayer().getUniqueId().toString());
+        payload.put("shop_id", ps.shopId);
+        payload.put("nbt_blob", ps.blob);
+        payload.put("qty", ps.qty);
+        payload.put("material", ps.item.getType().name());
+        String dn = ps.item.getItemMeta() != null ? ps.item.getItemMeta().getDisplayName() : "";
+        payload.put("display_name", dn);
+        payload.put("sale_name", saleName);
+        payload.put("price", price);
+        payload.put("currency", null);
+        payload.put("timestamp", System.currentTimeMillis() / 1000);
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/add_stock")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException ex) {
+                plugin.getLogger().warning("Add stock failed: " + ex.getMessage());
+                Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
+            }
+            @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
+        });
+        e.getPlayer().sendMessage(ChatColor.GREEN + "Registered");
     }
 }
