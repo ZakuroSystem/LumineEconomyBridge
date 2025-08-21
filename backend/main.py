@@ -1251,6 +1251,13 @@ async def shop_buy(payload: ShopBuyPayload):
                     reason,
                 ),
             )
+            messages.append(
+                {
+                    "target": "chat",
+                    "player": payload.player_uuid,
+                    "text": f"Purchase failed: {reason}",
+                }
+            )
     log_entry = {
         "type": "shop_buy",
         "timestamp": payload.timestamp,
