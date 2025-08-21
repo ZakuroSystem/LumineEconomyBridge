@@ -32,6 +32,7 @@ DB_PATH = "economy.db"
 LOG_PATH = "economy_commands.log"
 BACKUP_DIR = "backups"
 os.makedirs(BACKUP_DIR, exist_ok=True)
+API_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
 
 
 def get_db():
@@ -509,6 +510,12 @@ def logstats():
         "datasets": [{"label": "Count", "data": [stats[k] for k in stats]}],
     }
     return render_template("logstats.html", stats=stats, chart_json=json.dumps(chart))
+
+
+@app.route("/map")
+@login_required
+def map_view():
+    return render_template("map.html", token=API_TOKEN)
 
 
 @app.route("/backups", methods=["GET", "POST"])
