@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Execute Command</h2>
+<form method="post">
+  <div class="mb-3"><input name="command" class="form-control" placeholder="give Player 100 currency1"></div>
+  <button class="btn btn-primary">Run</button>
+</form>
+{% if output %}
+<pre class="mt-3">{{ output }}</pre>
+{% endif %}
+{% endblock %}

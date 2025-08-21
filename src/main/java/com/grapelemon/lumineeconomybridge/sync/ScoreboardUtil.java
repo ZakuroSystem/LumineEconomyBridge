@@ -2,7 +2,6 @@ package com.grapelemon.lumineeconomybridge.sync;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
-import org.bukkit.scoreboard.DisplaySlot;
 import org.bukkit.scoreboard.Objective;
 import org.bukkit.scoreboard.Scoreboard;
 import net.kyori.adventure.text.Component;
@@ -14,7 +13,6 @@ public final class ScoreboardUtil {
         Objective obj = board.getObjective(name);
         if (obj == null) {
             obj = board.registerNewObjective(name, "dummy", Component.text(display));
-            obj.setDisplaySlot(DisplaySlot.SIDEBAR);
         }
         return obj;
     }

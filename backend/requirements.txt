@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+PyYAML
+Flask
+requests

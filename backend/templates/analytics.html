@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Analytics</h2>
+<div class="mb-4"><canvas id="supplyChart"></canvas></div>
+<div class="mb-4"><canvas id="txChart"></canvas></div>
+<div class="mb-4"><canvas id="topChart"></canvas></div>
+<div class="mb-4">
+  <h3>Transaction Heatmap</h3>
+  <table class="table table-bordered text-center">
+    <thead>
+      <tr><th></th>{% for h in range(24) %}<th>{{ '%02d' % h }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for d in range(7) %}
+      <tr>
+        <th>{{ ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d] }}</th>
+        {% for h in range(24) %}
+        {% set v = heat[d][h] %}{% set a = 0 if max_heat==0 else v/max_heat %}
+        <td style="background-color: rgba(0,123,255,{{ a }}); color:white;">{{ v }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+new Chart(document.getElementById('supplyChart'),{type:'line',data:{{ supply_json|safe }}});
+new Chart(document.getElementById('txChart'),{type:'bar',data:{{ tx_json|safe }}});
+new Chart(document.getElementById('topChart'),{type:'bar',data:{{ top_json|safe }}});
+</script>
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Command Logs</h2>
+<form method="get" class="row g-2 mb-3">
+  <div class="col"><input class="form-control" name="executor" placeholder="Executor" value="{{ filter.executor }}"></div>
+  <div class="col"><input class="form-control" name="type" placeholder="Command" value="{{ filter.type }}"></div>
+  <div class="col">
+    <select name="result" class="form-select">
+      <option value="" {% if not filter.result %}selected{% endif %}>Any</option>
+      <option value="success" {% if filter.result=='success' %}selected{% endif %}>Success</option>
+      <option value="failure" {% if filter.result=='failure' %}selected{% endif %}>Failure</option>
+    </select>
+  </div>
+  <div class="col-auto"><button class="btn btn-primary">Filter</button></div>
+  <div class="col-auto"><a class="btn btn-secondary" href="{{ url_for('download_logs') }}">Download</a></div>
+</form>
+<table class="table table-striped datatable">
+  <thead><tr><th>Time</th><th>Executor</th><th>Command</th><th>Result</th></tr></thead>
+  <tbody>
+    {% for e in logs %}
+    <tr>
+      <td>{{ e.timestamp|fmt_ts }}</td>
+      <td>{{ e.executor }}</td>
+      <td>{{ e.command }}</td>
+      <td>{{ '✔' if e.success else '✖' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

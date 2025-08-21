@@ -1,0 +1,136 @@
+en:
+  currency:
+    create: "§aCreated currency §e{currency}§a.§r"
+    supply_header: "§6§lCurrent currency supply:§r"
+    supply_entry: "§a§e{currency}§a: {amount}§r"
+  money:
+    give: "§aGave {amount}§a §e{currency}§a to §e{target}§a.§r"
+    take: "§aRemoved {amount}§a §e{currency}§a from §e{target}§a.§r"
+    pay: "§a§e{src}§a paid §e{dst}§a {amount}§a.§r"
+  deposit: "§a§e{src}§a deposited {amount}§a to §e{dst}§a.§r"
+  withdraw: "§a§e{src}§a withdrew {amount}§a from §e{dst}§a.§r"
+  transfer: "§a§e{src}§a transferred {amount}§a to §e{dst}§a.§r"
+  receive: "§a§e{src}§a sent you {amount}§a.§r"
+  balance:
+    single: "§a§e{currency}§a: {amount}§r"
+    all: "§aBalances: {balances}§r"
+    empty: "§aNo balance.§r"
+  setbalance: "§aSet §e{target}§a's §e{currency}§a balance to {amount}§a.§r"
+  history:
+    header: "§6§lRecent transactions for §e{player}§6:§r"
+    entry: "§7{time}§r: §e{src}§7 -> §e{dst}§7 {amount} §e{currency}§7 (§d{reason}§7)§r"
+  backup:
+    created: "§aCreated backup §e{file}§a.§r"
+  restore:
+    done: "§aRestored from backup.§r"
+  account:
+    created: "§aCreated system account §e{id}§a.§r"
+  undo:
+    done: "§aUndid last action.§r"
+    none: "§cNothing to undo.§r"
+  redo:
+    done: "§aRedid last action.§r"
+    none: "§cNothing to redo.§r"
+  help:
+    header: "§6§lAvailable commands:§r"
+    lines:
+      - "§e/le balance [currency]§r"
+      - "§e/le money give <player> <currency> <amount>§r"
+      - "§e/le money take <player> <currency> <amount>§r"
+      - "§e/le money pay <src> <dst> <currency> <amount>§r"
+      - "§e/le deposit <src> <dst> <currency> <amount>§r"
+      - "§e/le withdraw <src> <dst> <currency> <amount>§r"
+      - "§e/le transfer <src> <dst> <currency> <amount>§r"
+      - "§e/le setbalance <player> <currency> <amount>§r"
+      - "§e/le history <player> [limit]§r"
+      - "§e/le currency create <id> [symbol]§r"
+      - "§e/le currency supply [id]§r"
+      - "§e/le account create <id>§r"
+      - "§e/le backup§r"
+      - "§e/le restore <file>§r"
+      - "§e/le undo§r"
+      - "§e/le redo§r"
+      - "§e/le lang <en|jp>§r"
+    suggest: "§eUse /le help for details.§r"
+  error:
+    invalid_args: "§cInvalid arguments.§r"
+    insufficient: "§cInsufficient funds.§r"
+    pay_failed: "§cPayment failed.§r"
+    no_command: "§cNo command provided.§r"
+    no_backup: "§cBackup not found.§r"
+    unknown_command: "§cUnknown command.§r"
+    frozen: "§cAccount is frozen.§r"
+  lang:
+    set: "§aLanguage set to §e{code}§a.§r"
+    invalid: "§cInvalid language.§r"
+    switch_hint: "§eType /le lang jp to switch to Japanese.§r"
+  web:
+    token: "§aUse this token on the website: §e{token}§r"
+jp:
+  currency:
+    create: "§a通貨 §e{currency}§a を作成しました。§r"
+    supply_header: "§6§l現在の通貨供給量:§r"
+    supply_entry: "§a§e{currency}§a: {amount}§r"
+  money:
+    give: "§a§e{target}§a の §e{currency}§a を {amount}§a 付与しました。§r"
+    take: "§a§e{target}§a の §e{currency}§a を {amount}§a 減少しました。§r"
+    pay: "§a§e{src}§a から §e{dst}§a へ {amount}§a 支払いました。§r"
+  deposit: "§a§e{src}§a から §e{dst}§a へ {amount}§a を入金しました。§r"
+  withdraw: "§a§e{src}§a から §e{dst}§a へ {amount}§a を引き出しました。§r"
+  transfer: "§a§e{src}§a から §e{dst}§a へ {amount}§a を送金しました。§r"
+  receive: "§a§e{src}§a から {amount}§a を受け取りました。§r"
+  balance:
+    single: "§a§e{currency}§a: {amount}§r"
+    all: "§a残高: {balances}§r"
+    empty: "§a残高は0です。§r"
+  setbalance: "§a§e{target}§a の §e{currency}§a 残高を {amount}§a に設定しました。§r"
+  history:
+    header: "§6§l{player} の最近の取引:§r"
+    entry: "§7{time}§r: §e{src}§7 -> §e{dst}§7 {amount} §e{currency}§7 (§d{reason}§7)§r"
+  backup:
+    created: "§aバックアップ §e{file}§a を作成しました。§r"
+  restore:
+    done: "§aバックアップから復元しました。§r"
+  account:
+    created: "§aシステムアカウント §e{id}§a を作成しました。§r"
+  undo:
+    done: "§a直前の操作を取り消しました。§r"
+    none: "§c取り消す操作がありません。§r"
+  redo:
+    done: "§a取り消しをやり直しました。§r"
+    none: "§cやり直す操作がありません。§r"
+  help:
+    header: "§6§l使用可能なコマンド:§r"
+    lines:
+      - "§e/le balance [currency]§r"
+      - "§e/le money give <player> <currency> <amount>§r"
+      - "§e/le money take <player> <currency> <amount>§r"
+      - "§e/le money pay <src> <dst> <currency> <amount>§r"
+      - "§e/le deposit <src> <dst> <currency> <amount>§r"
+      - "§e/le withdraw <src> <dst> <currency> <amount>§r"
+      - "§e/le transfer <src> <dst> <currency> <amount>§r"
+      - "§e/le setbalance <player> <currency> <amount>§r"
+      - "§e/le history <player> [limit]§r"
+      - "§e/le currency create <id> [symbol]§r"
+      - "§e/le currency supply [id]§r"
+      - "§e/le account create <id>§r"
+      - "§e/le backup§r"
+      - "§e/le restore <file>§r"
+      - "§e/le undo§r"
+      - "§e/le redo§r"
+      - "§e/le lang <en|jp>§r"
+    suggest: "§e詳細は /le help を実行してください。§r"
+  error:
+    invalid_args: "§c引数が不正です。§r"
+    insufficient: "§c残高が不足しています。§r"
+    pay_failed: "§c支払いに失敗しました。§r"
+    no_command: "§cコマンドが指定されていません。§r"
+    no_backup: "§cバックアップが見つかりません。§r"
+    unknown_command: "§c不明なコマンドです。§r"
+    frozen: "§cアカウントは凍結されています。§r"
+  lang:
+    set: "§a言語を §e{code}§a に設定しました。§r"
+    invalid: "§c無効な言語です。§r"
+    switch_hint: "§e日本語表示に変更するには /le lang jp と入力してください。§r"
+  web:
+    token: "§a以下のトークンをWebサイトで使用してください: §e{token}§r"
