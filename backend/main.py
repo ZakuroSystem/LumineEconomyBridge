@@ -11,6 +11,7 @@ import shutil
 import threading
 import asyncio
 import secrets
+import base64
 
 # SQLite persistence
 conn = sqlite3.connect(
@@ -120,6 +121,83 @@ with conn:
         """
     )
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shops (
+            shop_id TEXT PRIMARY KEY,
+            owner_uuid TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at INTEGER NOT NULL,
+            last_activity_at INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shop_locations (
+            shop_id TEXT NOT NULL,
+            world TEXT NOT NULL,
+            x REAL NOT NULL,
+            y REAL NOT NULL,
+            z REAL NOT NULL,
+            PRIMARY KEY(shop_id, world, x, y, z),
+            FOREIGN KEY(shop_id) REFERENCES shops(shop_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shop_items (
+            item_key TEXT PRIMARY KEY,
+            material TEXT NOT NULL,
+            display_name TEXT,
+            nbt_blob BLOB NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shop_stock (
+            shop_id TEXT NOT NULL,
+            item_key TEXT NOT NULL,
+            stock INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY(shop_id, item_key),
+            FOREIGN KEY(shop_id) REFERENCES shops(shop_id),
+            FOREIGN KEY(item_key) REFERENCES shop_items(item_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shop_prices (
+            shop_id TEXT NOT NULL,
+            item_key TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            price INTEGER NOT NULL,
+            PRIMARY KEY(shop_id, item_key, currency),
+            FOREIGN KEY(shop_id) REFERENCES shops(shop_id),
+            FOREIGN KEY(item_key) REFERENCES shop_items(item_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shop_tx (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shop_id TEXT NOT NULL,
+            buyer_uuid TEXT NOT NULL,
+            item_key TEXT NOT NULL,
+            qty INTEGER NOT NULL,
+            currency TEXT NOT NULL,
+            total_price INTEGER NOT NULL,
+            timestamp INTEGER NOT NULL,
+            result TEXT NOT NULL,
+            reason TEXT
+        )
+        """
+    )
+
 app = FastAPI()
 
 db_lock = threading.Lock()
@@ -196,6 +274,25 @@ class DeltaPayload(BaseModel):
 class RewritePayload(BaseModel):
     player: str
     scoreboard: Dict[str, int]
+    timestamp: int
+
+
+class ShopPlacePayload(BaseModel):
+    shop_id: str
+    owner_uuid: str
+    world: str
+    x: float
+    y: float
+    z: float
+    timestamp: int
+
+
+class ShopBuyPayload(BaseModel):
+    player_uuid: str
+    shop_id: str
+    item_key: str
+    qty: int
+    currency: str
     timestamp: int
 
 
@@ -1003,3 +1100,174 @@ async def rewrite(payload: RewritePayload):
             "delay": 5,
         })
     return {"status": "success", "messages": msgs}
+
+
+@app.post("/api/shop/place")
+async def shop_place(payload: ShopPlacePayload):
+    with transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            (payload.shop_id, payload.owner_uuid, "active", payload.timestamp, payload.timestamp),
+        )
+        cur.execute(
+            "INSERT OR REPLACE INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
+            (payload.shop_id, payload.world, payload.x, payload.y, payload.z),
+        )
+    return {"status": "ok"}
+
+
+@app.get("/api/shop/items")
+async def shop_items(shop_id: str):
+    with transaction() as cur:
+        srow = cur.execute("SELECT status FROM shops WHERE shop_id=?", (shop_id,)).fetchone()
+        if not srow:
+            return {"status": "error", "reason": "shop_not_found"}
+        if srow["status"] != "active":
+            return {"status": srow["status"]}
+        rows = cur.execute(
+            "SELECT st.item_key, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+            (shop_id,),
+        ).fetchall()
+        items = []
+        for r in rows:
+            price_rows = cur.execute(
+                "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                (shop_id, r["item_key"]),
+            ).fetchall()
+            prices = {pr["currency"]: pr["price"] for pr in price_rows}
+            items.append(
+                {
+                    "item_key": r["item_key"],
+                    "material": r["material"],
+                    "display_name": r["display_name"],
+                    "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
+                    "stock": r["stock"],
+                    "prices": prices,
+                }
+            )
+        return {"status": "active", "items": items}
+
+
+@app.post("/api/shop/buy")
+async def shop_buy(payload: ShopBuyPayload):
+    messages: List[Dict[str, str]] = []
+    scoreboards: Dict[str, Dict[str, int]] = {}
+    grant: List[Dict[str, str]] = []
+    success = False
+    reason: Optional[str] = None
+    total_price = 0
+    with transaction() as cur:
+        shop = cur.execute(
+            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+            (payload.shop_id,),
+        ).fetchone()
+        if not shop:
+            reason = "shop_not_found"
+        elif shop["status"] != "active":
+            reason = "shop_suspended"
+        else:
+            owner = shop["owner_uuid"]
+            stock_row = cur.execute(
+                "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                (payload.shop_id, payload.item_key),
+            ).fetchone()
+            if not stock_row or stock_row["stock"] < payload.qty:
+                reason = "insufficient_stock"
+            else:
+                price_row = cur.execute(
+                    "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
+                    (payload.shop_id, payload.item_key, payload.currency),
+                ).fetchone()
+                if not price_row:
+                    reason = "invalid_currency"
+                else:
+                    total_price = price_row["price"] * payload.qty
+                    if get_balance(cur, payload.player_uuid, payload.currency) < total_price:
+                        reason = "insufficient_funds"
+                    elif not transfer(
+                        cur, payload.player_uuid, owner, payload.currency, total_price
+                    ):
+                        reason = "transfer_failed"
+                    else:
+                        cur.execute(
+                            "UPDATE shop_stock SET stock=stock-? WHERE shop_id=? AND item_key=?",
+                            (payload.qty, payload.shop_id, payload.item_key),
+                        )
+                        cur.execute(
+                            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                            (payload.timestamp, payload.shop_id),
+                        )
+                        cur.execute(
+                            "INSERT INTO shop_tx(shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result) VALUES(?,?,?,?,?,?,?,?)",
+                            (
+                                payload.shop_id,
+                                payload.player_uuid,
+                                payload.item_key,
+                                payload.qty,
+                                payload.currency,
+                                total_price,
+                                payload.timestamp,
+                                "success",
+                            ),
+                        )
+                        success = True
+                        messages.append(
+                            {
+                                "target": "chat",
+                                "player": payload.player_uuid,
+                                "text": f"Purchased x{payload.qty}",
+                            }
+                        )
+                        messages.append(
+                            {
+                                "target": "chat",
+                                "player": owner,
+                                "text": f"Sold x{payload.qty}",
+                            }
+                        )
+                        scoreboards[payload.player_uuid] = get_scoreboard(
+                            cur, payload.player_uuid
+                        )
+                        scoreboards[owner] = get_scoreboard(cur, owner)
+                        grant.append(
+                            {
+                                "item_key": payload.item_key,
+                                "qty": payload.qty,
+                                "grant_token": secrets.token_hex(8),
+                            }
+                        )
+        if not success:
+            cur.execute(
+                "INSERT INTO shop_tx(shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,reason) VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    payload.shop_id,
+                    payload.player_uuid,
+                    payload.item_key,
+                    payload.qty,
+                    payload.currency,
+                    total_price,
+                    payload.timestamp,
+                    "fail",
+                    reason,
+                ),
+            )
+    log_entry = {
+        "type": "shop_buy",
+        "timestamp": payload.timestamp,
+        "shop_id": payload.shop_id,
+        "buyer": payload.player_uuid,
+        "item_key": payload.item_key,
+        "qty": payload.qty,
+        "currency": payload.currency,
+        "total_price": total_price,
+        "result": "success" if success else "error",
+        "reason": reason,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    return {
+        "status": "success" if success else "error",
+        "messages": messages,
+        "scoreboards": scoreboards,
+        "grant": grant,
+    }

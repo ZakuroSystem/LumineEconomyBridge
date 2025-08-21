@@ -6,11 +6,20 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import okhttp3.*;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.Location;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.BlockStateMeta;
+import org.bukkit.persistence.PersistentDataContainer;
+import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.NamespacedKey;
+import org.bukkit.block.BlockState;
+import org.bukkit.block.TileState;
 import net.md_5.bungee.api.ChatMessageType;
 import net.md_5.bungee.api.chat.TextComponent;
 
@@ -60,6 +69,34 @@ public class LeCommandExecutor implements CommandExecutor {
                 case "reload" -> {
                     plugin.reloadBridge();
                     p.sendMessage(Lang.get("bridge-reloaded"));
+                    return true;
+                }
+                case "shop" -> {
+                    if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
+                        String shopId = args[2];
+                        ItemStack barrel = new ItemStack(Material.BARREL);
+                        ItemMeta meta = barrel.getItemMeta();
+                        PersistentDataContainer c = meta.getPersistentDataContainer();
+                        NamespacedKey keyShop = new NamespacedKey(plugin, "le_shop");
+                        NamespacedKey keyId = new NamespacedKey(plugin, "shop_id");
+                        c.set(keyShop, PersistentDataType.BYTE, (byte)1);
+                        c.set(keyId, PersistentDataType.STRING, shopId);
+                        if (meta instanceof BlockStateMeta bsm) {
+                            BlockState state = bsm.getBlockState();
+                            if (state instanceof TileState tile) {
+                                PersistentDataContainer tc = tile.getPersistentDataContainer();
+                                tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
+                                tc.set(keyId, PersistentDataType.STRING, shopId);
+                                tile.update(true);
+                                bsm.setBlockState(tile);
+                            }
+                        }
+                        barrel.setItemMeta(meta);
+                        p.getInventory().addItem(barrel);
+                        p.sendMessage("Shop barrel created: " + shopId);
+                    } else {
+                        p.sendMessage("Usage: /le shop create <shop_id>");
+                    }
                     return true;
                 }
             }

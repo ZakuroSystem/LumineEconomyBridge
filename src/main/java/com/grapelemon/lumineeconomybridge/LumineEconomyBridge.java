@@ -6,6 +6,7 @@ import com.google.gson.JsonParser;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import com.grapelemon.lumineeconomybridge.shop.ShopListener;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -40,6 +41,7 @@ public class LumineEconomyBridge extends JavaPlugin {
         getCommand("le").setExecutor(executor);
         getCommand("le").setTabCompleter(new LeTabCompleter());
         getServer().getPluginManager().registerEvents(new PlayerListener(this), this);
+        getServer().getPluginManager().registerEvents(new ShopListener(this), this);
 
         startBridge();
     }
