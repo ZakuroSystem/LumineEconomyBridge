@@ -19,12 +19,18 @@ from tile_format import PIXEL_COUNT, TILE_SIZE, encode_tile
 class TileStore:
     """Store tile files on disk and track invalidation/merge queues."""
 
-    def __init__(self, base_dir: str, log_fn: Callable[[Dict], None] | None = None) -> None:
+    def __init__(
+        self,
+        base_dir: str,
+        log_fn: Callable[[Dict], None] | None = None,
+        broadcast_fn: Callable[[str, int, int], None] | None = None,
+    ) -> None:
         self.base_dir = base_dir
         os.makedirs(self.base_dir, exist_ok=True)
         self._regen_queue: List[Tuple[str, int, int]] = []
         self._dirty: Dict[Tuple[str, int, int], float] = {}
         self.log_fn = log_fn
+        self.broadcast_fn = broadcast_fn
         self._merge_times: List[float] = []
 
     def tile_path(self, world: str, tx: int, tz: int) -> str:
@@ -182,6 +188,8 @@ class TileStore:
                     "merge_ms": int(duration),
                 }
             )
+        if self.broadcast_fn:
+            self.broadcast_fn(world, tx, tz)
 
     def process_queue(self) -> None:
         """Process all queued tile merges."""

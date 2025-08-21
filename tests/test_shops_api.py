@@ -28,10 +28,10 @@ def test_shops_endpoint():
             "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
             ("s1", "world", 1.0, 64.0, 2.0),
         )
-    client = TestClient(app)
     headers = {"X-LE-Token": main.SHARED_TOKEN}
-    resp = client.get("/shops", headers=headers)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data and data[0]["shop_id"] == "s1"
-    assert data[0]["world"] == "world"
+    with TestClient(app) as client:
+        resp = client.get("/shops", headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data and data[0]["shop_id"] == "s1"
+        assert data[0]["world"] == "world"

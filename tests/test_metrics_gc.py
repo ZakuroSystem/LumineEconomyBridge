@@ -38,9 +38,9 @@ def test_metrics_and_gc():
         assert removed == 1
         assert os.path.exists(main.tile_store.tile_path("world", 1, 0))
 
-        client = TestClient(app)
-        metrics = client.get("/metrics")
-        assert metrics.status_code == 200
-        body = metrics.text
-        assert "tile_queue_len" in body
-        assert "tile_disk_bytes" in body
+        with TestClient(app) as client:
+            metrics = client.get("/metrics")
+            assert metrics.status_code == 200
+            body = metrics.text
+            assert "tile_queue_len" in body
+            assert "tile_disk_bytes" in body

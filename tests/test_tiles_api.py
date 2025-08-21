@@ -21,24 +21,26 @@ def test_tile_endpoints_with_token():
         indices = [0] * 4096
         main.tile_store.save_tile("world", 0, 0, indices)
 
-        client = TestClient(app)
-        headers = {"X-LE-Token": main.SHARED_TOKEN}
-        resp = client.get("/tiles/world/0/0", headers=headers)
-        assert resp.status_code == 200
-        assert len(resp.content) > 24
+        with TestClient(app) as client:
+            headers = {"X-LE-Token": main.SHARED_TOKEN}
+            resp = client.get("/tiles/world/0/0", headers=headers)
+            assert resp.status_code == 200
+            assert len(resp.content) > 24
 
-        head = client.head("/tiles/world/0/0", headers=headers)
-        assert head.status_code == 200
-        assert "Last-Modified" in head.headers
-        lm = head.headers["Last-Modified"]
-        not_mod = client.get(
-            "/tiles/world/0/0", headers={**headers, "If-Modified-Since": lm}
-        )
-        assert not_mod.status_code == 304
+            head = client.head("/tiles/world/0/0", headers=headers)
+            assert head.status_code == 200
+            assert "Last-Modified" in head.headers
+            lm = head.headers["Last-Modified"]
+            not_mod = client.get(
+                "/tiles/world/0/0", headers={**headers, "If-Modified-Since": lm}
+            )
+            assert not_mod.status_code == 304
 
-        status = client.get("/tiles/status", headers=headers)
-        assert status.status_code == 200
-        assert status.json()["tile_count"] == 1
+            status = client.get("/tiles/status", headers=headers)
+            assert status.status_code == 200
+            assert status.json()["tile_count"] == 1
 
-        bad = client.get("/tiles/world/0/0", headers={"X-LE-Token": "bad"})
-        assert bad.status_code == 401
+            bad = client.get(
+                "/tiles/world/0/0", headers={"X-LE-Token": "bad"}
+            )
+            assert bad.status_code == 401

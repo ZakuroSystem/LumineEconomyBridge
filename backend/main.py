@@ -1,10 +1,19 @@
-from fastapi import FastAPI, Response, HTTPException, Header, Depends, Request
+from fastapi import (
+    FastAPI,
+    Response,
+    HTTPException,
+    Header,
+    Depends,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel
 from typing import Dict, Optional, List, Union, Tuple
 from tile_store import TileStore
 import sqlite3
 import json
-from contextlib import closing, contextmanager, asynccontextmanager
+from contextlib import closing, contextmanager, asynccontextmanager, suppress
 import yaml
 import os
 import time
@@ -314,9 +323,21 @@ async def _tile_worker() -> None:
         await asyncio.sleep(0.2)
 
 
+_tile_worker_task: asyncio.Task | None = None
+
+
 @app.on_event("startup")
 async def _start_tile_worker() -> None:
-    asyncio.create_task(_tile_worker())
+    global _tile_worker_task
+    _tile_worker_task = asyncio.create_task(_tile_worker())
+
+
+@app.on_event("shutdown")
+async def _stop_tile_worker() -> None:
+    if _tile_worker_task:
+        _tile_worker_task.cancel()
+        with suppress(Exception):
+            await _tile_worker_task
 
 db_lock = threading.Lock()
 
@@ -654,8 +675,32 @@ def sanitize_messages(msgs: List[Dict[str, str]]) -> None:
     for m in msgs:
         m["text"] = sanitize_text(m.get("text", ""))
 
-# attach logger to tile store once defined
+# websocket broadcast of tile updates ---------------------------------------
+
+WS_CLIENTS: List[WebSocket] = []
+
+
+async def _broadcast_tile_update(world: str, tx: int, tz: int) -> None:
+    msg = json.dumps({"world": world, "tx": tx, "tz": tz, "ts": int(time.time() * 1000)})
+    for ws in list(WS_CLIENTS):
+        try:
+            await ws.send_text(msg)
+        except Exception:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+            WS_CLIENTS.remove(ws)
+
+
+def notify_tile_update(world: str, tx: int, tz: int) -> None:
+    loop = asyncio.get_event_loop()
+    loop.create_task(_broadcast_tile_update(world, tx, tz))
+
+
+# attach helpers to tile store once defined
 tile_store.log_fn = append_log
+tile_store.broadcast_fn = notify_tile_update
 
 
 BACKUP_DIR = "backups"
@@ -2405,3 +2450,17 @@ def shops(token: None = Depends(verify_token)):
             }
         )
     return result
+
+
+@app.websocket("/ws/tiles")
+async def ws_tiles(ws: WebSocket):
+    await ws.accept()
+    WS_CLIENTS.append(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if ws in WS_CLIENTS:
+            WS_CLIENTS.remove(ws)
