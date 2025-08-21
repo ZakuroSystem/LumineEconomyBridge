@@ -6,6 +6,9 @@ import org.bukkit.scoreboard.Objective;
 import org.bukkit.scoreboard.Scoreboard;
 import net.kyori.adventure.text.Component;
 
+import java.util.HashMap;
+import java.util.Map;
+
 public final class ScoreboardUtil {
     private ScoreboardUtil() {}
 
@@ -28,18 +31,31 @@ public final class ScoreboardUtil {
         obj.getScore(entry).setScore(value);
     }
 
-    public static int[] readBothSync(Player p) {
+    /**
+     * Read all currency objectives for the given player. Objectives whose
+     * names start with "currency" are treated as currency objectives.
+     */
+    public static Map<String, Integer> readAllSync(Player p) {
         Scoreboard sb = p.getScoreboard() != null ? p.getScoreboard() : Bukkit.getScoreboardManager().getMainScoreboard();
         String entry = p.getName();
-        int c1 = readCurrency(sb, "currency1", entry);
-        int c2 = readCurrency(sb, "currency2", entry);
-        return new int[]{c1, c2};
+        Map<String, Integer> result = new HashMap<>();
+        for (Objective obj : sb.getObjectives()) {
+            String name = obj.getName();
+            if (name.startsWith("currency")) {
+                result.put(name, obj.getScore(entry).getScore());
+            }
+        }
+        return result;
     }
 
-    public static void applyAbsoluteSync(Player p, Integer c1, Integer c2) {
+    /**
+     * Apply absolute scoreboard values for all currencies.
+     */
+    public static void applyAbsoluteSync(Player p, Map<String, Integer> values) {
         Scoreboard sb = p.getScoreboard() != null ? p.getScoreboard() : Bukkit.getScoreboardManager().getMainScoreboard();
         String entry = p.getName();
-        if (c1 != null) writeCurrency(sb, "currency1", "Currency 1", entry, c1);
-        if (c2 != null) writeCurrency(sb, "currency2", "Currency 2", entry, c2);
+        for (Map.Entry<String, Integer> e : values.entrySet()) {
+            writeCurrency(sb, e.getKey(), e.getKey(), entry, e.getValue());
+        }
     }
 }
