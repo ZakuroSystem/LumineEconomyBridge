@@ -348,7 +348,7 @@ public class ShopListener implements Listener {
                 ItemMeta nm = newStack.getItemMeta();
                 if (nm != null) {
                     // Use a universally available enchantment to create a glow effect
-                    nm.addEnchant(Enchantment.DURABILITY, 1, true);
+                    nm.addEnchant(Enchantment.UNBREAKING, 1, true);
                     nm.addItemFlags(ItemFlag.HIDE_ENCHANTS);
                     newStack.setItemMeta(nm);
                 }
