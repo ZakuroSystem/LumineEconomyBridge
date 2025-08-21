@@ -20,6 +20,7 @@ import secrets
 from datetime import datetime
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
+from typing import Callable, Dict, Iterable, Tuple
 
 app = Flask(__name__)
 app.secret_key = "lumineeconomy"
@@ -1149,6 +1150,108 @@ def analytics():
         heat=heat,
         max_heat=max_heat,
     )
+
+
+class PaletteClient:
+    """HTTP client for the Java mapcolor plugin."""
+
+    def __init__(self, base_url: str, token: str) -> None:
+        self._session = requests.Session()
+        self._session.headers.update({"X-LE-Token": token})
+        self.base_url = base_url.rstrip("/")
+
+    def palette(self) -> Dict:
+        resp = self._session.get(f"{self.base_url}/plugin/mapcolor/palette", timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
+    def resolve(self, blocks: Iterable[str]) -> Iterable[int]:
+        resp = self._session.post(
+            f"{self.base_url}/plugin/mapcolor/resolve",
+            json={"blocks": list(blocks)},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json().get("indices", [])
+
+
+def _chunk_exists(region, cx: int, cz: int) -> bool:
+    """Check whether a chunk exists in ``region`` across anvil versions."""
+
+    if hasattr(region, "chunk_data_exists"):
+        return region.chunk_data_exists(cx, cz)  # type: ignore[attr-defined]
+    off, _ = region.chunk_location(cx, cz)
+    return off != 0
+
+
+def generate_world_tiles(
+    world: str,
+    region_dir: str,
+    client: PaletteClient,
+    store: "TileStore",
+    log_fn: Callable[[Dict], None] | None = None,
+) -> None:
+    """Process all region files under ``region_dir`` and output tiles."""
+
+    from collections import defaultdict
+
+    import anvil
+    from tile_format import PIXEL_COUNT, TILE_SIZE
+
+    client.palette()  # ensure palette sync
+    cache: Dict[str, int] = {}
+    tiles: Dict[Tuple[int, int], list[int]] = defaultdict(lambda: [0] * PIXEL_COUNT)
+
+    for fname in os.listdir(region_dir):
+        if not fname.endswith(".mca"):
+            continue
+        r = anvil.Region.from_file(os.path.join(region_dir, fname))
+        for cx in range(32):
+            for cz in range(32):
+                if not _chunk_exists(r, cx, cz):
+                    continue
+                try:
+                    chunk = r.get_chunk(cx, cz)
+                except Exception:
+                    continue
+                global_cx = r.x * 32 + cx
+                global_cz = r.z * 32 + cz
+                tx, tz = global_cx // 4, global_cz // 4
+                tile = tiles[tx, tz]
+                for lx in range(16):
+                    for lz in range(16):
+                        def resolve(name: str) -> int:
+                            if name not in cache:
+                                cache[name] = next(iter(client.resolve([name]) or [0]))
+                            return cache[name]
+
+                        idx = _top_index(chunk, lx, lz, resolve)
+                        px = (global_cx % 4) * 16 + lx
+                        pz = (global_cz % 4) * 16 + lz
+                        tile[pz * TILE_SIZE + px] = idx
+
+    for (tx, tz), indices in tiles.items():
+        store.save_tile(world, tx, tz, indices)
+        if log_fn:
+            log_fn(
+                {
+                    "type": "tile_generation",
+                    "world": world,
+                    "tx": tx,
+                    "tz": tz,
+                }
+            )
+
+
+def _top_index(chunk: "anvil.Chunk", x: int, z: int, resolver: Callable[[str], int]) -> int:
+    """Return the colour index for the column at (x,z)."""
+
+    for y in range(250, -64, -1):
+        block = chunk.get_block(x, y, z)
+        name = getattr(block, "id", "minecraft:air")
+        if name != "minecraft:air":
+            return resolver(name)
+    return 0
 
 
 if __name__ == "__main__":
