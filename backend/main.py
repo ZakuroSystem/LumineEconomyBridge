@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import Dict, Optional, List, Union
+from typing import Dict, Optional, List, Union, Tuple
 import sqlite3
 import json
 from contextlib import closing, contextmanager, asynccontextmanager
@@ -13,6 +13,8 @@ import asyncio
 import secrets
 import base64
 import hashlib
+import re
+import html
 
 # SQLite persistence
 conn = sqlite3.connect(
@@ -124,6 +126,14 @@ with conn:
 
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS admin_users (
+            name TEXT PRIMARY KEY
+        )
+        """
+    )
+
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS shops (
             shop_id TEXT PRIMARY KEY,
             owner_uuid TEXT NOT NULL,
@@ -161,9 +171,11 @@ with conn:
         CREATE TABLE IF NOT EXISTS shop_stock (
             shop_id TEXT NOT NULL,
             item_key TEXT NOT NULL,
+            sale_name TEXT NOT NULL,
             stock INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             PRIMARY KEY(shop_id, item_key),
+            UNIQUE(shop_id, sale_name),
             FOREIGN KEY(shop_id) REFERENCES shops(shop_id),
             FOREIGN KEY(item_key) REFERENCES shop_items(item_key)
         )
@@ -186,6 +198,7 @@ with conn:
         """
         CREATE TABLE IF NOT EXISTS shop_tx (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_tx_id TEXT UNIQUE,
             shop_id TEXT NOT NULL,
             buyer_uuid TEXT NOT NULL,
             item_key TEXT NOT NULL,
@@ -194,7 +207,72 @@ with conn:
             total_price INTEGER NOT NULL,
             timestamp INTEGER NOT NULL,
             result TEXT NOT NULL,
-            reason TEXT
+            reason TEXT,
+            grant_token TEXT,
+            world TEXT,
+            x INTEGER,
+            y INTEGER,
+            z INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shop_owners (
+            shop_id TEXT NOT NULL,
+            owner_uuid TEXT NOT NULL,
+            PRIMARY KEY (shop_id, owner_uuid)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shop_visits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shop_id TEXT NOT NULL,
+            visitor_uuid TEXT NOT NULL,
+            timestamp INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sale_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_ts INTEGER NOT NULL,
+            end_ts INTEGER NOT NULL,
+            pct REAL NOT NULL,
+            account TEXT NOT NULL,
+            active INTEGER NOT NULL
+        )
+        """
+    )
+    try:
+        conn.execute("ALTER TABLE shop_tx ADD COLUMN client_tx_id TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE shop_tx ADD COLUMN grant_token TEXT")
+    except sqlite3.OperationalError:
+        pass
+    for col, typ in [
+        ("world", "TEXT"),
+        ("x", "INTEGER"),
+        ("y", "INTEGER"),
+        ("z", "INTEGER"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE shop_tx ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError:
+            pass
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_shop_tx_client ON shop_tx(client_tx_id)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pending_messages (
+            uuid TEXT NOT NULL,
+            payload TEXT NOT NULL
         )
         """
     )
@@ -295,6 +373,7 @@ class ShopBuyPayload(BaseModel):
     qty: int
     currency: str
     timestamp: int
+    client_tx_id: str
 
 
 class ShopAddStockPayload(BaseModel):
@@ -304,6 +383,9 @@ class ShopAddStockPayload(BaseModel):
     material: str
     display_name: Optional[str]
     qty: int
+    price: int
+    sale_name: str
+    currency: Optional[str] = None
 
 
 class ShopTakeStockPayload(BaseModel):
@@ -316,7 +398,8 @@ class ShopTakeStockPayload(BaseModel):
 class ShopSetPricePayload(BaseModel):
     owner_uuid: str
     shop_id: str
-    item_key: str
+    item_key: Optional[str] = None
+    sale_name: Optional[str] = None
     currency: str
     price: int
 
@@ -337,6 +420,35 @@ class ShopRemovePayload(BaseModel):
     refund: bool = False
 
 
+class ShopRemoveItemPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    sale_name: str
+    refund: bool = False
+
+
+class ShopAddOwnerPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    target_uuid: str
+
+
+class ShopRemoveOwnerPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    target_uuid: str
+
+
+class ShopVisitPayload(BaseModel):
+    player_uuid: str
+    shop_id: str
+    timestamp: int
+
+
+class AdminUserPayload(BaseModel):
+    name: str
+
+
 def ensure_currency(cur: sqlite3.Cursor, currency: str, symbol: Optional[str] = None) -> None:
     cur.execute(
         "INSERT OR IGNORE INTO currencies(name, symbol) VALUES (?,?)",
@@ -354,6 +466,23 @@ def resolve_currency(cur: sqlite3.Cursor, token: str) -> str:
     return row["name"] if row else token
 
 
+def is_currency(cur: sqlite3.Cursor, token: str) -> bool:
+    return (
+        cur.execute(
+            "SELECT 1 FROM currencies WHERE LOWER(name)=LOWER(?) OR LOWER(symbol)=LOWER(?)",
+            (token, token),
+        ).fetchone()
+        is not None
+    )
+
+
+def get_default_currency(cur: sqlite3.Cursor) -> str:
+    row = cur.execute(
+        "SELECT value FROM settings WHERE key='default_currency'"
+    ).fetchone()
+    return resolve_currency(cur, row["value"]) if row else "currency1"
+
+
 def get_uuid(name: str) -> Optional[str]:
     with closing(conn.cursor()) as cur:
         row = cur.execute("SELECT uuid FROM name_index WHERE name=?", (name.lower(),)).fetchone()
@@ -364,6 +493,19 @@ def get_name(uuid: str) -> Optional[str]:
     with closing(conn.cursor()) as cur:
         row = cur.execute("SELECT name FROM name_index WHERE uuid=? LIMIT 1", (uuid,)).fetchone()
         return row["name"] if row else None
+
+
+def is_shop_owner(cur: sqlite3.Cursor, shop_id: str, uuid: str) -> bool:
+    if cur.execute(
+        "SELECT 1 FROM shop_owners WHERE shop_id=? AND owner_uuid=?",
+        (shop_id, uuid),
+    ).fetchone():
+        return True
+    row = cur.execute(
+        "SELECT owner_uuid FROM shops WHERE shop_id=?",
+        (shop_id,),
+    ).fetchone()
+    return bool(row and row["owner_uuid"] == uuid)
 
 
 def get_balance(cur: sqlite3.Cursor, uuid: str, currency: str) -> int:
@@ -435,7 +577,43 @@ def format_amount(cur: sqlite3.Cursor, amount: int, currency: str) -> str:
     return f"§e{symbol}{amount:,}§r"
 
 
+def is_online(cur: sqlite3.Cursor, uuid: str, now: int) -> bool:
+    row = cur.execute("SELECT last_seen FROM players WHERE uuid=?", (uuid,)).fetchone()
+    return bool(row and now - row["last_seen"] < 30)
+
+
+def queue_message(cur: sqlite3.Cursor, msg: Dict[str, str]) -> None:
+    safe = dict(msg)
+    safe["text"] = sanitize_text(safe.get("text", ""))
+    cur.execute(
+        "INSERT INTO pending_messages(uuid, payload) VALUES(?, ?)",
+        (safe.get("player"), json.dumps(safe, ensure_ascii=False)),
+    )
+
+
 LOG_PATH = "economy_commands.log"
+
+
+COLOR_CODE_PATTERN = re.compile(r"[&§][0-9A-FK-ORa-fk-or]")
+
+
+def sanitize_text(text: str) -> str:
+    """Strip color codes and escape HTML for safe logging/display."""
+    return html.escape(COLOR_CODE_PATTERN.sub("", text))
+
+
+def append_log(entry: Dict[str, Union[str, int, float]]) -> None:
+    safe_entry = {
+        k: sanitize_text(v) if isinstance(v, str) else v
+        for k, v in entry.items()
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(safe_entry, ensure_ascii=False) + "\n")
+
+
+def sanitize_messages(msgs: List[Dict[str, str]]) -> None:
+    for m in msgs:
+        m["text"] = sanitize_text(m.get("text", ""))
 
 
 BACKUP_DIR = "backups"
@@ -491,7 +669,7 @@ def restore_db(path: str) -> None:
         )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+conn.execute("PRAGMA synchronous=NORMAL")
 
 
 async def auto_backup_loop():
@@ -533,8 +711,7 @@ def log_command(payload: MessagePayload, success: bool, error: Optional[str] = N
     }
     if not success and error:
         entry["error"] = error
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    append_log(entry)
 
 
 def record_transaction(
@@ -561,6 +738,28 @@ def push_undo(executor: str, actions: List[Dict[str, Optional[str]]]) -> None:
     if len(stack) > 5:
         stack.pop(0)
     redo_stack[executor] = None
+
+
+@app.get("/api/admin/list")
+async def get_admin_list():
+    rows = conn.execute("SELECT name FROM admin_users").fetchall()
+    return {"admins": [r["name"] for r in rows]}
+
+
+@app.post("/api/admin/add")
+async def add_admin(payload: AdminUserPayload):
+    with conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO admin_users(name) VALUES(?)", (payload.name,)
+        )
+    return {"status": "success"}
+
+
+@app.post("/api/admin/remove")
+async def remove_admin(payload: AdminUserPayload):
+    with conn:
+        conn.execute("DELETE FROM admin_users WHERE name=?", (payload.name,))
+    return {"status": "success"}
 
 
 @app.get("/api/config")
@@ -595,6 +794,15 @@ async def message(payload: MessagePayload):
         except ValueError:
             return None
 
+    def parse_currency_amount(start: int) -> Tuple[str, Optional[int]]:
+        if len(cmd) > start and is_currency(cur, cmd[start]):
+            currency = resolve_currency(cur, cmd[start])
+            amt = parse_amount(start + 1)
+        else:
+            currency = get_default_currency(cur)
+            amt = parse_amount(start)
+        return currency, amt
+
     if action == "lang":
         if len(cmd) >= 2 and cmd[1] in {"en", "jp"}:
             set_lang(payload.player, cmd[1])
@@ -615,7 +823,7 @@ async def message(payload: MessagePayload):
         except FileNotFoundError:
             success = False
             error_text = t("error.no_backup", lang=exec_lang)
-    elif action == "webtoken":
+    elif action in {"webtoken", "weblink"}:
         token = secrets.token_hex(4)
         expires = payload.timestamp + 600
         with transaction() as cur:
@@ -648,6 +856,14 @@ async def message(payload: MessagePayload):
                     symbol = cmd[3] if len(cmd) >= 4 else None
                     ensure_currency(cur, cname, symbol)
                     messages.append({"target": "chat", "text": t("currency.create", lang=exec_lang, currency=cname)})
+                elif sub == "default" and len(cmd) >= 3:
+                    cname = resolve_currency(cur, cmd[2])
+                    ensure_currency(cur, cname)
+                    cur.execute(
+                        "INSERT OR REPLACE INTO settings(key,value) VALUES('default_currency', ?)",
+                        (cname,),
+                    )
+                    messages.append({"target": "chat", "text": t("currency.default", lang=exec_lang, currency=cname)})
                 elif sub == "supply":
                     if len(cmd) >= 3:
                         cname = resolve_currency(cur, cmd[2])
@@ -688,10 +904,9 @@ async def message(payload: MessagePayload):
                     error_text = t("error.invalid_args", lang=exec_lang)
             elif action == "money" and len(cmd) >= 2:
                 sub = cmd[1].lower()
-                if sub in {"give", "take"} and len(cmd) >= 5:
+                if sub in {"give", "take"} and len(cmd) >= 4:
                     target_name = cmd[2].lower()
-                    currency = resolve_currency(cur, cmd[3])
-                    amt = parse_amount(4)
+                    currency, amt = parse_currency_amount(3)
                     target_uuid = get_uuid(target_name)
                     if amt is None or target_uuid is None:
                         success = False
@@ -746,11 +961,80 @@ async def message(payload: MessagePayload):
                                     "amount": amt,
                                 })
                                 scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
-                elif sub == "pay" and len(cmd) >= 6:
-                    src_name = cmd[2].lower()
-                    dst_name = cmd[3].lower()
-                    currency = resolve_currency(cur, cmd[4])
-                    amt = parse_amount(5)
+                elif sub == "top":
+                    currency = None
+                    page = 1
+                    if len(cmd) >= 4 and is_currency(cur, cmd[2]):
+                        currency = resolve_currency(cur, cmd[2])
+                        try:
+                            page = max(1, int(cmd[3]))
+                        except ValueError:
+                            success = False
+                            error_text = t("error.invalid_args", lang=exec_lang)
+                    elif len(cmd) >= 3:
+                        if is_currency(cur, cmd[2]):
+                            currency = resolve_currency(cur, cmd[2])
+                        else:
+                            currency = get_default_currency(cur)
+                            try:
+                                page = max(1, int(cmd[2]))
+                            except ValueError:
+                                success = False
+                                error_text = t("error.invalid_args", lang=exec_lang)
+                    else:
+                        currency = get_default_currency(cur)
+                    if success:
+                        ensure_currency(cur, currency)
+                        offset = (page - 1) * 10
+                        rows = cur.execute(
+                            "SELECT n.name, a.balance FROM accounts a JOIN name_index n ON a.uuid=n.uuid WHERE a.currency=? ORDER BY a.balance DESC LIMIT 10 OFFSET ?",
+                            (currency, offset),
+                        ).fetchall()
+                        messages.append(
+                            {
+                                "target": "chat",
+                                "text": t(
+                                    "money.top_header",
+                                    lang=exec_lang,
+                                    currency=currency,
+                                    page=page,
+                                ),
+                            }
+                        )
+                        if rows:
+                            for idx, r in enumerate(rows, start=offset + 1):
+                                messages.append(
+                                    {
+                                        "target": "chat",
+                                        "text": t(
+                                            "money.top_entry",
+                                            lang=exec_lang,
+                                            rank=idx,
+                                            player=r["name"],
+                                            amount=format_amount(cur, r["balance"], currency),
+                                        ),
+                                    }
+                                )
+                        else:
+                            messages.append({"target": "chat", "text": t("money.top_empty", lang=exec_lang)})
+                elif sub == "pay" and len(cmd) >= 4:
+                    if len(cmd) >= 6:
+                        src_name = cmd[2].lower()
+                        dst_name = cmd[3].lower()
+                        currency, amt = parse_currency_amount(4)
+                    elif len(cmd) == 5:
+                        if is_currency(cur, cmd[3]):
+                            src_name = payload.executor.lower()
+                            dst_name = cmd[2].lower()
+                            currency, amt = parse_currency_amount(3)
+                        else:
+                            src_name = cmd[2].lower()
+                            dst_name = cmd[3].lower()
+                            currency, amt = parse_currency_amount(4)
+                    else:  # len == 4
+                        src_name = payload.executor.lower()
+                        dst_name = cmd[2].lower()
+                        currency, amt = parse_currency_amount(3)
                     src_uuid = get_uuid(src_name)
                     dst_uuid = get_uuid(dst_name)
                     if (
@@ -814,11 +1098,10 @@ async def message(payload: MessagePayload):
                 else:
                     success = False
                     error_text = t("error.invalid_args", lang=exec_lang)
-            elif action in {"pay", "transfer"} and len(cmd) >= 5:
+            elif action in {"pay", "transfer"} and len(cmd) >= 4:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
-                currency = resolve_currency(cur, cmd[3])
-                amt = parse_amount(4)
+                currency, amt = parse_currency_amount(3)
                 src_uuid = get_uuid(src_name)
                 dst_uuid = get_uuid(dst_name)
                 if (
@@ -880,11 +1163,10 @@ async def message(payload: MessagePayload):
                         })
                         scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
                         scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
-            elif action in {"deposit", "withdraw"} and len(cmd) >= 5:
+            elif action in {"deposit", "withdraw"} and len(cmd) >= 4:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
-                currency = resolve_currency(cur, cmd[3])
-                amt = parse_amount(4)
+                currency, amt = parse_currency_amount(3)
                 src_uuid = get_uuid(src_name)
                 dst_uuid = get_uuid(dst_name)
                 if (
@@ -945,29 +1227,54 @@ async def message(payload: MessagePayload):
                         scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
                         scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
             elif action == "balance":
-                currency = resolve_currency(cur, cmd[1]) if len(cmd) >= 2 else None
-                ensure_currency(cur, currency) if currency else None
-                if currency:
-                    bal = get_balance(cur, exec_uuid, currency)
-                    messages.append({
-                        "target": "chat",
-                        "text": t(
-                            "balance.single",
-                            lang=exec_lang,
-                            currency=currency,
-                            amount=format_amount(cur, bal, currency),
-                        ),
-                    })
-                else:
-                    bals = list_balances(cur, exec_uuid)
-                    if bals:
-                        balances = ", ".join(
-                            f"§e{k}§7={format_amount(cur, v, k)}§a" for k, v in bals.items()
-                        )
-                        messages.append({"target": "chat", "text": t("balance.all", lang=exec_lang, balances=balances)})
+                target_name = None
+                currency = None
+                if len(cmd) >= 3 and is_currency(cur, cmd[1]):
+                    currency = resolve_currency(cur, cmd[1])
+                    target_name = cmd[2].lower()
+                elif len(cmd) >= 2:
+                    if is_currency(cur, cmd[1]):
+                        currency = resolve_currency(cur, cmd[1])
                     else:
-                        messages.append({"target": "chat", "text": t("balance.empty", lang=exec_lang)})
-                scoreboards[exec_uuid] = get_scoreboard(cur, exec_uuid)
+                        target_name = cmd[1].lower()
+                ensure_currency(cur, currency) if currency else None
+                target_uuid = get_uuid(target_name) if target_name else exec_uuid
+                if target_uuid is None:
+                    success = False
+                    error_text = t("error.invalid_args", lang=exec_lang)
+                else:
+                    if currency:
+                        bal = get_balance(cur, target_uuid, currency)
+                        key = "balance.other_single" if target_uuid != exec_uuid else "balance.single"
+                        messages.append(
+                            {
+                                "target": "chat",
+                                "text": t(
+                                    key,
+                                    lang=exec_lang,
+                                    player=target_name or payload.executor,
+                                    currency=currency,
+                                    amount=format_amount(cur, bal, currency),
+                                ),
+                            }
+                        )
+                    else:
+                        bals = list_balances(cur, target_uuid)
+                        if bals:
+                            balances = ", ".join(
+                                f"§e{k}§7={format_amount(cur, v, k)}§a" for k, v in bals.items()
+                            )
+                            key = "balance.other_all" if target_uuid != exec_uuid else "balance.all"
+                            messages.append(
+                                {
+                                    "target": "chat",
+                                    "text": t(key, lang=exec_lang, player=target_name or payload.executor, balances=balances),
+                                }
+                            )
+                        else:
+                            key = "balance.other_empty" if target_uuid != exec_uuid else "balance.empty"
+                            messages.append({"target": "chat", "text": t(key, lang=exec_lang, player=target_name or payload.executor)})
+                    scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
             elif action == "account" and len(cmd) >= 3 and cmd[1].lower() == "create":
                 name = cmd[2].lower()
                 cur.execute("INSERT OR IGNORE INTO system_accounts(uuid) VALUES (?)", (name,))
@@ -1022,10 +1329,14 @@ async def message(payload: MessagePayload):
                 else:
                     success = False
                     error_text = t("redo.none", lang=exec_lang)
-            elif action == "setbalance" and len(cmd) >= 4:
+            elif action == "setbalance" and len(cmd) >= 3:
                 target_name = cmd[1].lower()
-                currency = resolve_currency(cur, cmd[2])
-                amt = parse_amount_any(3)
+                if len(cmd) >= 4 and is_currency(cur, cmd[2]):
+                    currency = resolve_currency(cur, cmd[2])
+                    amt = parse_amount_any(3)
+                else:
+                    currency = get_default_currency(cur)
+                    amt = parse_amount_any(2)
                 target_uuid = get_uuid(target_name)
                 if amt is None or target_uuid is None:
                     success = False
@@ -1108,6 +1419,7 @@ async def message(payload: MessagePayload):
                 push_undo(exec_uuid, actions)
 
     if success:
+        sanitize_messages(messages)
         res = {"status": "success", "messages": messages}
         if scoreboards:
             res["scoreboards"] = scoreboards
@@ -1119,6 +1431,7 @@ async def message(payload: MessagePayload):
             t("error.unknown_command", lang=exec_lang),
         }:
             err_msgs.append({"target": "chat", "text": t("help.suggest", lang=exec_lang)})
+        sanitize_messages(err_msgs)
         res = {"status": "error", "messages": err_msgs}
 
     log_command(payload, success, error_text)
@@ -1131,11 +1444,16 @@ async def sync(payload: DeltaPayload):
         for k, v in payload.delta.items():
             ensure_currency(cur, k)
             add_balance(cur, payload.player, k, v)
+        cur.execute(
+            "INSERT OR REPLACE INTO players(uuid, last_seen) VALUES (?, ?)",
+            (payload.player, payload.timestamp),
+        )
     return {"status": "success"}
 
 
 @app.post("/api/rewrite")
 async def rewrite(payload: RewritePayload):
+    msgs = []
     with transaction() as cur:
         for k, v in payload.scoreboard.items():
             ensure_currency(cur, k)
@@ -1144,7 +1462,13 @@ async def rewrite(payload: RewritePayload):
             "INSERT OR REPLACE INTO players(uuid, last_seen) VALUES (?, ?)",
             (payload.player, payload.timestamp),
         )
-    msgs = []
+        rows = cur.execute(
+            "SELECT rowid, payload FROM pending_messages WHERE uuid=?",
+            (payload.player,),
+        ).fetchall()
+        for r in rows:
+            msgs.append(json.loads(r["payload"]))
+            cur.execute("DELETE FROM pending_messages WHERE rowid=?", (r["rowid"],))
     if get_lang(payload.player) == "en":
         msgs.append({
             "target": "chat",
@@ -1152,11 +1476,14 @@ async def rewrite(payload: RewritePayload):
             "player": payload.player,
             "delay": 5,
         })
+    sanitize_messages(msgs)
     return {"status": "success", "messages": msgs}
 
 
 @app.post("/api/shop/place")
 async def shop_place(payload: ShopPlacePayload):
+    start = time.time()
+    result = "ok"
     with transaction() as cur:
         cur.execute(
             "INSERT OR IGNORE INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
@@ -1166,151 +1493,322 @@ async def shop_place(payload: ShopPlacePayload):
             "INSERT OR REPLACE INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
             (payload.shop_id, payload.world, payload.x, payload.y, payload.z),
         )
-    return {"status": "ok"}
+        cur.execute(
+            "INSERT OR IGNORE INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            (payload.shop_id, payload.owner_uuid),
+        )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_place",
+        "timestamp": payload.timestamp,
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "world": payload.world,
+        "x": payload.x,
+        "y": payload.y,
+        "z": payload.z,
+        "result": result,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    return {"status": result}
+
+
+@app.get("/api/shop/ids")
+async def shop_ids():
+    start = time.time()
+    with transaction() as cur:
+        rows = cur.execute("SELECT shop_id FROM shops").fetchall()
+    ids = [r["shop_id"] for r in rows]
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_ids",
+        "timestamp": int(time.time()),
+        "count": len(ids),
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    return {"ids": ids}
 
 
 @app.get("/api/shop/items")
 async def shop_items(shop_id: str):
+    start = time.time()
     with transaction() as cur:
-        srow = cur.execute("SELECT status,last_activity_at FROM shops WHERE shop_id=?", (shop_id,)).fetchone()
-        if not srow:
-            return {"status": "error", "reason": "shop_not_found"}
-        if srow["status"] != "active":
-            return {"status": srow["status"], "last_activity_at": srow["last_activity_at"]}
-        rows = cur.execute(
-            "SELECT st.item_key, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+        srow = cur.execute(
+            "SELECT owner_uuid,status,last_activity_at FROM shops WHERE shop_id=?",
             (shop_id,),
-        ).fetchall()
-        items = []
-        for r in rows:
-            price_rows = cur.execute(
-                "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
-                (shop_id, r["item_key"]),
+        ).fetchone()
+        if not srow:
+            result = {"status": "error", "reason": "shop_not_found"}
+        elif srow["status"] != "active":
+            result = {
+                "status": srow["status"],
+                "last_activity_at": srow["last_activity_at"],
+                "owner_uuid": srow["owner_uuid"],
+            }
+        else:
+            rows = cur.execute(
+                "SELECT st.item_key, st.sale_name, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+                (shop_id,),
             ).fetchall()
-            prices = {pr["currency"]: pr["price"] for pr in price_rows}
-            items.append(
-                {
-                    "item_key": r["item_key"],
-                    "material": r["material"],
-                    "display_name": r["display_name"],
-                    "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
-                    "stock": r["stock"],
-                    "prices": prices,
-                }
-            )
-        return {"status": "active", "items": items}
+            items = []
+            owners = [r["owner_uuid"] for r in cur.execute("SELECT owner_uuid FROM shop_owners WHERE shop_id=?", (shop_id,)).fetchall()]
+            sale = cur.execute(
+                "SELECT pct,end_ts FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
+                (int(time.time()), int(time.time())),
+            ).fetchone()
+            for r in rows:
+                price_rows = cur.execute(
+                    "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                    (shop_id, r["item_key"]),
+                ).fetchall()
+                prices = {pr["currency"]: pr["price"] for pr in price_rows}
+                if sale:
+                    for k in list(prices.keys()):
+                        prices[k] = int(prices[k] * (100 - sale["pct"]) / 100)
+                items.append(
+                    {
+                        "item_key": r["item_key"],
+                        "sale_name": r["sale_name"],
+                        "material": r["material"],
+                        "display_name": r["display_name"],
+                        "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
+                        "stock": r["stock"],
+                        "prices": prices,
+                    }
+                )
+            result = {
+                "status": "active",
+                "owner_uuid": srow["owner_uuid"],
+                "owners": owners,
+                "items": items,
+            }
+            if sale:
+                result["sale_pct"] = sale["pct"]
+                result["sale_ends"] = sale["end_ts"]
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_items",
+        "timestamp": int(time.time()),
+        "shop_id": shop_id,
+        "status": result.get("status"),
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    return result
 
 
 @app.post("/api/shop/buy")
 async def shop_buy(payload: ShopBuyPayload):
+    start = time.time()
     messages: List[Dict[str, str]] = []
     scoreboards: Dict[str, Dict[str, int]] = {}
     grant: List[Dict[str, str]] = []
     success = False
     reason: Optional[str] = None
     total_price = 0
+    grant_token: Optional[str] = None
+    location: Optional[sqlite3.Row] = None
     with transaction() as cur:
-        shop = cur.execute(
-            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
-            (payload.shop_id,),
+        existing = cur.execute(
+            "SELECT * FROM shop_tx WHERE client_tx_id=?",
+            (payload.client_tx_id,),
         ).fetchone()
-        if not shop:
-            reason = "shop_not_found"
-        elif shop["status"] != "active":
-            reason = "shop_suspended"
-        else:
-            owner = shop["owner_uuid"]
-            stock_row = cur.execute(
-                "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
-                (payload.shop_id, payload.item_key),
+        if existing:
+            success = existing["result"] == "success"
+            reason = existing["reason"]
+            total_price = existing["total_price"]
+            grant_token = existing["grant_token"]
+            shop = cur.execute(
+                "SELECT owner_uuid FROM shops WHERE shop_id=?",
+                (existing["shop_id"],),
             ).fetchone()
-            if not stock_row or stock_row["stock"] < payload.qty:
-                reason = "insufficient_stock"
-            else:
-                price_row = cur.execute(
-                    "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
-                    (payload.shop_id, payload.item_key, payload.currency),
+            owner = shop["owner_uuid"] if shop else None
+            if success and grant_token:
+                stock_row = cur.execute(
+                    "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                    (existing["shop_id"], existing["item_key"]),
                 ).fetchone()
-                if not price_row:
-                    reason = "invalid_currency"
+                remaining = stock_row["stock"] if stock_row else 0
+                grant.append(
+                    {
+                        "item_key": existing["item_key"],
+                        "qty": existing["qty"],
+                        "grant_token": grant_token,
+                    }
+                )
+                if owner:
+                    scoreboards[existing["buyer_uuid"]] = get_scoreboard(
+                        cur, existing["buyer_uuid"]
+                    )
+                    scoreboards[owner] = get_scoreboard(cur, owner)
+                buyer_name = get_name(existing["buyer_uuid"]) or existing["buyer_uuid"]
+                buyer_msg = {
+                    "target": "chat",
+                    "player": existing["buyer_uuid"],
+                    "text": f"Bought x{existing['qty']} for {existing['currency']} {existing['total_price']} (left {remaining})",
+                }
+                owner_msg = {
+                    "target": "chat",
+                    "player": owner,
+                    "text": f"Sold x{existing['qty']} to {buyer_name} for {existing['currency']} {existing['total_price']} (left {remaining})",
+                }
+                messages.append(buyer_msg)
+                if owner:
+                    messages.append(owner_msg)
+            else:
+                messages.append(
+                    {
+                        "target": "chat",
+                        "player": existing["buyer_uuid"],
+                        "text": f"Purchase failed: {reason}",
+                    }
+                )
+        else:
+            shop = cur.execute(
+                "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+                (payload.shop_id,),
+            ).fetchone()
+            location = cur.execute(
+                "SELECT world, x, y, z FROM shop_locations WHERE shop_id=?",
+                (payload.shop_id,),
+            ).fetchone()
+            if not shop:
+                reason = "shop_not_found"
+            elif shop["status"] != "active":
+                reason = "shop_suspended"
+            else:
+                owner = shop["owner_uuid"]
+                stock_row = cur.execute(
+                    "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                    (payload.shop_id, payload.item_key),
+                ).fetchone()
+                if not stock_row or stock_row["stock"] < payload.qty:
+                    reason = "insufficient_stock"
                 else:
-                    total_price = price_row["price"] * payload.qty
-                    if get_balance(cur, payload.player_uuid, payload.currency) < total_price:
-                        reason = "insufficient_funds"
-                    elif not transfer(
-                        cur, payload.player_uuid, owner, payload.currency, total_price
-                    ):
-                        reason = "transfer_failed"
+                    price_row = cur.execute(
+                        "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
+                        (payload.shop_id, payload.item_key, payload.currency),
+                    ).fetchone()
+                    if not price_row:
+                        reason = "invalid_currency"
                     else:
-                        cur.execute(
-                            "UPDATE shop_stock SET stock=stock-? WHERE shop_id=? AND item_key=?",
-                            (payload.qty, payload.shop_id, payload.item_key),
-                        )
-                        cur.execute(
-                            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-                            (payload.timestamp, payload.shop_id),
-                        )
-                        cur.execute(
-                            "INSERT INTO shop_tx(shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result) VALUES(?,?,?,?,?,?,?,?)",
-                            (
-                                payload.shop_id,
-                                payload.player_uuid,
-                                payload.item_key,
-                                payload.qty,
-                                payload.currency,
-                                total_price,
-                                payload.timestamp,
-                                "success",
-                            ),
-                        )
-                        success = True
-                        messages.append(
-                            {
+                        base_price = price_row["price"] * payload.qty
+                        sale = cur.execute(
+                            "SELECT id,pct,account FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
+                            (payload.timestamp, payload.timestamp),
+                        ).fetchone()
+                        discount = 0
+                        if sale:
+                            discount = int(base_price * sale["pct"] / 100)
+                            if get_balance(cur, sale["account"], payload.currency) >= discount:
+                                add_balance(cur, sale["account"], payload.currency, -discount)
+                                total_price = base_price - discount
+                            else:
+                                cur.execute(
+                                    "UPDATE sale_events SET active=0, end_ts=? WHERE id=?",
+                                    (payload.timestamp, sale["id"]),
+                                )
+                                total_price = base_price
+                        else:
+                            total_price = base_price
+                        if get_balance(cur, payload.player_uuid, payload.currency) < total_price:
+                            reason = "insufficient_funds"
+                        elif not transfer(
+                            cur, payload.player_uuid, owner, payload.currency, total_price
+                        ):
+                            reason = "transfer_failed"
+                        else:
+                            grant_token = secrets.token_hex(8)
+                            cur.execute(
+                                "UPDATE shop_stock SET stock=stock-? WHERE shop_id=? AND item_key=?",
+                                (payload.qty, payload.shop_id, payload.item_key),
+                            )
+                            cur.execute(
+                                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                                (payload.timestamp, payload.shop_id),
+                            )
+                            cur.execute(
+                                "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,grant_token,world,x,y,z) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                (
+                                    payload.client_tx_id,
+                                    payload.shop_id,
+                                    payload.player_uuid,
+                                    payload.item_key,
+                                    payload.qty,
+                                    payload.currency,
+                                    total_price,
+                                    payload.timestamp,
+                                    "success",
+                                    grant_token,
+                                    location["world"] if location else None,
+                                    location["x"] if location else None,
+                                    location["y"] if location else None,
+                                    location["z"] if location else None,
+                                ),
+                            )
+                            success = True
+                            stock_row = cur.execute(
+                                "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                                (payload.shop_id, payload.item_key),
+                            ).fetchone()
+                            remaining = stock_row["stock"] if stock_row else 0
+                            buyer_name = get_name(payload.player_uuid) or payload.player_uuid
+                            buyer_msg = {
                                 "target": "chat",
                                 "player": payload.player_uuid,
-                                "text": f"Purchased x{payload.qty}",
+                                "text": f"Bought x{payload.qty} for {payload.currency} {total_price} (left {remaining})",
                             }
-                        )
-                        messages.append(
-                            {
+                            owner_msg = {
                                 "target": "chat",
                                 "player": owner,
-                                "text": f"Sold x{payload.qty}",
+                                "text": f"Sold x{payload.qty} to {buyer_name} for {payload.currency} {total_price} (left {remaining})",
                             }
-                        )
-                        scoreboards[payload.player_uuid] = get_scoreboard(
-                            cur, payload.player_uuid
-                        )
-                        scoreboards[owner] = get_scoreboard(cur, owner)
-                        grant.append(
-                            {
-                                "item_key": payload.item_key,
-                                "qty": payload.qty,
-                                "grant_token": secrets.token_hex(8),
-                            }
-                        )
-        if not success:
-            cur.execute(
-                "INSERT INTO shop_tx(shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,reason) VALUES(?,?,?,?,?,?,?,?,?)",
-                (
-                    payload.shop_id,
-                    payload.player_uuid,
-                    payload.item_key,
-                    payload.qty,
-                    payload.currency,
-                    total_price,
-                    payload.timestamp,
-                    "fail",
-                    reason,
-                ),
-            )
-            messages.append(
-                {
-                    "target": "chat",
-                    "player": payload.player_uuid,
-                    "text": f"Purchase failed: {reason}",
-                }
-            )
+                            messages.append(buyer_msg)
+                            if is_online(cur, owner, payload.timestamp):
+                                messages.append(owner_msg)
+                            else:
+                                queue_message(cur, owner_msg)
+                            scoreboards[payload.player_uuid] = get_scoreboard(
+                                cur, payload.player_uuid
+                            )
+                            scoreboards[owner] = get_scoreboard(cur, owner)
+                            grant.append(
+                                {
+                                    "item_key": payload.item_key,
+                                    "qty": payload.qty,
+                                    "grant_token": grant_token,
+                                }
+                            )
+            if not success:
+                cur.execute(
+                    "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,reason,world,x,y,z) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        payload.client_tx_id,
+                        payload.shop_id,
+                        payload.player_uuid,
+                        payload.item_key,
+                        payload.qty,
+                        payload.currency,
+                        total_price,
+                        payload.timestamp,
+                        "fail",
+                        reason,
+                        location["world"] if location else None,
+                        location["x"] if location else None,
+                        location["y"] if location else None,
+                        location["z"] if location else None,
+                    ),
+                )
+                messages.append(
+                    {
+                        "target": "chat",
+                        "player": payload.player_uuid,
+                        "text": f"Purchase failed: {reason}",
+                    }
+                )
+    latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_buy",
         "timestamp": payload.timestamp,
@@ -1322,9 +1820,15 @@ async def shop_buy(payload: ShopBuyPayload):
         "total_price": total_price,
         "result": "success" if success else "error",
         "reason": reason,
+        "client_tx_id": payload.client_tx_id,
+        "latency_ms": latency_ms,
+        "world": location["world"] if location else None,
+        "x": location["x"] if location else None,
+        "y": location["y"] if location else None,
+        "z": location["z"] if location else None,
     }
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    append_log(log_entry)
+    sanitize_messages(messages)
     return {
         "status": "success" if success else "error",
         "messages": messages,
@@ -1335,128 +1839,377 @@ async def shop_buy(payload: ShopBuyPayload):
 
 @app.post("/api/shop/add_stock")
 async def shop_add_stock(payload: ShopAddStockPayload):
+    start = time.time()
     blob = base64.b64decode(payload.nbt_blob)
     item_key = hashlib.sha256(blob).hexdigest()
+    result = "success"
+    reason: Optional[str] = None
     with transaction() as cur:
         shop = cur.execute(
-            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+            "SELECT status FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
-            return {"status": "error", "reason": "not_owner"}
-        ts = int(time.time())
-        cur.execute(
-            "INSERT OR IGNORE INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
-            (item_key, payload.material, payload.display_name, blob),
-        )
-        cur.execute(
-            """
-            INSERT INTO shop_stock(shop_id, item_key, stock, updated_at) VALUES(?,?,?,?)
-            ON CONFLICT(shop_id,item_key) DO UPDATE SET stock=stock+excluded.stock, updated_at=excluded.updated_at
-            """,
-            (payload.shop_id, item_key, payload.qty, ts),
-        )
-        cur.execute(
-            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-            (ts, payload.shop_id),
-        )
-    return {"status": "success", "item_key": item_key}
+        if not shop or not is_shop_owner(cur, payload.shop_id, payload.owner_uuid) or shop["status"] != "active":
+            result = "error"
+            reason = "not_owner"
+        else:
+            ts = int(time.time())
+            cur.execute(
+                "INSERT OR IGNORE INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+                (item_key, payload.material, payload.display_name, blob),
+            )
+            cur.execute(
+                """
+                INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at)
+                VALUES(?,?,?,?,?)
+                ON CONFLICT(shop_id,item_key) DO UPDATE SET stock=stock+excluded.stock, updated_at=excluded.updated_at, sale_name=excluded.sale_name
+                """,
+                (payload.shop_id, item_key, payload.sale_name, payload.qty, ts),
+            )
+            currency = payload.currency or get_default_currency(cur)
+            cur.execute(
+                """
+                INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
+                ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
+                """,
+                (payload.shop_id, item_key, currency, payload.price),
+            )
+            cur.execute(
+                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                (ts, payload.shop_id),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_add_stock",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "item_key": item_key,
+        "qty": payload.qty,
+        "sale_name": payload.sale_name,
+        "price": payload.price,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    if result == "success":
+        return {"status": "success", "item_key": item_key}
+    return {"status": "error", "reason": reason}
 
 
 @app.post("/api/shop/take_stock")
 async def shop_take_stock(payload: ShopTakeStockPayload):
+    start = time.time()
     grant: List[Dict[str, str]] = []
+    result = "success"
+    reason: Optional[str] = None
     with transaction() as cur:
         shop = cur.execute(
-            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+            "SELECT status FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
-            return {"status": "error", "reason": "not_owner"}
-        row = cur.execute(
-            "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
-            (payload.shop_id, payload.item_key),
-        ).fetchone()
-        if not row or row["stock"] < payload.qty:
-            return {"status": "error", "reason": "insufficient_stock"}
-        ts = int(time.time())
-        cur.execute(
-            "UPDATE shop_stock SET stock=stock-?, updated_at=? WHERE shop_id=? AND item_key=?",
-            (payload.qty, ts, payload.shop_id, payload.item_key),
-        )
-        cur.execute(
-            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-            (ts, payload.shop_id),
-        )
-        item = cur.execute(
-            "SELECT nbt_blob FROM shop_items WHERE item_key=?", (payload.item_key,)
-        ).fetchone()
-        if item:
-            grant.append(
-                {
-                    "item_key": payload.item_key,
-                    "qty": payload.qty,
-                    "nbt_blob": base64.b64encode(item["nbt_blob"]).decode("ascii"),
-                    "grant_token": secrets.token_hex(8),
-                }
-            )
-    return {"status": "success", "grant": grant}
+        if not shop or not is_shop_owner(cur, payload.shop_id, payload.owner_uuid) or shop["status"] != "active":
+            result = "error"
+            reason = "not_owner"
+        else:
+            row = cur.execute(
+                "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                (payload.shop_id, payload.item_key),
+            ).fetchone()
+            if not row or row["stock"] < payload.qty:
+                result = "error"
+                reason = "insufficient_stock"
+            else:
+                ts = int(time.time())
+                cur.execute(
+                    "UPDATE shop_stock SET stock=stock-?, updated_at=? WHERE shop_id=? AND item_key=?",
+                    (payload.qty, ts, payload.shop_id, payload.item_key),
+                )
+                cur.execute(
+                    "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                    (ts, payload.shop_id),
+                )
+                item = cur.execute(
+                    "SELECT nbt_blob FROM shop_items WHERE item_key=?", (payload.item_key,)
+                ).fetchone()
+                if item:
+                    grant.append(
+                        {
+                            "item_key": payload.item_key,
+                            "qty": payload.qty,
+                            "nbt_blob": base64.b64encode(item["nbt_blob"]).decode("ascii"),
+                            "grant_token": secrets.token_hex(8),
+                        }
+                    )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_take_stock",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "item_key": payload.item_key,
+        "qty": payload.qty,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    if result == "success":
+        return {"status": "success", "grant": grant}
+    return {"status": "error", "reason": reason}
 
 
 @app.post("/api/shop/set_price")
 async def shop_set_price(payload: ShopSetPricePayload):
+    start = time.time()
+    result = "success"
+    reason: Optional[str] = None
     with transaction() as cur:
         shop = cur.execute(
-            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+            "SELECT status FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
-            return {"status": "error", "reason": "not_owner"}
-        ensure_currency(cur, payload.currency)
-        ts = int(time.time())
+        if not shop or not is_shop_owner(cur, payload.shop_id, payload.owner_uuid) or shop["status"] != "active":
+            result = "error"
+            reason = "not_owner"
+        else:
+            item_key = payload.item_key
+            if item_key is None and payload.sale_name:
+                row = cur.execute(
+                    "SELECT item_key FROM shop_stock WHERE shop_id=? AND sale_name=?",
+                    (payload.shop_id, payload.sale_name),
+                ).fetchone()
+                if row:
+                    item_key = row["item_key"]
+            if not item_key:
+                result = "error"
+                reason = "item_not_found"
+            else:
+                ensure_currency(cur, payload.currency)
+                ts = int(time.time())
+                cur.execute(
+                    """
+                    INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
+                    ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
+                    """,
+                    (payload.shop_id, item_key, payload.currency, payload.price),
+                )
+                cur.execute(
+                    "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                    (ts, payload.shop_id),
+                )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_set_price",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "item_key": item_key,
+        "sale_name": payload.sale_name,
+        "currency": payload.currency,
+        "price": payload.price,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    if result == "success":
+        return {"status": "success"}
+    return {"status": "error", "reason": reason}
+
+
+@app.post("/api/shop/remove_item")
+async def shop_remove_item(payload: ShopRemoveItemPayload):
+    start = time.time()
+    grants: List[Dict[str, str]] = []
+    result = "success"
+    reason: Optional[str] = None
+    with transaction() as cur:
+        if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
+            result = "error"
+            reason = "not_owner"
+        else:
+            row = cur.execute(
+                "SELECT item_key, stock FROM shop_stock WHERE shop_id=? AND sale_name=?",
+                (payload.shop_id, payload.sale_name),
+            ).fetchone()
+            if not row:
+                result = "error"
+                reason = "item_not_found"
+            else:
+                item_key = row["item_key"]
+                if payload.refund and row["stock"] > 0:
+                    blob_row = cur.execute(
+                        "SELECT nbt_blob FROM shop_items WHERE item_key=?",
+                        (item_key,),
+                    ).fetchone()
+                    if blob_row:
+                        grants.append(
+                            {
+                                "item_key": item_key,
+                                "qty": row["stock"],
+                                "nbt_blob": base64.b64encode(blob_row["nbt_blob"]).decode("ascii"),
+                                "grant_token": secrets.token_hex(8),
+                            }
+                        )
+                cur.execute(
+                    "DELETE FROM shop_stock WHERE shop_id=? AND item_key=?",
+                    (payload.shop_id, item_key),
+                )
+                cur.execute(
+                    "DELETE FROM shop_prices WHERE shop_id=? AND item_key=?",
+                    (payload.shop_id, item_key),
+                )
+                ts = int(time.time())
+                cur.execute(
+                    "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                    (ts, payload.shop_id),
+                )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_remove_item",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "sale_name": payload.sale_name,
+        "refund": payload.refund,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    return {"status": result, "reason": reason, "grant": grants}
+
+
+@app.post("/api/shop/add_owner")
+async def shop_add_owner(payload: ShopAddOwnerPayload):
+    start = time.time()
+    result = "success"
+    with transaction() as cur:
+        if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
+            result = "error"
+            reason = "not_owner"
+        else:
+            cur.execute(
+                "INSERT OR IGNORE INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+                (payload.shop_id, payload.target_uuid),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    append_log(
+        {
+            "type": "shop_add_owner",
+            "timestamp": int(time.time()),
+            "shop_id": payload.shop_id,
+            "actor": payload.owner_uuid,
+            "target": payload.target_uuid,
+            "result": result,
+            "latency_ms": latency_ms,
+        }
+    )
+    return {"status": result}
+
+
+@app.post("/api/shop/remove_owner")
+async def shop_remove_owner(payload: ShopRemoveOwnerPayload):
+    start = time.time()
+    result = "success"
+    with transaction() as cur:
+        if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
+            result = "error"
+            reason = "not_owner"
+        else:
+            cur.execute(
+                "DELETE FROM shop_owners WHERE shop_id=? AND owner_uuid=?",
+                (payload.shop_id, payload.target_uuid),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    append_log(
+        {
+            "type": "shop_remove_owner",
+            "timestamp": int(time.time()),
+            "shop_id": payload.shop_id,
+            "actor": payload.owner_uuid,
+            "target": payload.target_uuid,
+            "result": result,
+            "latency_ms": latency_ms,
+        }
+    )
+    return {"status": result}
+
+
+@app.post("/api/shop/visit")
+async def shop_visit(payload: ShopVisitPayload):
+    with transaction() as cur:
         cur.execute(
-            """
-            INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
-            ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
-            """,
-            (payload.shop_id, payload.item_key, payload.currency, payload.price),
+            "INSERT INTO shop_visits(shop_id, visitor_uuid, timestamp) VALUES(?,?,?)",
+            (payload.shop_id, payload.player_uuid, payload.timestamp),
         )
-        cur.execute(
-            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-            (ts, payload.shop_id),
-        )
-    return {"status": "success"}
+    append_log(
+        {
+            "type": "shop_visit",
+            "timestamp": payload.timestamp,
+            "shop_id": payload.shop_id,
+            "visitor": payload.player_uuid,
+        }
+    )
+    return {"status": "ok"}
 
 
 @app.post("/api/shop/ping")
 async def shop_ping(payload: ShopPingPayload):
+    start = time.time()
     with transaction() as cur:
         cur.execute(
             "UPDATE shops SET last_activity_at=? WHERE shop_id=? AND status='active'",
             (payload.timestamp, payload.shop_id),
         )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_ping",
+        "timestamp": payload.timestamp,
+        "shop_id": payload.shop_id,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
     return {"status": "ok"}
 
 
 @app.post("/api/shop/reopen")
 async def shop_reopen(payload: ShopReopenPayload):
+    start = time.time()
+    result = "success"
+    reason: Optional[str] = None
     with transaction() as cur:
-        shop = cur.execute(
-            "SELECT owner_uuid FROM shops WHERE shop_id=?",
-            (payload.shop_id,),
-        ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid:
-            return {"status": "error", "reason": "not_owner"}
-        cur.execute(
-            "UPDATE shops SET status='active', last_activity_at=? WHERE shop_id=?",
-            (payload.timestamp, payload.shop_id),
-        )
-    return {"status": "success"}
+        if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
+            result = "error"
+            reason = "not_owner"
+        else:
+            cur.execute(
+                "UPDATE shops SET status='active', last_activity_at=? WHERE shop_id=?",
+                (payload.timestamp, payload.shop_id),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_reopen",
+        "timestamp": payload.timestamp,
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    if result == "success":
+        return {"status": "success"}
+    return {"status": "error", "reason": reason}
 
 
 @app.post("/api/shop/remove")
 async def shop_remove(payload: ShopRemovePayload):
+    start = time.time()
     grants: List[Dict[str, str]] = []
+    location: Optional[Dict[str, Union[str, float]]] = None
     with transaction() as cur:
         if payload.refund:
             rows = cur.execute(
@@ -1473,6 +2226,27 @@ async def shop_remove(payload: ShopRemovePayload):
                     }
                 )
             cur.execute("DELETE FROM shop_stock WHERE shop_id=?", (payload.shop_id,))
+        loc_row = cur.execute(
+            "SELECT world, x, y, z FROM shop_locations WHERE shop_id=?",
+            (payload.shop_id,),
+        ).fetchone()
+        if loc_row:
+            location = {
+                "world": loc_row["world"],
+                "x": loc_row["x"],
+                "y": loc_row["y"],
+                "z": loc_row["z"],
+            }
         cur.execute("DELETE FROM shop_locations WHERE shop_id=?", (payload.shop_id,))
         cur.execute("UPDATE shops SET status='suspended' WHERE shop_id=?", (payload.shop_id,))
-    return {"status": "success", "grant": grants}
+        cur.execute("DELETE FROM shop_owners WHERE shop_id=?", (payload.shop_id,))
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_remove",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "refund": payload.refund,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    return {"status": "success", "grant": grants, "location": location}

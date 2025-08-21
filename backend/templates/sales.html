@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Global Sale</h2>
+{% if message %}<div class="alert alert-info">{{ message }}</div>{% endif %}
+{% if current %}
+<p>Active: {{ current.pct }}% off until {{ current.end_ts|fmt_ts }} (account {{ current.account }})</p>
+{% endif %}
+<form method="post">
+  <div class="mb-3"><label>Start</label><input type="text" name="start" class="form-control" placeholder="2024-01-01 00:00"></div>
+  <div class="mb-3"><label>End</label><input type="text" name="end" class="form-control" placeholder="2024-01-02 00:00"></div>
+  <div class="mb-3"><label>Discount %</label><input type="number" name="pct" class="form-control"></div>
+  <div class="mb-3"><label>Account UUID</label><input type="text" name="account" class="form-control"></div>
+  <button class="btn btn-primary" type="submit">Set Sale</button>
+</form>
+{% endblock %}

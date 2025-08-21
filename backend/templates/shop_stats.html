@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Top Shops</h2>
+<div class="mb-4"><canvas id="rankChart"></canvas></div>
+<table class="table table-striped">
+  <thead><tr><th>Shop</th><th>Visits</th><th>Revenue</th><th>Avg Price</th><th>Repeat Rate</th></tr></thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.shop_id }}</td>
+      <td>{{ r.visits }}</td>
+      <td>{{ r.revenue }}</td>
+      <td>{{ '%.2f'|format(r.avg_price) }}</td>
+      <td>{{ '%.2f'|format(r.repeat_rate*100) }}%</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+{% block scripts %}
+<script>
+new Chart(document.getElementById('rankChart'),{
+  type:'bar',
+  data:{labels: {{ chart_labels|safe }}, datasets:[{label:'Revenue', data: {{ chart_data|safe }} }]}
+});
+</script>
+{% endblock %}

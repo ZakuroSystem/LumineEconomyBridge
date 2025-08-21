@@ -1,5 +1,6 @@
 package com.grapelemon.lumineeconomybridge;
 
+import org.bukkit.ChatColor;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -18,6 +19,7 @@ public class Lang {
     }
 
     public static String get(String key) {
-        return config.getString(key, key);
+        String val = config.getString(key, key);
+        return ChatColor.translateAlternateColorCodes('&', val);
     }
 }

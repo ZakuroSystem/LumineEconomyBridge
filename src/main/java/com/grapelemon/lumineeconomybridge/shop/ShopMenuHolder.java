@@ -13,6 +13,7 @@ public class ShopMenuHolder implements InventoryHolder {
     private Inventory inventory;
     private String currency;
     private int quantity = 1;
+    private final java.util.Set<String> ownerUuids = new java.util.HashSet<>();
 
     public ShopMenuHolder(String shopId) {
         this.shopId = shopId;
@@ -45,6 +46,14 @@ public class ShopMenuHolder implements InventoryHolder {
 
     public void setInventory(Inventory inventory) {
         this.inventory = inventory;
+    }
+
+    public boolean isOwner(String uuid) {
+        return ownerUuids.contains(uuid);
+    }
+
+    public void addOwnerUuid(String uuid) {
+        ownerUuids.add(uuid);
     }
 
     public String getCurrency() {

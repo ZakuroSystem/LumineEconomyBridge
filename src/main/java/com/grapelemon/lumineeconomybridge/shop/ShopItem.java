@@ -5,12 +5,18 @@ import java.util.Map;
 
 public class ShopItem {
     private final String itemKey;
+    private final String saleName;
     private final ItemStack item;
+    private final ItemStack rawItem;
     private final Map<String, Integer> prices;
+    private int stock;
 
-    public ShopItem(String itemKey, ItemStack item, Map<String, Integer> prices) {
+    public ShopItem(String itemKey, String saleName, ItemStack item, ItemStack rawItem, int stock, Map<String, Integer> prices) {
         this.itemKey = itemKey;
+        this.saleName = saleName;
         this.item = item;
+        this.rawItem = rawItem;
+        this.stock = stock;
         this.prices = prices;
     }
 
@@ -18,11 +24,27 @@ public class ShopItem {
         return itemKey;
     }
 
+    public String getSaleName() {
+        return saleName;
+    }
+
     public ItemStack getItem() {
         return item;
     }
 
+    public ItemStack getRawItem() {
+        return rawItem;
+    }
+
     public Map<String, Integer> getPrices() {
         return prices;
+    }
+
+    public int getStock() {
+        return stock;
+    }
+
+    public void setStock(int stock) {
+        this.stock = stock;
     }
 }

@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Log Analytics</h2>
+<canvas id="logChart" class="mb-4"></canvas>
+<table class="table table-striped">
+  <thead><tr><th>Command</th><th>Success</th><th>Count</th></tr></thead>
+  <tbody>
+  {% for k, v in stats.items() %}
+    <tr>
+      <td>{{ k[0] }}</td>
+      <td>{{ '✔' if k[1] else '✖' }}</td>
+      <td>{{ v }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+{% block scripts %}
+<script>
+new Chart(document.getElementById('logChart'),{type:'bar',data:{{ chart_json|safe }}});
+</script>
+{% endblock %}
