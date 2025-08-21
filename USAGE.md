@@ -8,7 +8,7 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le balance [currency]` – Show your balance for a currency or all currencies.
 - `/le money give <player> <currency> <amount>` – Mint funds for a player.
 - `/le money take <player> <currency> <amount>` – Remove funds from a player.
-- `/le money pay <src> <dst> <currency> <amount>` – Pay from one player to another.
+- `/le money pay [src] <dst> [currency] <amount>` – Pay from one player to another. Omitting `src` uses the executor; omitting `currency` uses the default.
 - `/le deposit <src> <dst> <currency> <amount>` – Move funds from src to dst (labelled deposit).
 - `/le withdraw <src> <dst> <currency> <amount>` – Move funds from src to dst (labelled withdraw).
 - `/le transfer <src> <dst> <currency> <amount>` – Transfer funds between players.
@@ -16,6 +16,7 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le history <player> [limit]` – View recent transactions.
 - `/le currency create <id> [symbol]` – Create a new currency.
 - `/le currency supply [id]` – Show total supply for all currencies or a specific one.
+- `/le currency default <id>` – Set the default currency used when a command omits one.
 - `/le account create <id>` – Create a system account.
 - `/le backup` / `/le restore <file>` – Backup or restore the database.
 - `/le undo` / `/le redo` – Undo or redo recent operations.

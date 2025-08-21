@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import Dict, Optional, List, Union
+from typing import Dict, Optional, List, Union, Tuple
 import sqlite3
 import json
 from contextlib import closing, contextmanager, asynccontextmanager
@@ -376,6 +376,23 @@ def resolve_currency(cur: sqlite3.Cursor, token: str) -> str:
     return row["name"] if row else token
 
 
+def is_currency(cur: sqlite3.Cursor, token: str) -> bool:
+    return (
+        cur.execute(
+            "SELECT 1 FROM currencies WHERE LOWER(name)=LOWER(?) OR LOWER(symbol)=LOWER(?)",
+            (token, token),
+        ).fetchone()
+        is not None
+    )
+
+
+def get_default_currency(cur: sqlite3.Cursor) -> str:
+    row = cur.execute(
+        "SELECT value FROM settings WHERE key='default_currency'"
+    ).fetchone()
+    return resolve_currency(cur, row["value"]) if row else "currency1"
+
+
 def get_uuid(name: str) -> Optional[str]:
     with closing(conn.cursor()) as cur:
         row = cur.execute("SELECT uuid FROM name_index WHERE name=?", (name.lower(),)).fetchone()
@@ -629,6 +646,15 @@ async def message(payload: MessagePayload):
         except ValueError:
             return None
 
+    def parse_currency_amount(start: int) -> Tuple[str, Optional[int]]:
+        if len(cmd) > start and is_currency(cur, cmd[start]):
+            currency = resolve_currency(cur, cmd[start])
+            amt = parse_amount(start + 1)
+        else:
+            currency = get_default_currency(cur)
+            amt = parse_amount(start)
+        return currency, amt
+
     if action == "lang":
         if len(cmd) >= 2 and cmd[1] in {"en", "jp"}:
             set_lang(payload.player, cmd[1])
@@ -682,6 +708,14 @@ async def message(payload: MessagePayload):
                     symbol = cmd[3] if len(cmd) >= 4 else None
                     ensure_currency(cur, cname, symbol)
                     messages.append({"target": "chat", "text": t("currency.create", lang=exec_lang, currency=cname)})
+                elif sub == "default" and len(cmd) >= 3:
+                    cname = resolve_currency(cur, cmd[2])
+                    ensure_currency(cur, cname)
+                    cur.execute(
+                        "INSERT OR REPLACE INTO settings(key,value) VALUES('default_currency', ?)",
+                        (cname,),
+                    )
+                    messages.append({"target": "chat", "text": t("currency.default", lang=exec_lang, currency=cname)})
                 elif sub == "supply":
                     if len(cmd) >= 3:
                         cname = resolve_currency(cur, cmd[2])
@@ -722,10 +756,9 @@ async def message(payload: MessagePayload):
                     error_text = t("error.invalid_args", lang=exec_lang)
             elif action == "money" and len(cmd) >= 2:
                 sub = cmd[1].lower()
-                if sub in {"give", "take"} and len(cmd) >= 5:
+                if sub in {"give", "take"} and len(cmd) >= 4:
                     target_name = cmd[2].lower()
-                    currency = resolve_currency(cur, cmd[3])
-                    amt = parse_amount(4)
+                    currency, amt = parse_currency_amount(3)
                     target_uuid = get_uuid(target_name)
                     if amt is None or target_uuid is None:
                         success = False
@@ -780,11 +813,24 @@ async def message(payload: MessagePayload):
                                     "amount": amt,
                                 })
                                 scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
-                elif sub == "pay" and len(cmd) >= 6:
-                    src_name = cmd[2].lower()
-                    dst_name = cmd[3].lower()
-                    currency = resolve_currency(cur, cmd[4])
-                    amt = parse_amount(5)
+                elif sub == "pay" and len(cmd) >= 4:
+                    if len(cmd) >= 6:
+                        src_name = cmd[2].lower()
+                        dst_name = cmd[3].lower()
+                        currency, amt = parse_currency_amount(4)
+                    elif len(cmd) == 5:
+                        if is_currency(cur, cmd[3]):
+                            src_name = payload.executor.lower()
+                            dst_name = cmd[2].lower()
+                            currency, amt = parse_currency_amount(3)
+                        else:
+                            src_name = cmd[2].lower()
+                            dst_name = cmd[3].lower()
+                            currency, amt = parse_currency_amount(4)
+                    else:  # len == 4
+                        src_name = payload.executor.lower()
+                        dst_name = cmd[2].lower()
+                        currency, amt = parse_currency_amount(3)
                     src_uuid = get_uuid(src_name)
                     dst_uuid = get_uuid(dst_name)
                     if (
@@ -848,11 +894,10 @@ async def message(payload: MessagePayload):
                 else:
                     success = False
                     error_text = t("error.invalid_args", lang=exec_lang)
-            elif action in {"pay", "transfer"} and len(cmd) >= 5:
+            elif action in {"pay", "transfer"} and len(cmd) >= 4:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
-                currency = resolve_currency(cur, cmd[3])
-                amt = parse_amount(4)
+                currency, amt = parse_currency_amount(3)
                 src_uuid = get_uuid(src_name)
                 dst_uuid = get_uuid(dst_name)
                 if (
@@ -914,11 +959,10 @@ async def message(payload: MessagePayload):
                         })
                         scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
                         scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
-            elif action in {"deposit", "withdraw"} and len(cmd) >= 5:
+            elif action in {"deposit", "withdraw"} and len(cmd) >= 4:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
-                currency = resolve_currency(cur, cmd[3])
-                amt = parse_amount(4)
+                currency, amt = parse_currency_amount(3)
                 src_uuid = get_uuid(src_name)
                 dst_uuid = get_uuid(dst_name)
                 if (
@@ -1056,10 +1100,14 @@ async def message(payload: MessagePayload):
                 else:
                     success = False
                     error_text = t("redo.none", lang=exec_lang)
-            elif action == "setbalance" and len(cmd) >= 4:
+            elif action == "setbalance" and len(cmd) >= 3:
                 target_name = cmd[1].lower()
-                currency = resolve_currency(cur, cmd[2])
-                amt = parse_amount_any(3)
+                if len(cmd) >= 4 and is_currency(cur, cmd[2]):
+                    currency = resolve_currency(cur, cmd[2])
+                    amt = parse_amount_any(3)
+                else:
+                    currency = get_default_currency(cur)
+                    amt = parse_amount_any(2)
                 target_uuid = get_uuid(target_name)
                 if amt is None or target_uuid is None:
                     success = False

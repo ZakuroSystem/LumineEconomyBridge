@@ -30,7 +30,7 @@ public class LeTabCompleter implements TabCompleter {
                 return names;
             }
               if (first.equals("currency")) {
-                  return Stream.of("create")
+                  return Stream.of("create", "supply", "default")
                           .filter(s -> s.startsWith(args[1].toLowerCase()))
                           .toList();
               }
@@ -54,6 +54,9 @@ public class LeTabCompleter implements TabCompleter {
             String first = args[0].toLowerCase();
             if (first.equals("currency") && args[1].equalsIgnoreCase("create")) {
                 return Collections.singletonList("<symbol>");
+            }
+            if (first.equals("currency") && args[1].equalsIgnoreCase("default")) {
+                return Collections.singletonList("<id>");
             }
             if (first.equals("money")) {
                 List<String> names = new ArrayList<>();
