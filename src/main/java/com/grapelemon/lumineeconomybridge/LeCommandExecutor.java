@@ -187,6 +187,72 @@ public class LeCommandExecutor implements CommandExecutor {
                                 }
                             }
                         });
+                    } else if (args.length >= 3 && args[1].equalsIgnoreCase("reopen")) {
+                        String shopId = args[2];
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        payload.put("timestamp", System.currentTimeMillis() / 1000);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/reopen")
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Reopen failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equals(res.get("status").getAsString())) {
+                                            p.sendMessage("Reopened");
+                                        } else {
+                                            p.sendMessage("Failed: " + res.get("reason").getAsString());
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else if (args.length >= 3 && args[1].equalsIgnoreCase("remove")) {
+                        String shopId = args[2];
+                        boolean refund = args.length >= 4 && args[3].equalsIgnoreCase("refund");
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("shop_id", shopId);
+                        payload.put("refund", refund);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/remove")
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Remove failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equals(res.get("status").getAsString())) {
+                                            if (refund && res.has("grant")) {
+                                                res.getAsJsonArray("grant").forEach(g -> {
+                                                    JsonObject gg = g.getAsJsonObject();
+                                                    ItemStack item = itemFromBase64(gg.get("nbt_blob").getAsString());
+                                                    item.setAmount(gg.get("qty").getAsInt());
+                                                    p.getInventory().addItem(item);
+                                                });
+                                            }
+                                            p.sendMessage("Removed");
+                                        } else {
+                                            p.sendMessage("Failed: " + res.get("reason").getAsString());
+                                        }
+                                    });
+                                }
+                            }
+                        });
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("price")) {
                         String shopId = args[2];
                         String itemKey;

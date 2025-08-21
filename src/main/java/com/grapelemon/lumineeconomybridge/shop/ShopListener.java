@@ -26,6 +26,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
+import java.time.Instant;
 
 import java.io.IOException;
 import java.util.*;
@@ -122,10 +123,24 @@ public class ShopListener implements Listener {
                     String body = response.body() != null ? response.body().string() : "{}";
                     JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
                     if (!obj.has("status") || !"active".equals(obj.get("status").getAsString())) {
-                        Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                        long last = obj.has("last_activity_at") ? obj.get("last_activity_at").getAsLong() : 0L;
+                        String date = Instant.ofEpochSecond(last).toString();
+                        Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage("Shop closed (last: " + date + ")"));
                         return;
                     }
                     JsonObject dataObj = obj;
+                    // ping to keep shop active
+                    Map<String, Object> ping = new HashMap<>();
+                    ping.put("shop_id", shopId);
+                    ping.put("timestamp", System.currentTimeMillis() / 1000);
+                    Request pingReq = new Request.Builder()
+                            .url(plugin.getBaseUrl() + "/api/shop/ping")
+                            .post(RequestBody.create(gson.toJson(ping), JSON))
+                            .build();
+                    http.newCall(pingReq).enqueue(new Callback() {
+                        @Override public void onFailure(Call call, IOException e) { plugin.getLogger().warning("Ping failed: " + e.getMessage()); }
+                        @Override public void onResponse(Call call, Response res) throws IOException { res.close(); }
+                    });
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         var arr = dataObj.getAsJsonArray("items");
                         int size = ((arr.size() + 1 + 8) / 9) * 9;
@@ -175,13 +190,34 @@ public class ShopListener implements Listener {
         if (e.getSlot() == e.getInventory().getSize() - 1) {
             ShopItem si = holder.getSelectedItem();
             if (si == null) return;
-            String currency = si.getPrices().keySet().stream().findFirst().orElse(null);
-            if (currency == null) return;
+            if (e.isRightClick() && !e.isShiftClick()) {
+                List<String> curList = new ArrayList<>(si.getPrices().keySet());
+                if (curList.isEmpty()) return;
+                String cur = holder.getCurrency();
+                int idx = cur == null ? -1 : curList.indexOf(cur);
+                idx = (idx + 1) % curList.size();
+                holder.setCurrency(curList.get(idx));
+                refreshConfirm(holder);
+                return;
+            }
+            if (e.isShiftClick()) {
+                int q = holder.getQuantity();
+                if (e.isRightClick()) q--; else q++;
+                holder.setQuantity(q);
+                refreshConfirm(holder);
+                return;
+            }
+            String currency = holder.getCurrency();
+            if (currency == null) {
+                currency = si.getPrices().keySet().stream().findFirst().orElse(null);
+                if (currency == null) return;
+            }
+            int qty = holder.getQuantity();
             Map<String, Object> payload = new HashMap<>();
             payload.put("player_uuid", p.getUniqueId().toString());
             payload.put("shop_id", holder.getShopId());
             payload.put("item_key", si.getItemKey());
-            payload.put("qty", 1);
+            payload.put("qty", qty);
             payload.put("currency", currency);
             payload.put("timestamp", System.currentTimeMillis() / 1000);
             Request req = new Request.Builder()
@@ -219,11 +255,11 @@ public class ShopListener implements Listener {
                                     res.getAsJsonArray("grant").forEach(g -> {
                                         JsonObject gg = g.getAsJsonObject();
                                         String ik = gg.get("item_key").getAsString();
-                                        int qty = gg.get("qty").getAsInt();
+                                        int qty2 = gg.get("qty").getAsInt();
                                         ShopItem item = holder.getItems().values().stream().filter(it -> it.getItemKey().equals(ik)).findFirst().orElse(null);
                                         if (item != null) {
                                             ItemStack stack = item.getItem().clone();
-                                            stack.setAmount(qty);
+                                            stack.setAmount(qty2);
                                             p.getInventory().addItem(stack);
                                         }
                                     });
@@ -252,7 +288,36 @@ public class ShopListener implements Listener {
             });
         } else if (holder.getItems().containsKey(e.getSlot())) {
             holder.setSelected(e.getSlot());
-            p.sendMessage("Selected slot " + e.getSlot());
+            holder.setQuantity(1);
+            ShopItem si = holder.getSelectedItem();
+            String cur = si.getPrices().keySet().stream().findFirst().orElse(null);
+            holder.setCurrency(cur);
+            refreshConfirm(holder);
         }
+    }
+
+    private void refreshConfirm(ShopMenuHolder holder) {
+        Inventory inv = holder.getInventory();
+        if (inv == null) return;
+        int slot = inv.getSize() - 1;
+        ItemStack confirm = inv.getItem(slot);
+        if (confirm == null || confirm.getType() != Material.EMERALD) {
+            confirm = new ItemStack(Material.EMERALD);
+        }
+        ItemMeta cm = confirm.getItemMeta();
+        List<String> lore = new ArrayList<>();
+        ShopItem si = holder.getSelectedItem();
+        if (si != null && holder.getCurrency() != null) {
+            int unit = si.getPrices().getOrDefault(holder.getCurrency(), 0);
+            int total = unit * holder.getQuantity();
+            lore.add("Qty: " + holder.getQuantity());
+            lore.add(holder.getCurrency() + ": " + total);
+            cm.setDisplayName("Purchase");
+        } else {
+            cm.setDisplayName("Purchase");
+        }
+        cm.setLore(lore);
+        confirm.setItemMeta(cm);
+        inv.setItem(slot, confirm);
     }
 }

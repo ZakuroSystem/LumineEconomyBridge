@@ -11,6 +11,8 @@ public class ShopMenuHolder implements InventoryHolder {
     private final Map<Integer, ShopItem> items = new HashMap<>();
     private int selected = -1;
     private Inventory inventory;
+    private String currency;
+    private int quantity = 1;
 
     public ShopMenuHolder(String shopId) {
         this.shopId = shopId;
@@ -43,5 +45,21 @@ public class ShopMenuHolder implements InventoryHolder {
 
     public void setInventory(Inventory inventory) {
         this.inventory = inventory;
+    }
+
+    public String getCurrency() {
+        return currency;
+    }
+
+    public void setCurrency(String currency) {
+        this.currency = currency;
+    }
+
+    public int getQuantity() {
+        return quantity;
+    }
+
+    public void setQuantity(int quantity) {
+        this.quantity = Math.max(1, quantity);
     }
 }

@@ -321,6 +321,22 @@ class ShopSetPricePayload(BaseModel):
     price: int
 
 
+class ShopPingPayload(BaseModel):
+    shop_id: str
+    timestamp: int
+
+
+class ShopReopenPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    timestamp: int
+
+
+class ShopRemovePayload(BaseModel):
+    shop_id: str
+    refund: bool = False
+
+
 def ensure_currency(cur: sqlite3.Cursor, currency: str, symbol: Optional[str] = None) -> None:
     cur.execute(
         "INSERT OR IGNORE INTO currencies(name, symbol) VALUES (?,?)",
@@ -484,9 +500,21 @@ async def auto_backup_loop():
         await asyncio.sleep(interval)
         backup_db()
         trim_backups(get_setting("auto_backup_keep", 10))
+
+
+async def suspend_loop():
+    while True:
+        await asyncio.sleep(3600)
+        cutoff = int(time.time()) - 5 * 86400
+        with transaction() as cur:
+            cur.execute(
+                "UPDATE shops SET status='suspended' WHERE status='active' AND last_activity_at<?",
+                (cutoff,),
+            )
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     asyncio.create_task(auto_backup_loop())
+    asyncio.create_task(suspend_loop())
     yield
 
 app.router.lifespan_context = lifespan
@@ -1144,11 +1172,11 @@ async def shop_place(payload: ShopPlacePayload):
 @app.get("/api/shop/items")
 async def shop_items(shop_id: str):
     with transaction() as cur:
-        srow = cur.execute("SELECT status FROM shops WHERE shop_id=?", (shop_id,)).fetchone()
+        srow = cur.execute("SELECT status,last_activity_at FROM shops WHERE shop_id=?", (shop_id,)).fetchone()
         if not srow:
             return {"status": "error", "reason": "shop_not_found"}
         if srow["status"] != "active":
-            return {"status": srow["status"]}
+            return {"status": srow["status"], "last_activity_at": srow["last_activity_at"]}
         rows = cur.execute(
             "SELECT st.item_key, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
             (shop_id,),
@@ -1311,9 +1339,10 @@ async def shop_add_stock(payload: ShopAddStockPayload):
     item_key = hashlib.sha256(blob).hexdigest()
     with transaction() as cur:
         shop = cur.execute(
-            "SELECT owner_uuid FROM shops WHERE shop_id=?", (payload.shop_id,)
+            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+            (payload.shop_id,),
         ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid:
+        if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
             return {"status": "error", "reason": "not_owner"}
         ts = int(time.time())
         cur.execute(
@@ -1339,9 +1368,10 @@ async def shop_take_stock(payload: ShopTakeStockPayload):
     grant: List[Dict[str, str]] = []
     with transaction() as cur:
         shop = cur.execute(
-            "SELECT owner_uuid FROM shops WHERE shop_id=?", (payload.shop_id,)
+            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+            (payload.shop_id,),
         ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid:
+        if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
             return {"status": "error", "reason": "not_owner"}
         row = cur.execute(
             "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
@@ -1377,9 +1407,10 @@ async def shop_take_stock(payload: ShopTakeStockPayload):
 async def shop_set_price(payload: ShopSetPricePayload):
     with transaction() as cur:
         shop = cur.execute(
-            "SELECT owner_uuid FROM shops WHERE shop_id=?", (payload.shop_id,)
+            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+            (payload.shop_id,),
         ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid:
+        if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
             return {"status": "error", "reason": "not_owner"}
         ensure_currency(cur, payload.currency)
         ts = int(time.time())
@@ -1395,3 +1426,53 @@ async def shop_set_price(payload: ShopSetPricePayload):
             (ts, payload.shop_id),
         )
     return {"status": "success"}
+
+
+@app.post("/api/shop/ping")
+async def shop_ping(payload: ShopPingPayload):
+    with transaction() as cur:
+        cur.execute(
+            "UPDATE shops SET last_activity_at=? WHERE shop_id=? AND status='active'",
+            (payload.timestamp, payload.shop_id),
+        )
+    return {"status": "ok"}
+
+
+@app.post("/api/shop/reopen")
+async def shop_reopen(payload: ShopReopenPayload):
+    with transaction() as cur:
+        shop = cur.execute(
+            "SELECT owner_uuid FROM shops WHERE shop_id=?",
+            (payload.shop_id,),
+        ).fetchone()
+        if not shop or shop["owner_uuid"] != payload.owner_uuid:
+            return {"status": "error", "reason": "not_owner"}
+        cur.execute(
+            "UPDATE shops SET status='active', last_activity_at=? WHERE shop_id=?",
+            (payload.timestamp, payload.shop_id),
+        )
+    return {"status": "success"}
+
+
+@app.post("/api/shop/remove")
+async def shop_remove(payload: ShopRemovePayload):
+    grants: List[Dict[str, str]] = []
+    with transaction() as cur:
+        if payload.refund:
+            rows = cur.execute(
+                "SELECT st.item_key, st.stock, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+                (payload.shop_id,),
+            ).fetchall()
+            for r in rows:
+                grants.append(
+                    {
+                        "item_key": r["item_key"],
+                        "qty": r["stock"],
+                        "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
+                        "grant_token": secrets.token_hex(8),
+                    }
+                )
+            cur.execute("DELETE FROM shop_stock WHERE shop_id=?", (payload.shop_id,))
+        cur.execute("DELETE FROM shop_locations WHERE shop_id=?", (payload.shop_id,))
+        cur.execute("UPDATE shops SET status='suspended' WHERE shop_id=?", (payload.shop_id,))
+    return {"status": "success", "grant": grants}
