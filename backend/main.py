@@ -10,6 +10,7 @@ import time
 import shutil
 import threading
 import asyncio
+import secrets
 
 # SQLite persistence
 conn = sqlite3.connect(
@@ -106,6 +107,15 @@ with conn:
         CREATE TABLE IF NOT EXISTS player_lang (
             uuid TEXT PRIMARY KEY,
             lang TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS link_tokens (
+            token TEXT PRIMARY KEY,
+            uuid TEXT NOT NULL,
+            expires INTEGER NOT NULL
         )
         """
     )
@@ -455,6 +465,15 @@ async def message(payload: MessagePayload):
         except FileNotFoundError:
             success = False
             error_text = t("error.no_backup", lang=exec_lang)
+    elif action == "webtoken":
+        token = secrets.token_hex(4)
+        expires = payload.timestamp + 600
+        with transaction() as cur:
+            cur.execute(
+                "INSERT OR REPLACE INTO link_tokens(token, uuid, expires) VALUES(?,?,?)",
+                (token, payload.player, expires),
+            )
+        messages.append({"target": "chat", "text": t("web.token", lang=exec_lang, token=token)})
     else:
         with transaction() as cur:
             cur.execute(

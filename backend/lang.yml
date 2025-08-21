@@ -64,6 +64,8 @@ en:
     set: "§aLanguage set to §e{code}§a.§r"
     invalid: "§cInvalid language.§r"
     switch_hint: "§eType /le lang jp to switch to Japanese.§r"
+  web:
+    token: "§aUse this token on the website: §e{token}§r"
 jp:
   currency:
     create: "§a通貨 §e{currency}§a を作成しました。§r"
@@ -130,3 +132,5 @@ jp:
     set: "§a言語を §e{code}§a に設定しました。§r"
     invalid: "§c無効な言語です。§r"
     switch_hint: "§e日本語表示に変更するには /le lang jp と入力してください。§r"
+  web:
+    token: "§a以下のトークンをWebサイトで使用してください: §e{token}§r"

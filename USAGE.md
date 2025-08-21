@@ -32,4 +32,6 @@ Use `/le` followed by a subcommand. Common commands:
 
 The dashboard now requires registration and login. Navigate to `/register` to create a user (a default `admin`/`admin` account is available) and log in via `/login`. Regular users can view only their own balances and recent transactions, while admins access all management pages.
 
+To link a Minecraft account with a web user, run `/le webtoken` in game to receive a one‑time token. Enter this token during registration to bind the web account to your player UUID and view your own balances on the dashboard.
+
 For developer details, see `plugin.yml` and the Python sources under `backend/`.

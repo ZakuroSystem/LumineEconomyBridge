@@ -73,7 +73,13 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
                 password TEXT NOT NULL,
-                is_admin INTEGER NOT NULL DEFAULT 0
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                uuid TEXT
+            );
+            CREATE TABLE IF NOT EXISTS link_tokens (
+                token TEXT PRIMARY KEY,
+                uuid TEXT NOT NULL,
+                expires INTEGER NOT NULL
             );
             """
         )
@@ -87,6 +93,10 @@ def init_db() -> None:
             pass
         try:
             db.execute("ALTER TABLE currencies ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN uuid TEXT")
         except sqlite3.OperationalError:
             pass
 
@@ -106,7 +116,7 @@ def load_user():
     if username:
         with get_db() as db:
             g.user = db.execute(
-                "SELECT username, is_admin FROM users WHERE username=?",
+                "SELECT username, uuid, is_admin FROM users WHERE username=?",
                 (username,),
             ).fetchone()
     else:
@@ -200,7 +210,7 @@ def login():
         password = request.form["password"]
         with get_db() as db:
             row = db.execute(
-                "SELECT username, password, is_admin FROM users WHERE username=?",
+                "SELECT username, password, is_admin, uuid FROM users WHERE username=?",
                 (username,),
             ).fetchone()
         if row and check_password_hash(row["password"], password):
@@ -214,18 +224,28 @@ def login():
 def register():
     if request.method == "POST":
         username = request.form["username"].strip()
+        token = request.form["token"].strip()
         password = generate_password_hash(request.form["password"])
-        try:
-            with get_db() as db:
-                db.execute(
-                    "INSERT INTO users(username, password, is_admin) VALUES(?,?,0)",
-                    (username, password),
-                )
-                db.commit()
-            flash("Registered, please login")
-            return redirect(url_for("login"))
-        except sqlite3.IntegrityError:
-            flash("Username already exists")
+        now = int(time.time())
+        with get_db() as db:
+            row = db.execute(
+                "SELECT uuid FROM link_tokens WHERE token=? AND expires >= ?",
+                (token, now),
+            ).fetchone()
+            if not row:
+                flash("Invalid or expired token")
+            else:
+                try:
+                    db.execute(
+                        "INSERT INTO users(username, password, is_admin, uuid) VALUES(?,?,0,?)",
+                        (username, password, row["uuid"]),
+                    )
+                    db.execute("DELETE FROM link_tokens WHERE token=?", (token,))
+                    db.commit()
+                    flash("Registered, please login")
+                    return redirect(url_for("login"))
+                except sqlite3.IntegrityError:
+                    flash("Username already exists")
     return render_template("register.html")
 
 
@@ -241,7 +261,7 @@ def profile():
     with get_db() as db:
         balances = db.execute(
             "SELECT currency, balance FROM accounts WHERE uuid=?",
-            (g.user["username"],),
+            (g.user["uuid"],),
         ).fetchall()
         txs = db.execute(
             """
@@ -250,7 +270,7 @@ def profile():
             WHERE from_account=? OR to_account=?
             ORDER BY id DESC LIMIT 50
             """,
-            (g.user["username"], g.user["username"]),
+            (g.user["uuid"], g.user["uuid"]),
         ).fetchall()
     return render_template("profile.html", balances=balances, txs=txs)
 
