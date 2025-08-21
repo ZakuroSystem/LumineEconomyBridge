@@ -675,7 +675,7 @@ async def message(payload: MessagePayload):
         except FileNotFoundError:
             success = False
             error_text = t("error.no_backup", lang=exec_lang)
-    elif action == "webtoken":
+    elif action in {"webtoken", "weblink"}:
         token = secrets.token_hex(4)
         expires = payload.timestamp + 600
         with transaction() as cur:
@@ -813,6 +813,62 @@ async def message(payload: MessagePayload):
                                     "amount": amt,
                                 })
                                 scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
+                elif sub == "top":
+                    currency = None
+                    page = 1
+                    if len(cmd) >= 4 and is_currency(cur, cmd[2]):
+                        currency = resolve_currency(cur, cmd[2])
+                        try:
+                            page = max(1, int(cmd[3]))
+                        except ValueError:
+                            success = False
+                            error_text = t("error.invalid_args", lang=exec_lang)
+                    elif len(cmd) >= 3:
+                        if is_currency(cur, cmd[2]):
+                            currency = resolve_currency(cur, cmd[2])
+                        else:
+                            currency = get_default_currency(cur)
+                            try:
+                                page = max(1, int(cmd[2]))
+                            except ValueError:
+                                success = False
+                                error_text = t("error.invalid_args", lang=exec_lang)
+                    else:
+                        currency = get_default_currency(cur)
+                    if success:
+                        ensure_currency(cur, currency)
+                        offset = (page - 1) * 10
+                        rows = cur.execute(
+                            "SELECT n.name, a.balance FROM accounts a JOIN name_index n ON a.uuid=n.uuid WHERE a.currency=? ORDER BY a.balance DESC LIMIT 10 OFFSET ?",
+                            (currency, offset),
+                        ).fetchall()
+                        messages.append(
+                            {
+                                "target": "chat",
+                                "text": t(
+                                    "money.top_header",
+                                    lang=exec_lang,
+                                    currency=currency,
+                                    page=page,
+                                ),
+                            }
+                        )
+                        if rows:
+                            for idx, r in enumerate(rows, start=offset + 1):
+                                messages.append(
+                                    {
+                                        "target": "chat",
+                                        "text": t(
+                                            "money.top_entry",
+                                            lang=exec_lang,
+                                            rank=idx,
+                                            player=r["name"],
+                                            amount=format_amount(cur, r["balance"], currency),
+                                        ),
+                                    }
+                                )
+                        else:
+                            messages.append({"target": "chat", "text": t("money.top_empty", lang=exec_lang)})
                 elif sub == "pay" and len(cmd) >= 4:
                     if len(cmd) >= 6:
                         src_name = cmd[2].lower()
@@ -1023,29 +1079,54 @@ async def message(payload: MessagePayload):
                         scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
                         scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
             elif action == "balance":
-                currency = resolve_currency(cur, cmd[1]) if len(cmd) >= 2 else None
-                ensure_currency(cur, currency) if currency else None
-                if currency:
-                    bal = get_balance(cur, exec_uuid, currency)
-                    messages.append({
-                        "target": "chat",
-                        "text": t(
-                            "balance.single",
-                            lang=exec_lang,
-                            currency=currency,
-                            amount=format_amount(cur, bal, currency),
-                        ),
-                    })
-                else:
-                    bals = list_balances(cur, exec_uuid)
-                    if bals:
-                        balances = ", ".join(
-                            f"§e{k}§7={format_amount(cur, v, k)}§a" for k, v in bals.items()
-                        )
-                        messages.append({"target": "chat", "text": t("balance.all", lang=exec_lang, balances=balances)})
+                target_name = None
+                currency = None
+                if len(cmd) >= 3 and is_currency(cur, cmd[1]):
+                    currency = resolve_currency(cur, cmd[1])
+                    target_name = cmd[2].lower()
+                elif len(cmd) >= 2:
+                    if is_currency(cur, cmd[1]):
+                        currency = resolve_currency(cur, cmd[1])
                     else:
-                        messages.append({"target": "chat", "text": t("balance.empty", lang=exec_lang)})
-                scoreboards[exec_uuid] = get_scoreboard(cur, exec_uuid)
+                        target_name = cmd[1].lower()
+                ensure_currency(cur, currency) if currency else None
+                target_uuid = get_uuid(target_name) if target_name else exec_uuid
+                if target_uuid is None:
+                    success = False
+                    error_text = t("error.invalid_args", lang=exec_lang)
+                else:
+                    if currency:
+                        bal = get_balance(cur, target_uuid, currency)
+                        key = "balance.other_single" if target_uuid != exec_uuid else "balance.single"
+                        messages.append(
+                            {
+                                "target": "chat",
+                                "text": t(
+                                    key,
+                                    lang=exec_lang,
+                                    player=target_name or payload.executor,
+                                    currency=currency,
+                                    amount=format_amount(cur, bal, currency),
+                                ),
+                            }
+                        )
+                    else:
+                        bals = list_balances(cur, target_uuid)
+                        if bals:
+                            balances = ", ".join(
+                                f"§e{k}§7={format_amount(cur, v, k)}§a" for k, v in bals.items()
+                            )
+                            key = "balance.other_all" if target_uuid != exec_uuid else "balance.all"
+                            messages.append(
+                                {
+                                    "target": "chat",
+                                    "text": t(key, lang=exec_lang, player=target_name or payload.executor, balances=balances),
+                                }
+                            )
+                        else:
+                            key = "balance.other_empty" if target_uuid != exec_uuid else "balance.empty"
+                            messages.append({"target": "chat", "text": t(key, lang=exec_lang, player=target_name or payload.executor)})
+                    scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
             elif action == "account" and len(cmd) >= 3 and cmd[1].lower() == "create":
                 name = cmd[2].lower()
                 cur.execute("INSERT OR IGNORE INTO system_accounts(uuid) VALUES (?)", (name,))

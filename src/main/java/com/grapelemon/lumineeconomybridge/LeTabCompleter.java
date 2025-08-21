@@ -15,7 +15,7 @@ public class LeTabCompleter implements TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-              return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo", "help", "lang", "backup", "restore")
+              return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo", "help", "lang", "backup", "restore", "weblink")
                       .filter(s -> s.startsWith(args[0].toLowerCase()))
                       .toList();
         }
@@ -29,27 +29,35 @@ public class LeTabCompleter implements TabCompleter {
                 names.removeIf(n -> !n.toLowerCase().startsWith(args[1].toLowerCase()));
                 return names;
             }
-              if (first.equals("currency")) {
-                  return Stream.of("create", "supply", "default")
-                          .filter(s -> s.startsWith(args[1].toLowerCase()))
-                          .toList();
-              }
-              if (first.equals("account")) {
-                  return Stream.of("create")
-                          .filter(s -> s.startsWith(args[1].toLowerCase()))
-                          .toList();
-              }
-              if (first.equals("money")) {
-                  return Stream.of("give", "take", "pay")
-                          .filter(s -> s.startsWith(args[1].toLowerCase()))
-                          .toList();
-              }
-              if (first.equals("lang")) {
-                  return Stream.of("en", "jp")
-                          .filter(s -> s.startsWith(args[1].toLowerCase()))
-                          .toList();
-              }
-          }
+            if (first.equals("currency")) {
+                return Stream.of("create", "supply", "default")
+                        .filter(s -> s.startsWith(args[1].toLowerCase()))
+                        .toList();
+            }
+            if (first.equals("account")) {
+                return Stream.of("create")
+                        .filter(s -> s.startsWith(args[1].toLowerCase()))
+                        .toList();
+            }
+            if (first.equals("money")) {
+                return Stream.of("give", "take", "pay", "top")
+                        .filter(s -> s.startsWith(args[1].toLowerCase()))
+                        .toList();
+            }
+            if (first.equals("balance")) {
+                List<String> names = new ArrayList<>();
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    names.add(p.getName());
+                }
+                names.removeIf(n -> !n.toLowerCase().startsWith(args[1].toLowerCase()));
+                return names;
+            }
+            if (first.equals("lang")) {
+                return Stream.of("en", "jp")
+                        .filter(s -> s.startsWith(args[1].toLowerCase()))
+                        .toList();
+            }
+        }
         if (args.length == 3) {
             String first = args[0].toLowerCase();
             if (first.equals("currency") && args[1].equalsIgnoreCase("create")) {
@@ -58,7 +66,15 @@ public class LeTabCompleter implements TabCompleter {
             if (first.equals("currency") && args[1].equalsIgnoreCase("default")) {
                 return Collections.singletonList("<id>");
             }
-            if (first.equals("money")) {
+            if (first.equals("money") && (args[1].equalsIgnoreCase("give") || args[1].equalsIgnoreCase("take") || args[1].equalsIgnoreCase("pay"))) {
+                List<String> names = new ArrayList<>();
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    names.add(p.getName());
+                }
+                names.removeIf(n -> !n.toLowerCase().startsWith(args[2].toLowerCase()));
+                return names;
+            }
+            if (first.equals("balance")) {
                 List<String> names = new ArrayList<>();
                 for (Player p : Bukkit.getOnlinePlayers()) {
                     names.add(p.getName());
