@@ -125,7 +125,16 @@ public class ShopListener implements Listener {
                     if (!obj.has("status") || !"active".equals(obj.get("status").getAsString())) {
                         long last = obj.has("last_activity_at") ? obj.get("last_activity_at").getAsLong() : 0L;
                         String date = Instant.ofEpochSecond(last).toString();
-                        Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage("Shop closed (last: " + date + ")"));
+                        Bukkit.getScheduler().runTask(plugin, () -> {
+                            Inventory inv = Bukkit.createInventory(null, 9, "Shop " + shopId);
+                            ItemStack barrier = new ItemStack(Material.BARRIER);
+                            ItemMeta bm = barrier.getItemMeta();
+                            bm.setDisplayName("Closed");
+                            bm.setLore(Collections.singletonList("Last active: " + date));
+                            barrier.setItemMeta(bm);
+                            inv.setItem(4, barrier);
+                            p.openInventory(inv);
+                        });
                         return;
                     }
                     JsonObject dataObj = obj;
