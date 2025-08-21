@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Shop Search</h2>
+<form class="row g-2 mb-3">
+  <div class="col"><input class="form-control" type="text" name="item" placeholder="Item" value="{{ request.args.get('item','') }}"></div>
+  <div class="col"><input class="form-control" type="text" name="currency" placeholder="Currency" value="{{ request.args.get('currency','') }}"></div>
+  <div class="col"><input class="form-control" type="number" name="min_price" placeholder="Min Price" value="{{ request.args.get('min_price','') }}"></div>
+  <div class="col"><input class="form-control" type="number" name="max_price" placeholder="Max Price" value="{{ request.args.get('max_price','') }}"></div>
+  <div class="col-auto"><button class="btn btn-primary">Search</button></div>
+</form>
+<table class="table table-striped">
+  <thead><tr><th>Shop</th><th>Item</th><th>Currency</th><th>Price</th><th>World</th><th>X</th><th>Y</th><th>Z</th></tr></thead>
+  <tbody>
+  {% for r in results %}
+    <tr>
+      <td>{{ r.shop_id }}</td>
+      <td>{{ r.display_name or r.sale_name }}</td>
+      <td>{{ r.currency }}</td>
+      <td>{{ r.price }}</td>
+      <td>{{ r.world }}</td>
+      <td>{{ r.x }}</td>
+      <td>{{ r.y }}</td>
+      <td>{{ r.z }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -91,6 +91,9 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop reopen " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Reopen suspended shop / 再開");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner add " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Add co-owner / 共同オーナー追加");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner remove " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Remove co-owner / 共同オーナー削除");
+                        p.sendMessage(ChatColor.GREEN + "/le shop publish " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- List shop / 掲載");
+                        p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
+                        p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
                         String shopId = args[2];
                         ItemStack barrel = new ItemStack(Material.BARREL);
@@ -260,6 +263,96 @@ public class LeCommandExecutor implements CommandExecutor {
                                             p.sendMessage(ChatColor.GREEN + "Reopened / 再開しました" + ChatColor.RESET);
                                         } else {
                                             p.sendMessage(ChatColor.RED + "Failed: " + ChatColor.YELLOW + res.get("reason").getAsString() + ChatColor.RED + " / 失敗しました" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else if (args.length >= 3 && args[1].equalsIgnoreCase("publish")) {
+                        String shopId = args[2];
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        payload.put("listed", true);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/listing")
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Listing failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equals(res.get("status").getAsString())) {
+                                            p.sendMessage(ChatColor.GREEN + "Shop listed / 掲載しました" + ChatColor.RESET);
+                                        } else {
+                                            p.sendMessage(ChatColor.RED + "Failed / 失敗しました" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else if (args.length >= 3 && args[1].equalsIgnoreCase("hide")) {
+                        String shopId = args[2];
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        payload.put("listed", false);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/listing")
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Listing failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equals(res.get("status").getAsString())) {
+                                            p.sendMessage(ChatColor.GREEN + "Shop hidden / 非掲載にしました" + ChatColor.RESET);
+                                        } else {
+                                            p.sendMessage(ChatColor.RED + "Failed / 失敗しました" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else if (args.length >= 3 && args[1].equalsIgnoreCase("search")) {
+                        String item = args[2];
+                        HttpUrl.Builder url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shops/search").newBuilder();
+                        url.addQueryParameter("item", item);
+                        if (args.length >= 4) url.addQueryParameter("currency", args[3]);
+                        if (args.length >= 5) url.addQueryParameter("min_price", args[4]);
+                        if (args.length >= 6) url.addQueryParameter("max_price", args[5]);
+                        Request req = new Request.Builder().url(url.build()).get().build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Search failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "[]";
+                                    var arr = JsonParser.parseString(body).getAsJsonArray();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (arr.size() == 0) {
+                                            p.sendMessage(ChatColor.YELLOW + "No results / 該当なし" + ChatColor.RESET);
+                                        } else {
+                                            int limit = Math.min(10, arr.size());
+                                            for (int i = 0; i < limit; i++) {
+                                                JsonObject r = arr.get(i).getAsJsonObject();
+                                                String msg = ChatColor.GREEN + r.get("item").getAsString() + ChatColor.WHITE + " @ " + ChatColor.YELLOW + r.get("price").getAsInt() + " " + r.get("currency").getAsString() + ChatColor.WHITE + " - " + ChatColor.AQUA + r.get("shop_id").getAsString() + ChatColor.WHITE + " (" + r.get("world").getAsString() + " " + r.get("x").getAsInt() + "," + r.get("y").getAsInt() + "," + r.get("z").getAsInt() + ")";
+                                                p.sendMessage(msg);
+                                            }
                                         }
                                     });
                                 }

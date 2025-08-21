@@ -1,7 +1,12 @@
 {% extends 'base.html' %}
 {% block content %}
 <h2>Shop {{ shop.shop_id }}</h2>
-<p>Status: {{ shop.status }} | Last Activity: {{ shop.last_activity_at|fmt_ts }}</p>
+<p>Status: {{ shop.status }} | Listed: {{ 'Yes' if shop.listed else 'No' }} | Last Activity: {{ shop.last_activity_at|fmt_ts }}</p>
+<form method="post" class="mb-3">
+  <input type="hidden" name="action" value="set_listing">
+  <input type="hidden" name="listed" value="{{ 0 if shop.listed else 1 }}">
+  <button class="btn btn-sm btn-warning">{{ 'Unlist' if shop.listed else 'List' }}</button>
+</form>
 <div class="mb-4"><canvas id="salesChart"></canvas></div>
 <h3>Inventory</h3>
 <table class="table table-sm">

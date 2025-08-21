@@ -19,7 +19,7 @@ import requests
 from datetime import datetime
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
-from typing import Callable, Dict, Iterable, Tuple
+from typing import Callable, Dict, Iterable, Tuple, Optional, List
 
 app = Flask(__name__)
 app.secret_key = "lumineeconomy"
@@ -731,7 +731,7 @@ def systems():
 @admin_required
 def shops():
     with get_db() as db:
-        rows = db.execute("SELECT s.shop_id, GROUP_CONCAT(o.owner_uuid) AS owners, s.status, s.last_activity_at FROM shops s LEFT JOIN shop_owners o ON s.shop_id=o.shop_id GROUP BY s.shop_id").fetchall()
+        rows = db.execute("SELECT s.shop_id, GROUP_CONCAT(o.owner_uuid) AS owners, s.status, s.listed, s.last_activity_at FROM shops s LEFT JOIN shop_owners o ON s.shop_id=o.shop_id GROUP BY s.shop_id").fetchall()
         stats_rows = db.execute(
             """
             SELECT shop_id, COUNT(*) AS cnt, COALESCE(SUM(total_price),0) AS total
@@ -838,7 +838,7 @@ def portal_index():
         return redirect(url_for("index"))
     with get_db() as db:
         rows = db.execute(
-            "SELECT shop_id, status, last_activity_at FROM shops WHERE shop_id IN (SELECT shop_id FROM shop_owners WHERE owner_uuid=?)",
+            "SELECT shop_id, status, last_activity_at, listed FROM shops WHERE shop_id IN (SELECT shop_id FROM shop_owners WHERE owner_uuid=?)",
             (g.user["uuid"],),
         ).fetchall()
         stats_rows = db.execute(
@@ -870,7 +870,7 @@ def portal_shop(shop_id: str):
         return redirect(url_for("portal_index"))
     with get_db() as db:
         shop = db.execute(
-            "SELECT shop_id, status, last_activity_at FROM shops WHERE shop_id=?",
+            "SELECT shop_id, status, last_activity_at, listed FROM shops WHERE shop_id=?",
             (shop_id,),
         ).fetchone()
         owner_check = db.execute(
@@ -915,6 +915,9 @@ def portal_shop(shop_id: str):
                     """,
                     (shop_id, item_key, currency, price),
                 )
+            elif action == "set_listing":
+                listed = 1 if request.form.get("listed") == "1" else 0
+                cur.execute("UPDATE shops SET listed=? WHERE shop_id=?", (listed, shop_id))
             db.commit()
             flash("Updated")
             return redirect(url_for("portal_shop", shop_id=shop_id))
@@ -967,6 +970,44 @@ def portal_shop(shop_id: str):
         chart_labels=json.dumps(labels),
         chart_data=json.dumps(data),
     )
+
+
+@app.route("/shopsearch")
+@login_required
+def shop_search():
+    item = request.args.get("item")
+    currency = request.args.get("currency")
+    min_price = request.args.get("min_price", type=int)
+    max_price = request.args.get("max_price", type=int)
+    results: List[sqlite3.Row] = []
+    if item or currency or min_price is not None or max_price is not None:
+        q = [
+            "SELECT s.shop_id, si.display_name, ss.sale_name, sp.currency, sp.price, sl.world, sl.x, sl.y, sl.z",
+            "FROM shop_prices sp",
+            "JOIN shop_stock ss ON sp.shop_id=ss.shop_id AND sp.item_key=ss.item_key",
+            "JOIN shop_items si ON sp.item_key=si.item_key",
+            "JOIN shops s ON sp.shop_id=s.shop_id",
+            "JOIN shop_locations sl ON s.shop_id=sl.shop_id",
+            "WHERE s.listed=1",
+        ]
+        params: List[object] = []
+        if currency:
+            q.append("AND sp.currency=?")
+            params.append(currency)
+        if min_price is not None:
+            q.append("AND sp.price>=?")
+            params.append(min_price)
+        if max_price is not None:
+            q.append("AND sp.price<=?")
+            params.append(max_price)
+        if item:
+            q.append("AND (si.display_name LIKE ? OR ss.sale_name LIKE ?)")
+            like = f"%{item}%"
+            params.extend([like, like])
+        q.append("ORDER BY sp.price ASC")
+        with get_db() as db:
+            results = db.execute(" ".join(q), params).fetchall()
+    return render_template("shop_search.html", results=results)
 
 
 @app.route("/shopstats")

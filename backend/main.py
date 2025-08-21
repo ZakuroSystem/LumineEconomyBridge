@@ -9,7 +9,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from pydantic import BaseModel
-from typing import Dict, Optional, List, Union, Tuple
+from typing import Dict, Optional, List, Union, Tuple, Any
 from tile_store import TileStore
 import sqlite3
 import json
@@ -157,10 +157,15 @@ with conn:
             owner_uuid TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
             created_at INTEGER NOT NULL,
-            last_activity_at INTEGER NOT NULL
+            last_activity_at INTEGER NOT NULL,
+            listed INTEGER NOT NULL DEFAULT 1
         )
         """
     )
+    try:
+        conn.execute("ALTER TABLE shops ADD COLUMN listed INTEGER NOT NULL DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS shop_locations (
@@ -511,6 +516,12 @@ class ShopVisitPayload(BaseModel):
     player_uuid: str
     shop_id: str
     timestamp: int
+
+
+class ShopListingPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    listed: bool
 
 
 class AdminUserPayload(BaseModel):
@@ -2264,6 +2275,38 @@ async def shop_remove_owner(payload: ShopRemoveOwnerPayload):
     return {"status": result}
 
 
+@app.post("/api/shop/listing")
+async def shop_listing(payload: ShopListingPayload):
+    start = time.time()
+    result = "success"
+    reason: Optional[str] = None
+    with transaction() as cur:
+        if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
+            result = "error"
+            reason = "not_owner"
+        else:
+            cur.execute(
+                "UPDATE shops SET listed=? WHERE shop_id=?",
+                (1 if payload.listed else 0, payload.shop_id),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    append_log(
+        {
+            "type": "shop_listing",
+            "timestamp": int(time.time()),
+            "shop_id": payload.shop_id,
+            "actor": payload.owner_uuid,
+            "listed": payload.listed,
+            "result": result,
+            "reason": reason,
+            "latency_ms": latency_ms,
+        }
+    )
+    if result == "success":
+        return {"status": "success"}
+    return {"status": "error", "reason": reason}
+
+
 @app.post("/api/shop/visit")
 async def shop_visit(payload: ShopVisitPayload):
     with transaction() as cur:
@@ -2510,7 +2553,7 @@ def metrics() -> Response:
 @app.get("/shops")
 def shops(token: None = Depends(verify_token)):
     rows = conn.execute(
-        "SELECT sl.shop_id, sl.world, sl.x, sl.y, sl.z, s.status FROM shop_locations sl JOIN shops s ON sl.shop_id = s.shop_id"
+        "SELECT sl.shop_id, sl.world, sl.x, sl.y, sl.z, s.status, s.listed FROM shop_locations sl JOIN shops s ON sl.shop_id = s.shop_id"
     ).fetchall()
     result = []
     for r in rows:
@@ -2522,9 +2565,65 @@ def shops(token: None = Depends(verify_token)):
                 "y": r["y"],
                 "z": r["z"],
                 "status": r["status"],
+                "listed": r["listed"],
             }
         )
     return result
+
+
+@app.get("/api/shops/search")
+def search_shops(
+    currency: Optional[str] = None,
+    min_price: Optional[int] = None,
+    max_price: Optional[int] = None,
+    item: Optional[str] = None,
+):
+    q = [
+        "SELECT s.shop_id, si.display_name, ss.sale_name, sp.currency, sp.price, sl.world, sl.x, sl.y, sl.z",
+        "FROM shop_prices sp",
+        "JOIN shop_stock ss ON sp.shop_id=ss.shop_id AND sp.item_key=ss.item_key",
+        "JOIN shop_items si ON sp.item_key=si.item_key",
+        "JOIN shops s ON sp.shop_id=s.shop_id",
+        "JOIN shop_locations sl ON s.shop_id=sl.shop_id",
+        "WHERE s.listed=1",
+    ]
+    params: List[Any] = []
+    if currency:
+        q.append("AND sp.currency=?")
+        params.append(currency)
+    if min_price is not None:
+        q.append("AND sp.price>=?")
+        params.append(min_price)
+    if max_price is not None:
+        q.append("AND sp.price<=?")
+        params.append(max_price)
+    if item:
+        q.append("AND (si.display_name LIKE ? OR ss.sale_name LIKE ?)")
+        like = f"%{item}%"
+        params.extend([like, like])
+    q.append("ORDER BY sp.price ASC")
+    rows = conn.execute(" ".join(q), params).fetchall()
+    out = []
+    for r in rows:
+        out.append(
+            {
+                "shop_id": r["shop_id"],
+                "item": r["display_name"] or r["sale_name"],
+                "currency": r["currency"],
+                "price": r["price"],
+                "world": r["world"],
+                "x": r["x"],
+                "y": r["y"],
+                "z": r["z"],
+            }
+        )
+    return out
+
+
+@app.get("/api/shops/compare")
+def compare_shops(item: str, currency: str):
+    rows = search_shops(currency=currency, item=item)
+    return rows
 
 
 @app.get("/logs/summary")
