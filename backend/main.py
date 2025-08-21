@@ -457,7 +457,7 @@ class ShopAddStockPayload(BaseModel):
     display_name: Optional[str]
     qty: int
     price: int
-    sale_name: str
+    sale_name: Optional[str] = None
     currency: Optional[str] = None
 
 
@@ -1978,6 +1978,7 @@ async def shop_add_stock(payload: ShopAddStockPayload):
     item_key = hashlib.sha256(blob).hexdigest()
     result = "success"
     reason: Optional[str] = None
+    sale_name = payload.sale_name or payload.display_name or payload.material
     with transaction() as cur:
         shop = cur.execute(
             "SELECT status FROM shops WHERE shop_id=?",
@@ -1998,7 +1999,7 @@ async def shop_add_stock(payload: ShopAddStockPayload):
                 VALUES(?,?,?,?,?)
                 ON CONFLICT(shop_id,item_key) DO UPDATE SET stock=stock+excluded.stock, updated_at=excluded.updated_at, sale_name=excluded.sale_name
                 """,
-                (payload.shop_id, item_key, payload.sale_name, payload.qty, ts),
+                (payload.shop_id, item_key, sale_name, payload.qty, ts),
             )
             currency = payload.currency or get_default_currency(cur)
             cur.execute(
@@ -2020,7 +2021,7 @@ async def shop_add_stock(payload: ShopAddStockPayload):
         "owner": payload.owner_uuid,
         "item_key": item_key,
         "qty": payload.qty,
-        "sale_name": payload.sale_name,
+        "sale_name": sale_name,
         "price": payload.price,
         "result": result,
         "reason": reason,

@@ -24,6 +24,7 @@ import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -196,7 +197,7 @@ public class ShopListener implements Listener {
                         long last = obj.has("last_activity_at") ? obj.get("last_activity_at").getAsLong() : 0L;
                         String date = Instant.ofEpochSecond(last).toString();
                         Bukkit.getScheduler().runTask(plugin, () -> {
-                            Inventory inv = Bukkit.createInventory(null, 9, "Shop " + shopId);
+                            Inventory inv = Bukkit.createInventory(new ClosedMenuHolder(), 9, "Shop " + shopId);
                             ItemStack barrier = new ItemStack(Material.BARRIER);
                             ItemMeta bm = barrier.getItemMeta();
                             bm.setDisplayName("Closed");
@@ -306,7 +307,8 @@ public class ShopListener implements Listener {
 
     @EventHandler
     public void onClick(InventoryClickEvent e) {
-        if (e.getInventory().getHolder() instanceof ConfirmMenuHolder ch) {
+        var holderObj = e.getInventory().getHolder();
+        if (holderObj instanceof ConfirmMenuHolder ch) {
             e.setCancelled(true);
             Player p = (Player) e.getWhoClicked();
             if (e.getSlot() == 2) {
@@ -316,7 +318,11 @@ public class ShopListener implements Listener {
             }
             return;
         }
-        if (!(e.getInventory().getHolder() instanceof ShopMenuHolder holder)) return;
+        if (holderObj instanceof ClosedMenuHolder) {
+            e.setCancelled(true);
+            return;
+        }
+        if (!(holderObj instanceof ShopMenuHolder holder)) return;
         Player p = (Player) e.getWhoClicked();
         boolean isOwner = holder.isOwner(p.getUniqueId().toString());
         if (e.getClickedInventory() == p.getInventory() && e.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY) {
@@ -498,6 +504,13 @@ public class ShopListener implements Listener {
                     p.getInventory().addItem(ps.item);
                 }
             }, 20 * 20);
+        }
+    }
+
+    @EventHandler
+    public void onDrag(InventoryDragEvent e) {
+        if (e.getInventory().getHolder() instanceof ClosedMenuHolder) {
+            e.setCancelled(true);
         }
     }
 
