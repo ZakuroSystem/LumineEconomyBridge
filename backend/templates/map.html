@@ -23,7 +23,7 @@ const canvas = document.getElementById('mapCanvas');
 const ctx = canvas.getContext('2d');
 const tileCache = {};
 let palette = [];
-fetch('/plugin/mapcolor/palette', {headers:{'X-LE-Token': token}})
+fetch('/api/mapcolor/palette', {headers:{'X-LE-Token': token}})
   .then(r => r.json())
   .then(data => { palette = data.palette; init(); });
 function loadTile(tx, tz){

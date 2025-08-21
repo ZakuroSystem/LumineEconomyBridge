@@ -25,6 +25,7 @@ import base64
 import hashlib
 import re
 import html
+import httpx
 from email.utils import parsedate_to_datetime, formatdate
 
 # SQLite persistence
@@ -298,6 +299,7 @@ app = FastAPI()
 tile_store = TileStore("tiles")
 
 SHARED_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
+MAPCOLOR_URL = os.environ.get("MAPCOLOR_URL", "http://127.0.0.1:8765")
 RATE_LIMIT: Dict[str, Tuple[float, int]] = {}
 RATE_LIMIT_MAX = 10
 
@@ -2420,6 +2422,41 @@ def chunk_snapshot(
         }
     )
     return {"status": "stored", "chunks": len(req.chunks)}
+
+
+@app.get("/api/mapcolor/palette")
+async def mapcolor_palette(token: None = Depends(verify_token)):
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{MAPCOLOR_URL}/plugin/mapcolor/palette",
+            headers={"X-LE-Token": SHARED_TOKEN},
+            timeout=10,
+        )
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type=resp.headers.get("content-type"),
+    )
+
+
+@app.post("/api/mapcolor/resolve")
+async def mapcolor_resolve(req: Request, token: None = Depends(verify_token)):
+    body = await req.body()
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{MAPCOLOR_URL}/plugin/mapcolor/resolve",
+            content=body,
+            headers={
+                "X-LE-Token": SHARED_TOKEN,
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type=resp.headers.get("content-type"),
+    )
 
 
 @app.api_route("/tiles/{world}/{tx}/{tz}", methods=["GET", "HEAD"])

@@ -16,7 +16,6 @@ import os
 import json
 import shutil
 import requests
-import secrets
 from datetime import datetime
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -157,23 +156,6 @@ def load_user():
         g.user = None
 
 
-def generate_csrf_token() -> str:
-    token = session.get("_csrf_token")
-    if not token:
-        token = secrets.token_hex(16)
-        session["_csrf_token"] = token
-    return token
-
-
-app.jinja_env.globals["csrf_token"] = generate_csrf_token
-
-
-@app.before_request
-def csrf_protect():
-    if request.method == "POST":
-        token = session.get("_csrf_token")
-        if not token or token != request.form.get("_csrf_token"):
-            abort(400)
 
 
 @app.after_request
