@@ -81,12 +81,12 @@ public class LeCommandExecutor implements CommandExecutor {
                         return true;
                     }
                     if (args.length >= 2 && args[1].equalsIgnoreCase("help")) {
-                        p.sendMessage(ChatColor.GOLD + "/le shop create <id> - Create a shop barrel / ショップ樽を作成");
-                        p.sendMessage(ChatColor.GOLD + "/le shop add <id> <qty> - Deposit items / 在庫追加");
-                        p.sendMessage(ChatColor.GOLD + "/le shop take <id> <item> <qty> - Withdraw stock / 在庫回収");
-                        p.sendMessage(ChatColor.GOLD + "/le shop price <id> <hand|item> <currency> <amount> - Set price / 価格設定");
-                        p.sendMessage(ChatColor.GOLD + "/le shop remove <id> [refund] - Remove shop / 撤去");
-                        p.sendMessage(ChatColor.GOLD + "/le shop reopen <id> - Reopen suspended shop / 再開");
+                        p.sendMessage(ChatColor.GREEN + "/le shop create " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Create a shop barrel / ショップ樽を作成");
+                        p.sendMessage(ChatColor.GREEN + "/le shop add " + ChatColor.YELLOW + "<id> <qty> " + ChatColor.GRAY + "- Deposit items / 在庫追加");
+                        p.sendMessage(ChatColor.GREEN + "/le shop take " + ChatColor.YELLOW + "<id> <item> <qty> " + ChatColor.GRAY + "- Withdraw stock / 在庫回収");
+                        p.sendMessage(ChatColor.GREEN + "/le shop price " + ChatColor.YELLOW + "<id> <hand|item> <currency> <amount> " + ChatColor.GRAY + "- Set price / 価格設定");
+                        p.sendMessage(ChatColor.GREEN + "/le shop remove " + ChatColor.YELLOW + "<id> [refund] " + ChatColor.GRAY + "- Remove shop / 撤去");
+                        p.sendMessage(ChatColor.GREEN + "/le shop reopen " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Reopen suspended shop / 再開");
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
                         String shopId = args[2];
                         ItemStack barrel = new ItemStack(Material.BARREL);
