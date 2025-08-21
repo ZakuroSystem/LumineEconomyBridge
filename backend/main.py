@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Response, HTTPException
+from fastapi import FastAPI, Response, HTTPException, Header, Depends
 from pydantic import BaseModel
 from typing import Dict, Optional, List, Union, Tuple
 from tile_store import TileStore
@@ -280,6 +280,13 @@ with conn:
 
 app = FastAPI()
 tile_store = TileStore("tiles")
+
+SHARED_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
+
+
+def verify_token(x_le_token: str = Header(...)) -> None:
+    if SHARED_TOKEN and x_le_token != SHARED_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid token")
 
 db_lock = threading.Lock()
 
@@ -2266,7 +2273,7 @@ class InvalidateRequest(BaseModel):
 
 
 @app.get("/tiles/{world}/{tx}/{tz}")
-def get_tile(world: str, tx: int, tz: int):
+def get_tile(world: str, tx: int, tz: int, token: None = Depends(verify_token)):
     data = tile_store.load_tile(world, tx, tz)
     if data is None:
         raise HTTPException(status_code=404, detail="tile not found")
@@ -2274,11 +2281,11 @@ def get_tile(world: str, tx: int, tz: int):
 
 
 @app.post("/tiles/invalidate")
-def invalidate_tiles(req: InvalidateRequest):
+def invalidate_tiles(req: InvalidateRequest, token: None = Depends(verify_token)):
     tile_store.invalidate(req.world, [t.dict() for t in req.tiles])
     return {"status": "queued"}
 
 
 @app.get("/tiles/status")
-def tiles_status():
+def tiles_status(token: None = Depends(verify_token)):
     return tile_store.status()

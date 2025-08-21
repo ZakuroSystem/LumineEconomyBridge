@@ -1,6 +1,7 @@
 package com.grapelemon.lumineeconomybridge;
 
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
+import com.grapelemon.lumineeconomybridge.map.MapColorService;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import okhttp3.OkHttpClient;
@@ -30,6 +31,8 @@ public class LumineEconomyBridge extends JavaPlugin {
     private int timeout = 2000;
     private long syncInterval = 10L;
 
+    private MapColorService mapColorService;
+
     private final Map<String, Long> grantTokens = new ConcurrentHashMap<>();
 
     @Override
@@ -48,6 +51,7 @@ public class LumineEconomyBridge extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new ShopListener(this), this);
 
         startBridge();
+        startMapColorService();
     }
 
     public void startBridge() {
@@ -108,6 +112,29 @@ public class LumineEconomyBridge extends JavaPlugin {
         syncService = null;
         httpClient = null;
         getLogger().info("LumineEconomyBridge stopped.");
+    }
+
+    private void startMapColorService() {
+        if (mapColorService != null) return;
+        int port = getConfig().getInt("mapcolor.port", 8765);
+        String token = getConfig().getString("api.token", "");
+        try {
+            mapColorService = new MapColorService(this, token, port);
+            mapColorService.start();
+            getLogger().info("server_version=" + getServer().getVersion() +
+                    " palette_len=" + mapColorService.getPaletteLength());
+        } catch (IOException e) {
+            getLogger().warning("failed to start mapcolor service: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void onDisable() {
+        stopBridge();
+        if (mapColorService != null) {
+            mapColorService.stop();
+            mapColorService = null;
+        }
     }
 
     public void reloadBridge() {

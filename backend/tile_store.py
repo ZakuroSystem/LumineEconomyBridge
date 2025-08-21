@@ -4,7 +4,10 @@ The store is responsible for mapping tile coordinates to files on disk and
 managing a simple regeneration queue used by the backend service.
 """
 
+import json
 import os
+import time
+import hashlib
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from tile_format import encode_tile
@@ -43,6 +46,14 @@ class TileStore:
             f.write(data)
         os.replace(tmp, path)
 
+        meta = {
+            "last_updated": int(time.time() * 1000),
+            "size": len(data),
+            "sha1": hashlib.sha1(data).hexdigest(),
+        }
+        with open(path + ".meta.json", "w", encoding="utf-8") as mf:
+            json.dump(meta, mf)
+
     def invalidate(self, world: str, tiles: List[Dict[str, int]]) -> None:
         """Remove tiles and queue them for regeneration."""
 
@@ -50,6 +61,9 @@ class TileStore:
             path = self.tile_path(world, t["tx"], t["tz"])
             if os.path.exists(path):
                 os.remove(path)
+            meta_path = path + ".meta.json"
+            if os.path.exists(meta_path):
+                os.remove(meta_path)
             self._regen_queue.append((world, t["tx"], t["tz"]))
 
     def status(self) -> Dict[str, int]:
