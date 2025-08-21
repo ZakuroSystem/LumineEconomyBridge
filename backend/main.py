@@ -2452,6 +2452,37 @@ def shops(token: None = Depends(verify_token)):
     return result
 
 
+@app.get("/logs/summary")
+def logs_summary(
+    since: Optional[int] = None, token: None = Depends(verify_token)
+) -> Dict[str, Dict[str, int]]:
+    """Aggregate JSONL audit logs.
+
+    Returns counts and error totals grouped by entry ``type``. If ``since`` is
+    provided, only log entries with ``ts`` greater than or equal to the value
+    (UNIX milliseconds) are considered.
+    """
+
+    summary: Dict[str, Dict[str, int]] = {}
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if since is not None and entry.get("ts", 0) < since:
+                    continue
+                etype = entry.get("type")
+                if not etype:
+                    continue
+                info = summary.setdefault(etype, {"count": 0, "errors": 0})
+                info["count"] += 1
+                if "error" in entry or entry.get("status") == "error":
+                    info["errors"] += 1
+    return summary
+
+
 @app.websocket("/ws/tiles")
 async def ws_tiles(ws: WebSocket):
     await ws.accept()
