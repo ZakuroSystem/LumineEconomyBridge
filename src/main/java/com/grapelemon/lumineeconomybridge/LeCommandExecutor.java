@@ -88,6 +88,8 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop remove " + ChatColor.YELLOW + "<id> <name> [refund] " + ChatColor.GRAY + "- Remove item / 在庫削除");
                         p.sendMessage(ChatColor.GREEN + "/le shop remove " + ChatColor.YELLOW + "<id> [refund] " + ChatColor.GRAY + "- Remove shop / 撤去");
                         p.sendMessage(ChatColor.GREEN + "/le shop reopen " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Reopen suspended shop / 再開");
+                        p.sendMessage(ChatColor.GREEN + "/le shop partner add " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Add co-owner / 共同オーナー追加");
+                        p.sendMessage(ChatColor.GREEN + "/le shop partner remove " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Remove co-owner / 共同オーナー削除");
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
                         String shopId = args[2];
                         ItemStack barrel = new ItemStack(Material.BARREL);
@@ -195,6 +197,39 @@ public class LeCommandExecutor implements CommandExecutor {
                                             p.sendMessage(ChatColor.GREEN + "Stock taken");
                                         } else {
                                             p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else if (args.length >= 5 && args[1].equalsIgnoreCase("partner")) {
+                        String action = args[2];
+                        String shopId = args[3];
+                        String target = args[4];
+                        java.util.UUID uuid = Bukkit.getOfflinePlayer(target).getUniqueId();
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        payload.put("target_uuid", uuid.toString());
+                        String path = action.equalsIgnoreCase("add") ? "/api/shop/add_owner" : "/api/shop/remove_owner";
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + path)
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Partner failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equals(res.get("status").getAsString())) {
+                                            p.sendMessage(ChatColor.GREEN + "Done");
+                                        } else {
+                                            p.sendMessage(ChatColor.RED + "Failed");
                                         }
                                     });
                                 }

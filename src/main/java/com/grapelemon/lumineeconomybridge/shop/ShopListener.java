@@ -200,6 +200,7 @@ public class ShopListener implements Listener {
                     itemCache.put(shopId, new CacheEntry(obj, System.currentTimeMillis()));
                     buildInventory(p, shopId, obj);
                     sendPing(shopId);
+                    sendVisit(p, shopId);
                 }
             }
         });
@@ -220,14 +221,32 @@ public class ShopListener implements Listener {
         });
     }
 
+    private void sendVisit(Player p, String shopId) {
+        OkHttpClient http = plugin.getHttpClient();
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("player_uuid", p.getUniqueId().toString());
+        payload.put("shop_id", shopId);
+        payload.put("timestamp", System.currentTimeMillis() / 1000);
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/visit")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        http.newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException e) { }
+            @Override public void onResponse(Call call, Response res) throws IOException { res.close(); }
+        });
+    }
+
     private void buildInventory(Player p, String shopId, JsonObject dataObj) {
         Bukkit.getScheduler().runTask(plugin, () -> {
             var arr = dataObj.getAsJsonArray("items");
             int size = ((arr.size() + 8) / 9) * 9;
             if (size < 9) size = 9;
             ShopMenuHolder holder = new ShopMenuHolder(shopId);
-            if (dataObj.has("owner_uuid")) {
-                holder.setOwnerUuid(dataObj.get("owner_uuid").getAsString());
+            if (dataObj.has("owners")) {
+                for (var o : dataObj.getAsJsonArray("owners")) {
+                    holder.addOwnerUuid(o.getAsString());
+                }
             }
             Inventory inv = Bukkit.createInventory(holder, size, "Shop " + shopId);
             holder.setInventory(inv);
@@ -275,7 +294,7 @@ public class ShopListener implements Listener {
         }
         if (!(e.getInventory().getHolder() instanceof ShopMenuHolder holder)) return;
         Player p = (Player) e.getWhoClicked();
-        boolean isOwner = p.getUniqueId().toString().equals(holder.getOwnerUuid());
+        boolean isOwner = holder.isOwner(p.getUniqueId().toString());
         if (e.getClickedInventory() == p.getInventory() && e.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY) {
             ItemStack stack = e.getCurrentItem();
             if (stack == null) return;

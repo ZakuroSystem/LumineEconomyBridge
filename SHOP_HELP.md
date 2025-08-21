@@ -7,3 +7,5 @@
 §a/le shop remove §e<id> <name> [refund] §7- Remove item / 在庫削除
 §a/le shop remove §e<id> [refund] §7- Remove shop / 撤去
 §a/le shop reopen §e<id> §7- Reopen suspended shop / 再開
+§a/le shop partner add §e<id> <player> §7- Add co-owner / 共同オーナー追加
+§a/le shop partner remove §e<id> <player> §7- Remove co-owner / 共同オーナー削除

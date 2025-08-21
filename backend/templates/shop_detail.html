@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
 <h2>Shop {{ shop.shop_id }}</h2>
-<p>Owner: {{ shop.owner_uuid }} | Status: {{ shop.status }} | Last Activity: {{ shop.last_activity_at|fmt_ts }}</p>
+<p>Owners: {{ shop.owners }} | Status: {{ shop.status }} | Last Activity: {{ shop.last_activity_at|fmt_ts }}</p>
 <h3>Inventory</h3>
 <table class="table table-sm">
   <thead><tr><th>Item</th><th>Stock</th><th>Prices</th></tr></thead>

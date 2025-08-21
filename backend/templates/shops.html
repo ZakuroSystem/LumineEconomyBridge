@@ -3,13 +3,13 @@
 <h2>Shops</h2>
 <table class="table table-striped datatable">
   <thead>
-    <tr><th>ID</th><th>Owner</th><th>Status</th><th>Last Activity</th><th>Sales</th><th>Revenue</th><th></th></tr>
+    <tr><th>ID</th><th>Owners</th><th>Status</th><th>Last Activity</th><th>Sales</th><th>Revenue</th><th></th></tr>
   </thead>
   <tbody>
   {% for s in shops %}
     <tr>
       <td>{{ s.shop_id }}</td>
-      <td>{{ s.owner_uuid }}</td>
+      <td>{{ s.owners }}</td>
       <td>{{ s.status }}</td>
       <td>{{ s.last_activity_at|fmt_ts }}</td>
       <td>{{ s.sales }}</td>

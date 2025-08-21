@@ -216,6 +216,37 @@ with conn:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shop_owners (
+            shop_id TEXT NOT NULL,
+            owner_uuid TEXT NOT NULL,
+            PRIMARY KEY (shop_id, owner_uuid)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shop_visits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shop_id TEXT NOT NULL,
+            visitor_uuid TEXT NOT NULL,
+            timestamp INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sale_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_ts INTEGER NOT NULL,
+            end_ts INTEGER NOT NULL,
+            pct REAL NOT NULL,
+            account TEXT NOT NULL,
+            active INTEGER NOT NULL
+        )
+        """
+    )
     try:
         conn.execute("ALTER TABLE shop_tx ADD COLUMN client_tx_id TEXT")
     except sqlite3.OperationalError:
@@ -396,6 +427,24 @@ class ShopRemoveItemPayload(BaseModel):
     refund: bool = False
 
 
+class ShopAddOwnerPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    target_uuid: str
+
+
+class ShopRemoveOwnerPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    target_uuid: str
+
+
+class ShopVisitPayload(BaseModel):
+    player_uuid: str
+    shop_id: str
+    timestamp: int
+
+
 class AdminUserPayload(BaseModel):
     name: str
 
@@ -444,6 +493,19 @@ def get_name(uuid: str) -> Optional[str]:
     with closing(conn.cursor()) as cur:
         row = cur.execute("SELECT name FROM name_index WHERE uuid=? LIMIT 1", (uuid,)).fetchone()
         return row["name"] if row else None
+
+
+def is_shop_owner(cur: sqlite3.Cursor, shop_id: str, uuid: str) -> bool:
+    if cur.execute(
+        "SELECT 1 FROM shop_owners WHERE shop_id=? AND owner_uuid=?",
+        (shop_id, uuid),
+    ).fetchone():
+        return True
+    row = cur.execute(
+        "SELECT owner_uuid FROM shops WHERE shop_id=?",
+        (shop_id,),
+    ).fetchone()
+    return bool(row and row["owner_uuid"] == uuid)
 
 
 def get_balance(cur: sqlite3.Cursor, uuid: str, currency: str) -> int:
@@ -1431,6 +1493,10 @@ async def shop_place(payload: ShopPlacePayload):
             "INSERT OR REPLACE INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
             (payload.shop_id, payload.world, payload.x, payload.y, payload.z),
         )
+        cur.execute(
+            "INSERT OR IGNORE INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            (payload.shop_id, payload.owner_uuid),
+        )
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_place",
@@ -1487,12 +1553,20 @@ async def shop_items(shop_id: str):
                 (shop_id,),
             ).fetchall()
             items = []
+            owners = [r["owner_uuid"] for r in cur.execute("SELECT owner_uuid FROM shop_owners WHERE shop_id=?", (shop_id,)).fetchall()]
+            sale = cur.execute(
+                "SELECT pct,end_ts FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
+                (int(time.time()), int(time.time())),
+            ).fetchone()
             for r in rows:
                 price_rows = cur.execute(
                     "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
                     (shop_id, r["item_key"]),
                 ).fetchall()
                 prices = {pr["currency"]: pr["price"] for pr in price_rows}
+                if sale:
+                    for k in list(prices.keys()):
+                        prices[k] = int(prices[k] * (100 - sale["pct"]) / 100)
                 items.append(
                     {
                         "item_key": r["item_key"],
@@ -1507,8 +1581,12 @@ async def shop_items(shop_id: str):
             result = {
                 "status": "active",
                 "owner_uuid": srow["owner_uuid"],
+                "owners": owners,
                 "items": items,
             }
+            if sale:
+                result["sale_pct"] = sale["pct"]
+                result["sale_ends"] = sale["end_ts"]
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_items",
@@ -1616,7 +1694,25 @@ async def shop_buy(payload: ShopBuyPayload):
                     if not price_row:
                         reason = "invalid_currency"
                     else:
-                        total_price = price_row["price"] * payload.qty
+                        base_price = price_row["price"] * payload.qty
+                        sale = cur.execute(
+                            "SELECT id,pct,account FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
+                            (payload.timestamp, payload.timestamp),
+                        ).fetchone()
+                        discount = 0
+                        if sale:
+                            discount = int(base_price * sale["pct"] / 100)
+                            if get_balance(cur, sale["account"], payload.currency) >= discount:
+                                add_balance(cur, sale["account"], payload.currency, -discount)
+                                total_price = base_price - discount
+                            else:
+                                cur.execute(
+                                    "UPDATE sale_events SET active=0, end_ts=? WHERE id=?",
+                                    (payload.timestamp, sale["id"]),
+                                )
+                                total_price = base_price
+                        else:
+                            total_price = base_price
                         if get_balance(cur, payload.player_uuid, payload.currency) < total_price:
                             reason = "insufficient_funds"
                         elif not transfer(
@@ -1750,10 +1846,10 @@ async def shop_add_stock(payload: ShopAddStockPayload):
     reason: Optional[str] = None
     with transaction() as cur:
         shop = cur.execute(
-            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+            "SELECT status FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
+        if not shop or not is_shop_owner(cur, payload.shop_id, payload.owner_uuid) or shop["status"] != "active":
             result = "error"
             reason = "not_owner"
         else:
@@ -1810,10 +1906,10 @@ async def shop_take_stock(payload: ShopTakeStockPayload):
     reason: Optional[str] = None
     with transaction() as cur:
         shop = cur.execute(
-            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+            "SELECT status FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
+        if not shop or not is_shop_owner(cur, payload.shop_id, payload.owner_uuid) or shop["status"] != "active":
             result = "error"
             reason = "not_owner"
         else:
@@ -1871,10 +1967,10 @@ async def shop_set_price(payload: ShopSetPricePayload):
     reason: Optional[str] = None
     with transaction() as cur:
         shop = cur.execute(
-            "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+            "SELECT status FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
+        if not shop or not is_shop_owner(cur, payload.shop_id, payload.owner_uuid) or shop["status"] != "active":
             result = "error"
             reason = "not_owner"
         else:
@@ -1930,11 +2026,7 @@ async def shop_remove_item(payload: ShopRemoveItemPayload):
     result = "success"
     reason: Optional[str] = None
     with transaction() as cur:
-        shop = cur.execute(
-            "SELECT owner_uuid FROM shops WHERE shop_id=?",
-            (payload.shop_id,),
-        ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid:
+        if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
             result = "error"
             reason = "not_owner"
         else:
@@ -1990,6 +2082,80 @@ async def shop_remove_item(payload: ShopRemoveItemPayload):
     return {"status": result, "reason": reason, "grant": grants}
 
 
+@app.post("/api/shop/add_owner")
+async def shop_add_owner(payload: ShopAddOwnerPayload):
+    start = time.time()
+    result = "success"
+    with transaction() as cur:
+        if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
+            result = "error"
+            reason = "not_owner"
+        else:
+            cur.execute(
+                "INSERT OR IGNORE INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+                (payload.shop_id, payload.target_uuid),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    append_log(
+        {
+            "type": "shop_add_owner",
+            "timestamp": int(time.time()),
+            "shop_id": payload.shop_id,
+            "actor": payload.owner_uuid,
+            "target": payload.target_uuid,
+            "result": result,
+            "latency_ms": latency_ms,
+        }
+    )
+    return {"status": result}
+
+
+@app.post("/api/shop/remove_owner")
+async def shop_remove_owner(payload: ShopRemoveOwnerPayload):
+    start = time.time()
+    result = "success"
+    with transaction() as cur:
+        if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
+            result = "error"
+            reason = "not_owner"
+        else:
+            cur.execute(
+                "DELETE FROM shop_owners WHERE shop_id=? AND owner_uuid=?",
+                (payload.shop_id, payload.target_uuid),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    append_log(
+        {
+            "type": "shop_remove_owner",
+            "timestamp": int(time.time()),
+            "shop_id": payload.shop_id,
+            "actor": payload.owner_uuid,
+            "target": payload.target_uuid,
+            "result": result,
+            "latency_ms": latency_ms,
+        }
+    )
+    return {"status": result}
+
+
+@app.post("/api/shop/visit")
+async def shop_visit(payload: ShopVisitPayload):
+    with transaction() as cur:
+        cur.execute(
+            "INSERT INTO shop_visits(shop_id, visitor_uuid, timestamp) VALUES(?,?,?)",
+            (payload.shop_id, payload.player_uuid, payload.timestamp),
+        )
+    append_log(
+        {
+            "type": "shop_visit",
+            "timestamp": payload.timestamp,
+            "shop_id": payload.shop_id,
+            "visitor": payload.player_uuid,
+        }
+    )
+    return {"status": "ok"}
+
+
 @app.post("/api/shop/ping")
 async def shop_ping(payload: ShopPingPayload):
     start = time.time()
@@ -2015,11 +2181,7 @@ async def shop_reopen(payload: ShopReopenPayload):
     result = "success"
     reason: Optional[str] = None
     with transaction() as cur:
-        shop = cur.execute(
-            "SELECT owner_uuid FROM shops WHERE shop_id=?",
-            (payload.shop_id,),
-        ).fetchone()
-        if not shop or shop["owner_uuid"] != payload.owner_uuid:
+        if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
             result = "error"
             reason = "not_owner"
         else:
@@ -2077,6 +2239,7 @@ async def shop_remove(payload: ShopRemovePayload):
             }
         cur.execute("DELETE FROM shop_locations WHERE shop_id=?", (payload.shop_id,))
         cur.execute("UPDATE shops SET status='suspended' WHERE shop_id=?", (payload.shop_id,))
+        cur.execute("DELETE FROM shop_owners WHERE shop_id=?", (payload.shop_id,))
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_remove",

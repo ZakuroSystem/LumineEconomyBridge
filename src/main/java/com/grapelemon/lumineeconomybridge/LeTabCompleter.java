@@ -122,7 +122,7 @@ public class LeTabCompleter implements TabCompleter {
                         .toList();
             }
             if (first.equals("shop")) {
-                return Stream.of("create", "add", "take", "price", "remove", "reopen", "help")
+                return Stream.of("create", "add", "take", "price", "remove", "partner", "reopen", "help")
                         .filter(s -> s.startsWith(args[1].toLowerCase()))
                         .toList();
             }
@@ -176,6 +176,11 @@ public class LeTabCompleter implements TabCompleter {
                         .filter(s -> s.startsWith(args[2].toLowerCase()))
                         .collect(Collectors.toList());
             }
+            if (first.equals("shop") && args[1].equalsIgnoreCase("partner")) {
+                return Stream.of("add", "remove")
+                        .filter(s -> s.startsWith(args[2].toLowerCase()))
+                        .collect(Collectors.toList());
+            }
             if (first.equals("shop")) {
                 long now = System.currentTimeMillis();
                 if (now - shopIdsFetched > 5000) {
@@ -211,6 +216,15 @@ public class LeTabCompleter implements TabCompleter {
                             .collect(Collectors.toList());
                 }
             }
+            if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("partner")) {
+                long now = System.currentTimeMillis();
+                if (now - shopIdsFetched > 5000) {
+                    refreshShopIds();
+                }
+                return shopIds.stream()
+                        .filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase()))
+                        .collect(Collectors.toList());
+            }
             if (args[0].equalsIgnoreCase("shop") && (args[1].equalsIgnoreCase("price") || args[1].equalsIgnoreCase("remove"))) {
                 String shopId = args[2];
                 ItemCache cache = itemCache.get(shopId);
@@ -223,6 +237,14 @@ public class LeTabCompleter implements TabCompleter {
                             .filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase()))
                             .collect(Collectors.toList());
                 }
+            }
+        }
+        if (args.length == 5) {
+            if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("partner")) {
+                return Bukkit.getOnlinePlayers().stream()
+                        .map(Player::getName)
+                        .filter(n -> n.toLowerCase().startsWith(args[4].toLowerCase()))
+                        .collect(Collectors.toList());
             }
         }
         return Collections.emptyList();

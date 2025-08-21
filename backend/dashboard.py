@@ -17,6 +17,7 @@ import json
 import shutil
 import requests
 import secrets
+from datetime import datetime
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -734,9 +735,7 @@ def systems():
 @admin_required
 def shops():
     with get_db() as db:
-        rows = db.execute(
-            "SELECT shop_id, owner_uuid, status, last_activity_at FROM shops"
-        ).fetchall()
+        rows = db.execute("SELECT s.shop_id, GROUP_CONCAT(o.owner_uuid) AS owners, s.status, s.last_activity_at FROM shops s LEFT JOIN shop_owners o ON s.shop_id=o.shop_id GROUP BY s.shop_id").fetchall()
         stats_rows = db.execute(
             """
             SELECT shop_id, COUNT(*) AS cnt, COALESCE(SUM(total_price),0) AS total
@@ -798,7 +797,7 @@ def shop_detail(shop_id: str):
             return redirect(url_for("shop_detail", shop_id=shop_id))
 
         shop = db.execute(
-            "SELECT shop_id, owner_uuid, status, last_activity_at FROM shops WHERE shop_id=?",
+            "SELECT s.shop_id, GROUP_CONCAT(o.owner_uuid) AS owners, s.status, s.last_activity_at FROM shops s LEFT JOIN shop_owners o ON s.shop_id=o.shop_id WHERE s.shop_id=? GROUP BY s.shop_id",
             (shop_id,),
         ).fetchone()
         item_rows = db.execute(
@@ -843,14 +842,14 @@ def portal_index():
         return redirect(url_for("index"))
     with get_db() as db:
         rows = db.execute(
-            "SELECT shop_id, status, last_activity_at FROM shops WHERE owner_uuid=?",
+            "SELECT shop_id, status, last_activity_at FROM shops WHERE shop_id IN (SELECT shop_id FROM shop_owners WHERE owner_uuid=?)",
             (g.user["uuid"],),
         ).fetchall()
         stats_rows = db.execute(
             """
             SELECT shop_id, COUNT(*) AS cnt, COALESCE(SUM(total_price),0) AS total
             FROM shop_tx WHERE result='success' AND shop_id IN (
-                SELECT shop_id FROM shops WHERE owner_uuid=?
+                SELECT shop_id FROM shop_owners WHERE owner_uuid=?
             )
             GROUP BY shop_id
             """,
@@ -875,10 +874,14 @@ def portal_shop(shop_id: str):
         return redirect(url_for("portal_index"))
     with get_db() as db:
         shop = db.execute(
-            "SELECT shop_id, owner_uuid, status, last_activity_at FROM shops WHERE shop_id=?",
+            "SELECT shop_id, status, last_activity_at FROM shops WHERE shop_id=?",
             (shop_id,),
         ).fetchone()
-        if not shop or shop["owner_uuid"] != g.user["uuid"]:
+        owner_check = db.execute(
+            "SELECT 1 FROM shop_owners WHERE shop_id=? AND owner_uuid=?",
+            (shop_id, g.user["uuid"]),
+        ).fetchone()
+        if not shop or not owner_check:
             flash("Access denied")
             return redirect(url_for("portal_index"))
         if request.method == "POST":
@@ -976,9 +979,21 @@ def shop_stats():
     with get_db() as db:
         rows = db.execute(
             """
-            SELECT s.shop_id, COALESCE(SUM(t.total_price),0) AS revenue, COUNT(t.id) AS cnt
-            FROM shops s LEFT JOIN shop_tx t ON s.shop_id=t.shop_id AND t.result='success'
-            GROUP BY s.shop_id ORDER BY revenue DESC LIMIT 10
+            SELECT s.shop_id,
+                   COALESCE(v.visits,0) AS visits,
+                   COALESCE(r.revenue,0) AS revenue,
+                   CASE WHEN r.qty>0 THEN r.revenue*1.0/r.qty ELSE 0 END AS avg_price,
+                   CASE WHEN ub.uniques>0 THEN COALESCE(rp.repeaters,0)*1.0/ub.uniques ELSE 0 END AS repeat_rate
+            FROM shops s
+            LEFT JOIN (SELECT shop_id, COUNT(*) AS visits FROM shop_visits GROUP BY shop_id) v ON s.shop_id=v.shop_id
+            LEFT JOIN (SELECT shop_id, SUM(total_price) AS revenue, SUM(qty) AS qty FROM shop_tx WHERE result='success' GROUP BY shop_id) r ON s.shop_id=r.shop_id
+            LEFT JOIN (SELECT shop_id, COUNT(DISTINCT buyer_uuid) AS uniques FROM shop_tx WHERE result='success' GROUP BY shop_id) ub ON s.shop_id=ub.shop_id
+            LEFT JOIN (
+                SELECT shop_id, COUNT(*) AS repeaters FROM (
+                    SELECT shop_id, buyer_uuid FROM shop_tx WHERE result='success' GROUP BY shop_id, buyer_uuid HAVING COUNT(*)>1
+                ) GROUP BY shop_id
+            ) rp ON s.shop_id=rp.shop_id
+            ORDER BY revenue DESC LIMIT 10
             """
         ).fetchall()
     labels = [r["shop_id"] for r in rows]
@@ -989,6 +1004,29 @@ def shop_stats():
         chart_labels=json.dumps(labels),
         chart_data=json.dumps(revenue),
     )
+
+
+@app.route("/sales", methods=["GET", "POST"])
+@admin_required
+def sales():
+    message = None
+    if request.method == "POST":
+        start = int(datetime.fromisoformat(request.form.get("start")).timestamp())
+        end = int(datetime.fromisoformat(request.form.get("end")).timestamp())
+        pct = float(request.form.get("pct"))
+        account = request.form.get("account", "").strip()
+        with get_db() as db:
+            db.execute("UPDATE sale_events SET active=0")
+            db.execute(
+                "INSERT INTO sale_events(start_ts,end_ts,pct,account,active) VALUES(?,?,?,?,1)",
+                (start, end, pct, account),
+            )
+        message = "Sale scheduled"
+    with get_db() as db:
+        current = db.execute(
+            "SELECT start_ts,end_ts,pct,account FROM sale_events WHERE active=1"
+        ).fetchone()
+    return render_template("sales.html", current=current, message=message)
 
 @app.route("/command", methods=["GET", "POST"])
 @admin_required
