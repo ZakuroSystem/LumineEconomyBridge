@@ -2350,6 +2350,7 @@ def get_tile(
     data = tile_store.load_tile(world, tx, tz)
     if data is None:
         raise HTTPException(status_code=404, detail="tile not found")
+    tile_store.touch_tile(world, tx, tz)
     meta = tile_store.tile_meta(world, tx, tz)
     last = meta.get("last_updated", 0)
     if_modified = request.headers.get("if-modified-since")
@@ -2377,3 +2378,30 @@ def invalidate_tiles(req: InvalidateRequest, token: None = Depends(verify_token)
 @app.get("/tiles/status")
 def tiles_status(token: None = Depends(verify_token)):
     return tile_store.status()
+
+
+@app.get("/metrics")
+def metrics() -> Response:
+    metrics = tile_store.metrics()
+    body = "\n".join(f"{k} {v}" for k, v in metrics.items()) + "\n"
+    return Response(content=body, media_type="text/plain")
+
+
+@app.get("/shops")
+def shops(token: None = Depends(verify_token)):
+    rows = conn.execute(
+        "SELECT sl.shop_id, sl.world, sl.x, sl.y, sl.z, s.status FROM shop_locations sl JOIN shops s ON sl.shop_id = s.shop_id"
+    ).fetchall()
+    result = []
+    for r in rows:
+        result.append(
+            {
+                "shop_id": r["shop_id"],
+                "world": r["world"],
+                "x": r["x"],
+                "y": r["y"],
+                "z": r["z"],
+                "status": r["status"],
+            }
+        )
+    return result
