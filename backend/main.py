@@ -1,9 +1,19 @@
-from fastapi import FastAPI
+from fastapi import (
+    FastAPI,
+    Response,
+    HTTPException,
+    Header,
+    Depends,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel
 from typing import Dict, Optional, List, Union, Tuple
+from tile_store import TileStore
 import sqlite3
 import json
-from contextlib import closing, contextmanager, asynccontextmanager
+from contextlib import closing, contextmanager, asynccontextmanager, suppress
 import yaml
 import os
 import time
@@ -15,6 +25,7 @@ import base64
 import hashlib
 import re
 import html
+from email.utils import parsedate_to_datetime, formatdate
 
 # SQLite persistence
 conn = sqlite3.connect(
@@ -278,6 +289,55 @@ with conn:
     )
 
 app = FastAPI()
+tile_store = TileStore("tiles")
+
+SHARED_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
+RATE_LIMIT: Dict[str, Tuple[float, int]] = {}
+RATE_LIMIT_MAX = 10
+
+
+def verify_token(x_le_token: str = Header(...)) -> None:
+    if SHARED_TOKEN and x_le_token != SHARED_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid token")
+
+
+def check_rate_limit(ip: str) -> None:
+    """Very small per-IP rate limiter for snapshot posts."""
+
+    now = time.time()
+    window_start, count = RATE_LIMIT.get(ip, (now, 0))
+    if now - window_start >= 1:
+        RATE_LIMIT[ip] = (now, 1)
+        return
+    if count >= RATE_LIMIT_MAX:
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+    RATE_LIMIT[ip] = (window_start, count + 1)
+
+
+async def _tile_worker() -> None:
+    """Background task processing dirty and queued tiles."""
+
+    while True:
+        tile_store.process_dirty()
+        tile_store.process_queue()
+        await asyncio.sleep(0.2)
+
+
+_tile_worker_task: asyncio.Task | None = None
+
+
+@app.on_event("startup")
+async def _start_tile_worker() -> None:
+    global _tile_worker_task
+    _tile_worker_task = asyncio.create_task(_tile_worker())
+
+
+@app.on_event("shutdown")
+async def _stop_tile_worker() -> None:
+    if _tile_worker_task:
+        _tile_worker_task.cancel()
+        with suppress(Exception):
+            await _tile_worker_task
 
 db_lock = threading.Lock()
 
@@ -614,6 +674,33 @@ def append_log(entry: Dict[str, Union[str, int, float]]) -> None:
 def sanitize_messages(msgs: List[Dict[str, str]]) -> None:
     for m in msgs:
         m["text"] = sanitize_text(m.get("text", ""))
+
+# websocket broadcast of tile updates ---------------------------------------
+
+WS_CLIENTS: List[WebSocket] = []
+
+
+async def _broadcast_tile_update(world: str, tx: int, tz: int) -> None:
+    msg = json.dumps({"world": world, "tx": tx, "tz": tz, "ts": int(time.time() * 1000)})
+    for ws in list(WS_CLIENTS):
+        try:
+            await ws.send_text(msg)
+        except Exception:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+            WS_CLIENTS.remove(ws)
+
+
+def notify_tile_update(world: str, tx: int, tz: int) -> None:
+    loop = asyncio.get_event_loop()
+    loop.create_task(_broadcast_tile_update(world, tx, tz))
+
+
+# attach helpers to tile store once defined
+tile_store.log_fn = append_log
+tile_store.broadcast_fn = notify_tile_update
 
 
 BACKUP_DIR = "backups"
@@ -2250,3 +2337,162 @@ async def shop_remove(payload: ShopRemovePayload):
     }
     append_log(log_entry)
     return {"status": "success", "grant": grants, "location": location}
+
+
+class TileCoord(BaseModel):
+    tx: int
+    tz: int
+
+
+class InvalidateRequest(BaseModel):
+    world: str
+    tiles: List[TileCoord]
+    reason: Optional[str] = None
+
+
+class ChunkData(BaseModel):
+    cx: int
+    cz: int
+    data: str
+
+
+class ChunkSnapshotRequest(BaseModel):
+    world: str
+    y_start: int = 250
+    chunks: List[ChunkData]
+    ts: int
+
+
+@app.post("/plugin/chunk/snapshot")
+@app.post("/plugin/chunk_snapshot")
+def chunk_snapshot(
+    req: ChunkSnapshotRequest,
+    request: Request,
+    token: None = Depends(verify_token),
+):
+    ip = request.client.host if request.client else ""
+    check_rate_limit(ip)
+    for ch in req.chunks:
+        tile_store.save_chunk(req.world, ch.cx, ch.cz, ch.data)
+    append_log(
+        {
+            "type": "chunk_snapshot",
+            "world": req.world,
+            "chunks": len(req.chunks),
+            "ip": ip,
+        }
+    )
+    return {"status": "stored", "chunks": len(req.chunks)}
+
+
+@app.api_route("/tiles/{world}/{tx}/{tz}", methods=["GET", "HEAD"])
+def get_tile(
+    world: str,
+    tx: int,
+    tz: int,
+    request: Request,
+    token: None = Depends(verify_token),
+):
+    data = tile_store.load_tile(world, tx, tz)
+    if data is None:
+        raise HTTPException(status_code=404, detail="tile not found")
+    tile_store.touch_tile(world, tx, tz)
+    meta = tile_store.tile_meta(world, tx, tz)
+    last = meta.get("last_updated", 0)
+    if_modified = request.headers.get("if-modified-since")
+    if if_modified and last:
+        try:
+            ims = parsedate_to_datetime(if_modified)
+            if last // 1000 <= int(ims.timestamp()):
+                return Response(status_code=304)
+        except Exception:
+            pass
+    headers = {}
+    if last:
+        headers["Last-Modified"] = formatdate(last / 1000, usegmt=True)
+    if request.method == "HEAD":
+        return Response(status_code=200, headers=headers)
+    return Response(content=data, media_type="application/octet-stream", headers=headers)
+
+
+@app.post("/tiles/invalidate")
+def invalidate_tiles(req: InvalidateRequest, token: None = Depends(verify_token)):
+    tile_store.invalidate(req.world, [t.dict() for t in req.tiles])
+    return {"status": "queued"}
+
+
+@app.get("/tiles/status")
+def tiles_status(token: None = Depends(verify_token)):
+    return tile_store.status()
+
+
+@app.get("/metrics")
+def metrics() -> Response:
+    metrics = tile_store.metrics()
+    body = "\n".join(f"{k} {v}" for k, v in metrics.items()) + "\n"
+    return Response(content=body, media_type="text/plain")
+
+
+@app.get("/shops")
+def shops(token: None = Depends(verify_token)):
+    rows = conn.execute(
+        "SELECT sl.shop_id, sl.world, sl.x, sl.y, sl.z, s.status FROM shop_locations sl JOIN shops s ON sl.shop_id = s.shop_id"
+    ).fetchall()
+    result = []
+    for r in rows:
+        result.append(
+            {
+                "shop_id": r["shop_id"],
+                "world": r["world"],
+                "x": r["x"],
+                "y": r["y"],
+                "z": r["z"],
+                "status": r["status"],
+            }
+        )
+    return result
+
+
+@app.get("/logs/summary")
+def logs_summary(
+    since: Optional[int] = None, token: None = Depends(verify_token)
+) -> Dict[str, Dict[str, int]]:
+    """Aggregate JSONL audit logs.
+
+    Returns counts and error totals grouped by entry ``type``. If ``since`` is
+    provided, only log entries with ``ts`` greater than or equal to the value
+    (UNIX milliseconds) are considered.
+    """
+
+    summary: Dict[str, Dict[str, int]] = {}
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if since is not None and entry.get("ts", 0) < since:
+                    continue
+                etype = entry.get("type")
+                if not etype:
+                    continue
+                info = summary.setdefault(etype, {"count": 0, "errors": 0})
+                info["count"] += 1
+                if "error" in entry or entry.get("status") == "error":
+                    info["errors"] += 1
+    return summary
+
+
+@app.websocket("/ws/tiles")
+async def ws_tiles(ws: WebSocket):
+    await ws.accept()
+    WS_CLIENTS.append(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if ws in WS_CLIENTS:
+            WS_CLIENTS.remove(ws)

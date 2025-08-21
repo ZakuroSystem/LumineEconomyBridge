@@ -32,6 +32,7 @@ DB_PATH = "economy.db"
 LOG_PATH = "economy_commands.log"
 BACKUP_DIR = "backups"
 os.makedirs(BACKUP_DIR, exist_ok=True)
+API_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
 
 
 def get_db():
@@ -282,29 +283,33 @@ def login():
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
-        username = request.form["username"].strip()
-        token = request.form["token"].strip()
-        password = generate_password_hash(request.form["password"])
-        now = int(time.time())
-        with get_db() as db:
-            row = db.execute(
-                "SELECT uuid FROM link_tokens WHERE token=? AND expires >= ?",
-                (token, now),
-            ).fetchone()
-            if not row:
-                flash("Invalid or expired token")
-            else:
-                try:
-                    db.execute(
-                        "INSERT INTO users(username, password, is_admin, uuid) VALUES(?,?,0,?)",
-                        (username, password, row["uuid"]),
-                    )
-                    db.execute("DELETE FROM link_tokens WHERE token=?", (token,))
-                    db.commit()
-                    flash("Registered, please login")
-                    return redirect(url_for("login"))
-                except sqlite3.IntegrityError:
-                    flash("Username already exists")
+        username = request.form.get("username", "").strip()
+        token = request.form.get("token", "").strip()
+        raw_password = request.form.get("password", "")
+        if not username or not token or not raw_password:
+            flash("All fields are required")
+        else:
+            password = generate_password_hash(raw_password)
+            now = int(time.time())
+            with get_db() as db:
+                row = db.execute(
+                    "SELECT uuid FROM link_tokens WHERE token=? AND expires >= ?",
+                    (token, now),
+                ).fetchone()
+                if not row:
+                    flash("Invalid or expired token")
+                else:
+                    try:
+                        db.execute(
+                            "INSERT INTO users(username, password, is_admin, uuid) VALUES(?,?,0,?)",
+                            (username, password, row["uuid"]),
+                        )
+                        db.execute("DELETE FROM link_tokens WHERE token=?", (token,))
+                        db.commit()
+                        flash("Registered, please login")
+                        return redirect(url_for("login"))
+                    except sqlite3.IntegrityError:
+                        flash("Username already exists")
     return render_template("register.html")
 
 
@@ -509,6 +514,12 @@ def logstats():
         "datasets": [{"label": "Count", "data": [stats[k] for k in stats]}],
     }
     return render_template("logstats.html", stats=stats, chart_json=json.dumps(chart))
+
+
+@app.route("/map")
+@login_required
+def map_view():
+    return render_template("map.html", token=API_TOKEN)
 
 
 @app.route("/backups", methods=["GET", "POST"])

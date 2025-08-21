@@ -1,5 +1,9 @@
 api:
   base_url: "http://127.0.0.1:8000"
   timeout: 2000
+  token: devtoken
 sync:
   interval: 10
+mapcolor:
+  port: 8765
+  debounce_ms: 1000
