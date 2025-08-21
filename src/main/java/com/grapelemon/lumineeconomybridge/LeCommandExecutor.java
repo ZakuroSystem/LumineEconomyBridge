@@ -112,17 +112,17 @@ public class LeCommandExecutor implements CommandExecutor {
                         }
                         barrel.setItemMeta(meta);
                         p.getInventory().addItem(barrel);
-                        p.sendMessage(ChatColor.GREEN + "Shop barrel created: " + shopId);
+                        p.sendMessage(ChatColor.GREEN + "Shop barrel created: " + ChatColor.YELLOW + shopId + ChatColor.GREEN + " / ショップ樽を作成しました" + ChatColor.RESET);
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
                         int qty;
                         int price;
-                        try { qty = Integer.parseInt(args[3]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid qty"); return true; }
-                        try { price = Integer.parseInt(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid price"); return true; }
+                        try { qty = Integer.parseInt(args[3]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid quantity / 数量が不正です" + ChatColor.RESET); return true; }
+                        try { price = Integer.parseInt(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid price / 価格が不正です" + ChatColor.RESET); return true; }
                         String saleName = String.join(" ", java.util.Arrays.copyOfRange(args,5,args.length));
                         ItemStack hand = p.getInventory().getItemInMainHand();
-                        if (hand.getType() == Material.AIR) { p.sendMessage(ChatColor.RED + "Hold item in hand"); return true; }
-                        if (hand.getAmount() < qty) { p.sendMessage(ChatColor.RED + "Not enough items"); return true; }
+                        if (hand.getType() == Material.AIR) { p.sendMessage(ChatColor.RED + "Hold item in hand / 手にアイテムを持ってください" + ChatColor.RESET); return true; }
+                        if (hand.getAmount() < qty) { p.sendMessage(ChatColor.RED + "Not enough items / アイテムが不足しています" + ChatColor.RESET); return true; }
                         String blob = itemToBase64(hand);
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("owner_uuid", p.getUniqueId().toString());
@@ -151,9 +151,9 @@ public class LeCommandExecutor implements CommandExecutor {
                                         if ("success".equals(res.get("status").getAsString())) {
                                             hand.setAmount(hand.getAmount() - qty);
                                             p.getInventory().setItemInMainHand(hand.getAmount() > 0 ? hand : null);
-                                            p.sendMessage(ChatColor.GREEN + "Stock added: " + saleName);
+                                            p.sendMessage(ChatColor.GREEN + "Stock added: " + ChatColor.YELLOW + saleName + ChatColor.GREEN + " / 在庫を追加しました" + ChatColor.RESET);
                                         } else {
-                                            p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
+                                            p.sendMessage(ChatColor.RED + "Failed: " + ChatColor.YELLOW + res.get("reason").getAsString() + ChatColor.RED + " / 失敗しました" + ChatColor.RESET);
                                         }
                                     });
                                 }
@@ -163,7 +163,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         String shopId = args[2];
                         String itemKey = args[3];
                         int qty;
-                        try { qty = Integer.parseInt(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid qty"); return true; }
+                        try { qty = Integer.parseInt(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid quantity / 数量が不正です" + ChatColor.RESET); return true; }
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("owner_uuid", p.getUniqueId().toString());
                         payload.put("shop_id", shopId);
@@ -195,9 +195,9 @@ public class LeCommandExecutor implements CommandExecutor {
                                                     }
                                                 });
                                             }
-                                            p.sendMessage(ChatColor.GREEN + "Stock taken");
+                                            p.sendMessage(ChatColor.GREEN + "Stock taken / 在庫を回収しました" + ChatColor.RESET);
                                         } else {
-                                            p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
+                                            p.sendMessage(ChatColor.RED + "Failed: " + ChatColor.YELLOW + res.get("reason").getAsString() + ChatColor.RED + " / 失敗しました" + ChatColor.RESET);
                                         }
                                     });
                                 }
@@ -228,9 +228,9 @@ public class LeCommandExecutor implements CommandExecutor {
                                     JsonObject res = JsonParser.parseString(body).getAsJsonObject();
                                     Bukkit.getScheduler().runTask(plugin, () -> {
                                         if ("success".equals(res.get("status").getAsString())) {
-                                            p.sendMessage(ChatColor.GREEN + "Done");
+                                            p.sendMessage(ChatColor.GREEN + "Done / 完了しました" + ChatColor.RESET);
                                         } else {
-                                            p.sendMessage(ChatColor.RED + "Failed");
+                                            p.sendMessage(ChatColor.RED + "Failed / 失敗しました" + ChatColor.RESET);
                                         }
                                     });
                                 }
@@ -257,9 +257,9 @@ public class LeCommandExecutor implements CommandExecutor {
                                     JsonObject res = JsonParser.parseString(body).getAsJsonObject();
                                     Bukkit.getScheduler().runTask(plugin, () -> {
                                         if ("success".equals(res.get("status").getAsString())) {
-                                            p.sendMessage("Reopened");
+                                            p.sendMessage(ChatColor.GREEN + "Reopened / 再開しました" + ChatColor.RESET);
                                         } else {
-                                            p.sendMessage("Failed: " + res.get("reason").getAsString());
+                                            p.sendMessage(ChatColor.RED + "Failed: " + ChatColor.YELLOW + res.get("reason").getAsString() + ChatColor.RED + " / 失敗しました" + ChatColor.RESET);
                                         }
                                     });
                                 }
@@ -301,9 +301,9 @@ public class LeCommandExecutor implements CommandExecutor {
                                                         }
                                                     });
                                                 }
-                                                p.sendMessage(ChatColor.GREEN + "Item removed: " + saleName);
+                                                p.sendMessage(ChatColor.GREEN + "Item removed: " + ChatColor.YELLOW + saleName + ChatColor.GREEN + " / 在庫を削除しました" + ChatColor.RESET);
                                             } else {
-                                                p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
+                                                p.sendMessage(ChatColor.RED + "Failed: " + ChatColor.YELLOW + res.get("reason").getAsString() + ChatColor.RED + " / 失敗しました" + ChatColor.RESET);
                                             }
                                         });
                                     }
@@ -353,9 +353,9 @@ public class LeCommandExecutor implements CommandExecutor {
                                                         }
                                                     });
                                                 }
-                                                p.sendMessage(ChatColor.GREEN + "Removed");
+                                                p.sendMessage(ChatColor.GREEN + "Removed / 撤去しました" + ChatColor.RESET);
                                             } else {
-                                                p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
+                                                p.sendMessage(ChatColor.RED + "Failed: " + ChatColor.YELLOW + res.get("reason").getAsString() + ChatColor.RED + " / 失敗しました" + ChatColor.RESET);
                                             }
                                         });
                                     }
@@ -366,13 +366,13 @@ public class LeCommandExecutor implements CommandExecutor {
                         String shopId = args[2];
                         String saleName = args[3];
                         if ((args.length - 4) % 2 != 0) {
-                            p.sendMessage(ChatColor.RED + "Usage: /le shop price <id> <name> <currency> <amount> [<currency> <amount>...]");
+                            p.sendMessage(ChatColor.RED + "Usage: /le shop price <id> <name> <currency> <amount> [<currency> <amount>...] / 使い方: /le shop price <id> <name> <currency> <amount> [<currency> <amount>...]" + ChatColor.RESET);
                             return true;
                         }
                         for (int i = 4; i < args.length; i += 2) {
                             String currency = args[i];
                             int amount;
-                            try { amount = Integer.parseInt(args[i + 1]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid amount"); return true; }
+                            try { amount = Integer.parseInt(args[i + 1]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid amount / 無効な金額です" + ChatColor.RESET); return true; }
                             Map<String, Object> payload = new HashMap<>();
                             payload.put("owner_uuid", p.getUniqueId().toString());
                             payload.put("shop_id", shopId);
@@ -396,8 +396,8 @@ public class LeCommandExecutor implements CommandExecutor {
                                         JsonObject res = JsonParser.parseString(body).getAsJsonObject();
                                         Bukkit.getScheduler().runTask(plugin, () -> {
                                             if ("success".equals(res.get("status").getAsString())) {
-                                                p.sendMessage(ChatColor.GREEN + "Price updated");
-                                                Inventory top = p.getOpenInventory().getTopInventory();
+                                                p.sendMessage(ChatColor.GREEN + "Price updated / 価格を更新しました" + ChatColor.RESET);
+                                            Inventory top = p.getOpenInventory().getTopInventory();
                                                 if (top.getHolder() instanceof com.grapelemon.lumineeconomybridge.shop.ShopMenuHolder holder && holder.getShopId().equals(shopId)) {
                                                     for (Map.Entry<Integer, com.grapelemon.lumineeconomybridge.shop.ShopItem> en : holder.getItems().entrySet()) {
                                                         if (en.getValue().getSaleName().equals(saleName)) {
@@ -418,7 +418,7 @@ public class LeCommandExecutor implements CommandExecutor {
                                                     }
                                                 }
                                             } else {
-                                                p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
+                                                p.sendMessage(ChatColor.RED + "Failed: " + ChatColor.YELLOW + res.get("reason").getAsString() + ChatColor.RED + " / 失敗しました" + ChatColor.RESET);
                                             }
                                         });
                                     }
@@ -426,7 +426,7 @@ public class LeCommandExecutor implements CommandExecutor {
                             });
                         }
                     } else {
-                        p.sendMessage(ChatColor.YELLOW + "Usage: /le shop <create|add|take|price|remove|reopen|help> ...");
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le shop <create|add|take|price|remove|reopen|help> ... / 使い方: /le shop <create|add|take|price|remove|reopen|help> ..." + ChatColor.RESET);
                     }
                     return true;
                 }

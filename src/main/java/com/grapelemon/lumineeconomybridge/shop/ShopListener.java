@@ -325,7 +325,7 @@ public class ShopListener implements Listener {
             if (isOwner) {
                 handleOwnerDeposit(p, holder, stack);
             } else {
-                p.sendMessage(ChatColor.RED + "This item cannot be sold here");
+                p.sendMessage(ChatColor.RED + "This item cannot be sold here / このアイテムはここでは売れません" + ChatColor.RESET);
             }
             return;
         }
@@ -488,12 +488,12 @@ public class ShopListener implements Listener {
             stack.setAmount(0);
             PendingSale pending = new PendingSale(holder.getShopId(), blob, refund, qty, System.currentTimeMillis() + 20000, holder);
             pendingSales.put(p.getUniqueId(), pending);
-            p.sendMessage(ChatColor.YELLOW + "Enter sale name and price (e.g. apple 100)");
+            p.sendMessage(ChatColor.YELLOW + "Enter sale name and price (e.g. apple 100) / 販売名と金額を入力してください (例: apple 100)" + ChatColor.RESET);
             Bukkit.getScheduler().runTaskLater(plugin, () -> {
                 PendingSale ps = pendingSales.get(p.getUniqueId());
                 if (ps != null && ps.deadline <= System.currentTimeMillis()) {
                     pendingSales.remove(p.getUniqueId());
-                    p.sendMessage(ChatColor.RED + "Timed out");
+                    p.sendMessage(ChatColor.RED + "Timed out / タイムアウトしました" + ChatColor.RESET);
                     p.getInventory().addItem(ps.item);
                 }
             }, 20 * 20);
@@ -552,14 +552,14 @@ public class ShopListener implements Listener {
         e.setCancelled(true);
         String[] parts = e.getMessage().split(" ");
         if (parts.length < 2) {
-            e.getPlayer().sendMessage(ChatColor.RED + "Cancelled");
+            e.getPlayer().sendMessage(ChatColor.RED + "Cancelled / キャンセルされました" + ChatColor.RESET);
             Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
             return;
         }
         String saleName = parts[0];
         int price;
         try { price = Integer.parseInt(parts[1]); } catch (NumberFormatException ex) {
-            e.getPlayer().sendMessage(ChatColor.RED + "Cancelled");
+            e.getPlayer().sendMessage(ChatColor.RED + "Cancelled / キャンセルされました" + ChatColor.RESET);
             Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
             return;
         }
@@ -586,7 +586,7 @@ public class ShopListener implements Listener {
             }
             @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
         });
-        e.getPlayer().sendMessage(ChatColor.GREEN + "Registered");
+        e.getPlayer().sendMessage(ChatColor.GREEN + "Registered / 登録しました" + ChatColor.RESET);
         ShopMenuHolder holder = ps.holder;
         Bukkit.getScheduler().runTask(plugin, () -> {
             Inventory inv = holder.getInventory();
@@ -634,12 +634,13 @@ public class ShopListener implements Listener {
         String shopId = tile.getPersistentDataContainer().get(keyId, PersistentDataType.STRING);
         if (owner != null && !e.getPlayer().getUniqueId().toString().equals(owner)) {
             e.setCancelled(true);
-            e.getPlayer().sendMessage(ChatColor.RED + "You are not the owner");
+            e.getPlayer().sendMessage(ChatColor.RED + "You are not the owner / あなたはオーナーではありません" + ChatColor.RESET);
             return;
         }
         notifyRemove(owner, shopId);
         Player op = Bukkit.getPlayer(UUID.fromString(owner));
-        if (op != null && op != e.getPlayer()) op.sendMessage(ChatColor.RED + "Your shop " + shopId + " was removed");
+        if (op != null && op != e.getPlayer())
+            op.sendMessage(ChatColor.RED + "Your shop " + ChatColor.YELLOW + shopId + ChatColor.RED + " was removed / あなたのショップが撤去されました" + ChatColor.RESET);
     }
 
     @EventHandler
