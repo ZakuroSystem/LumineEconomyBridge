@@ -211,6 +211,14 @@ with conn:
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_shop_tx_client ON shop_tx(client_tx_id)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pending_messages (
+            uuid TEXT NOT NULL,
+            payload TEXT NOT NULL
+        )
+        """
+    )
 
 app = FastAPI()
 
@@ -447,6 +455,18 @@ def format_amount(cur: sqlite3.Cursor, amount: int, currency: str) -> str:
     if row and row["symbol"] and row["symbol"] != currency:
         symbol = row["symbol"]
     return f"§e{symbol}{amount:,}§r"
+
+
+def is_online(cur: sqlite3.Cursor, uuid: str, now: int) -> bool:
+    row = cur.execute("SELECT last_seen FROM players WHERE uuid=?", (uuid,)).fetchone()
+    return bool(row and now - row["last_seen"] < 30)
+
+
+def queue_message(cur: sqlite3.Cursor, msg: Dict[str, str]) -> None:
+    cur.execute(
+        "INSERT INTO pending_messages(uuid, payload) VALUES(?, ?)",
+        (msg.get("player"), json.dumps(msg)),
+    )
 
 
 LOG_PATH = "economy_commands.log"
@@ -1145,11 +1165,16 @@ async def sync(payload: DeltaPayload):
         for k, v in payload.delta.items():
             ensure_currency(cur, k)
             add_balance(cur, payload.player, k, v)
+        cur.execute(
+            "INSERT OR REPLACE INTO players(uuid, last_seen) VALUES (?, ?)",
+            (payload.player, payload.timestamp),
+        )
     return {"status": "success"}
 
 
 @app.post("/api/rewrite")
 async def rewrite(payload: RewritePayload):
+    msgs = []
     with transaction() as cur:
         for k, v in payload.scoreboard.items():
             ensure_currency(cur, k)
@@ -1158,7 +1183,13 @@ async def rewrite(payload: RewritePayload):
             "INSERT OR REPLACE INTO players(uuid, last_seen) VALUES (?, ?)",
             (payload.player, payload.timestamp),
         )
-    msgs = []
+        rows = cur.execute(
+            "SELECT rowid, payload FROM pending_messages WHERE uuid=?",
+            (payload.player,),
+        ).fetchall()
+        for r in rows:
+            msgs.append(json.loads(r["payload"]))
+            cur.execute("DELETE FROM pending_messages WHERE rowid=?", (r["rowid"],))
     if get_lang(payload.player) == "en":
         msgs.append({
             "target": "chat",
@@ -1171,6 +1202,8 @@ async def rewrite(payload: RewritePayload):
 
 @app.post("/api/shop/place")
 async def shop_place(payload: ShopPlacePayload):
+    start = time.time()
+    result = "ok"
     with transaction() as cur:
         cur.execute(
             "INSERT OR IGNORE INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
@@ -1180,39 +1213,67 @@ async def shop_place(payload: ShopPlacePayload):
             "INSERT OR REPLACE INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
             (payload.shop_id, payload.world, payload.x, payload.y, payload.z),
         )
-    return {"status": "ok"}
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_place",
+        "timestamp": payload.timestamp,
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "world": payload.world,
+        "x": payload.x,
+        "y": payload.y,
+        "z": payload.z,
+        "result": result,
+        "latency_ms": latency_ms,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    return {"status": result}
 
 
 @app.get("/api/shop/items")
 async def shop_items(shop_id: str):
+    start = time.time()
     with transaction() as cur:
         srow = cur.execute("SELECT status,last_activity_at FROM shops WHERE shop_id=?", (shop_id,)).fetchone()
         if not srow:
-            return {"status": "error", "reason": "shop_not_found"}
-        if srow["status"] != "active":
-            return {"status": srow["status"], "last_activity_at": srow["last_activity_at"]}
-        rows = cur.execute(
-            "SELECT st.item_key, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
-            (shop_id,),
-        ).fetchall()
-        items = []
-        for r in rows:
-            price_rows = cur.execute(
-                "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
-                (shop_id, r["item_key"]),
+            result = {"status": "error", "reason": "shop_not_found"}
+        elif srow["status"] != "active":
+            result = {"status": srow["status"], "last_activity_at": srow["last_activity_at"]}
+        else:
+            rows = cur.execute(
+                "SELECT st.item_key, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+                (shop_id,),
             ).fetchall()
-            prices = {pr["currency"]: pr["price"] for pr in price_rows}
-            items.append(
-                {
-                    "item_key": r["item_key"],
-                    "material": r["material"],
-                    "display_name": r["display_name"],
-                    "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
-                    "stock": r["stock"],
-                    "prices": prices,
-                }
-            )
-        return {"status": "active", "items": items}
+            items = []
+            for r in rows:
+                price_rows = cur.execute(
+                    "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                    (shop_id, r["item_key"]),
+                ).fetchall()
+                prices = {pr["currency"]: pr["price"] for pr in price_rows}
+                items.append(
+                    {
+                        "item_key": r["item_key"],
+                        "material": r["material"],
+                        "display_name": r["display_name"],
+                        "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
+                        "stock": r["stock"],
+                        "prices": prices,
+                    }
+                )
+            result = {"status": "active", "items": items}
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_items",
+        "timestamp": int(time.time()),
+        "shop_id": shop_id,
+        "status": result.get("status"),
+        "latency_ms": latency_ms,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    return result
 
 
 @app.post("/api/shop/buy")
@@ -1241,6 +1302,11 @@ async def shop_buy(payload: ShopBuyPayload):
             ).fetchone()
             owner = shop["owner_uuid"] if shop else None
             if success and grant_token:
+                stock_row = cur.execute(
+                    "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                    (existing["shop_id"], existing["item_key"]),
+                ).fetchone()
+                remaining = stock_row["stock"] if stock_row else 0
                 grant.append(
                     {
                         "item_key": existing["item_key"],
@@ -1253,21 +1319,20 @@ async def shop_buy(payload: ShopBuyPayload):
                         cur, existing["buyer_uuid"]
                     )
                     scoreboards[owner] = get_scoreboard(cur, owner)
-                messages.append(
-                    {
-                        "target": "chat",
-                        "player": existing["buyer_uuid"],
-                        "text": f"Purchased x{existing['qty']}",
-                    }
-                )
+                buyer_name = get_name(existing["buyer_uuid"]) or existing["buyer_uuid"]
+                buyer_msg = {
+                    "target": "chat",
+                    "player": existing["buyer_uuid"],
+                    "text": f"Bought x{existing['qty']} for {existing['currency']} {existing['total_price']} (left {remaining})",
+                }
+                owner_msg = {
+                    "target": "chat",
+                    "player": owner,
+                    "text": f"Sold x{existing['qty']} to {buyer_name} for {existing['currency']} {existing['total_price']} (left {remaining})",
+                }
+                messages.append(buyer_msg)
                 if owner:
-                    messages.append(
-                        {
-                            "target": "chat",
-                            "player": owner,
-                            "text": f"Sold x{existing['qty']}",
-                        }
-                    )
+                    messages.append(owner_msg)
             else:
                 messages.append(
                     {
@@ -1334,20 +1399,27 @@ async def shop_buy(payload: ShopBuyPayload):
                                 ),
                             )
                             success = True
-                            messages.append(
-                                {
-                                    "target": "chat",
-                                    "player": payload.player_uuid,
-                                    "text": f"Purchased x{payload.qty}",
-                                }
-                            )
-                            messages.append(
-                                {
-                                    "target": "chat",
-                                    "player": owner,
-                                    "text": f"Sold x{payload.qty}",
-                                }
-                            )
+                            stock_row = cur.execute(
+                                "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                                (payload.shop_id, payload.item_key),
+                            ).fetchone()
+                            remaining = stock_row["stock"] if stock_row else 0
+                            buyer_name = get_name(payload.player_uuid) or payload.player_uuid
+                            buyer_msg = {
+                                "target": "chat",
+                                "player": payload.player_uuid,
+                                "text": f"Bought x{payload.qty} for {payload.currency} {total_price} (left {remaining})",
+                            }
+                            owner_msg = {
+                                "target": "chat",
+                                "player": owner,
+                                "text": f"Sold x{payload.qty} to {buyer_name} for {payload.currency} {total_price} (left {remaining})",
+                            }
+                            messages.append(buyer_msg)
+                            if is_online(cur, owner, payload.timestamp):
+                                messages.append(owner_msg)
+                            else:
+                                queue_message(cur, owner_msg)
                             scoreboards[payload.player_uuid] = get_scoreboard(
                                 cur, payload.player_uuid
                             )
@@ -1409,127 +1481,223 @@ async def shop_buy(payload: ShopBuyPayload):
 
 @app.post("/api/shop/add_stock")
 async def shop_add_stock(payload: ShopAddStockPayload):
+    start = time.time()
     blob = base64.b64decode(payload.nbt_blob)
     item_key = hashlib.sha256(blob).hexdigest()
+    result = "success"
+    reason: Optional[str] = None
     with transaction() as cur:
         shop = cur.execute(
             "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
         if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
-            return {"status": "error", "reason": "not_owner"}
-        ts = int(time.time())
-        cur.execute(
-            "INSERT OR IGNORE INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
-            (item_key, payload.material, payload.display_name, blob),
-        )
-        cur.execute(
-            """
-            INSERT INTO shop_stock(shop_id, item_key, stock, updated_at) VALUES(?,?,?,?)
-            ON CONFLICT(shop_id,item_key) DO UPDATE SET stock=stock+excluded.stock, updated_at=excluded.updated_at
-            """,
-            (payload.shop_id, item_key, payload.qty, ts),
-        )
-        cur.execute(
-            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-            (ts, payload.shop_id),
-        )
-    return {"status": "success", "item_key": item_key}
+            result = "error"
+            reason = "not_owner"
+        else:
+            ts = int(time.time())
+            cur.execute(
+                "INSERT OR IGNORE INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+                (item_key, payload.material, payload.display_name, blob),
+            )
+            cur.execute(
+                """
+                INSERT INTO shop_stock(shop_id, item_key, stock, updated_at) VALUES(?,?,?,?)
+                ON CONFLICT(shop_id,item_key) DO UPDATE SET stock=stock+excluded.stock, updated_at=excluded.updated_at
+                """,
+                (payload.shop_id, item_key, payload.qty, ts),
+            )
+            cur.execute(
+                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                (ts, payload.shop_id),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_add_stock",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "item_key": item_key,
+        "qty": payload.qty,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    if result == "success":
+        return {"status": "success", "item_key": item_key}
+    return {"status": "error", "reason": reason}
 
 
 @app.post("/api/shop/take_stock")
 async def shop_take_stock(payload: ShopTakeStockPayload):
+    start = time.time()
     grant: List[Dict[str, str]] = []
+    result = "success"
+    reason: Optional[str] = None
     with transaction() as cur:
         shop = cur.execute(
             "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
         if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
-            return {"status": "error", "reason": "not_owner"}
-        row = cur.execute(
-            "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
-            (payload.shop_id, payload.item_key),
-        ).fetchone()
-        if not row or row["stock"] < payload.qty:
-            return {"status": "error", "reason": "insufficient_stock"}
-        ts = int(time.time())
-        cur.execute(
-            "UPDATE shop_stock SET stock=stock-?, updated_at=? WHERE shop_id=? AND item_key=?",
-            (payload.qty, ts, payload.shop_id, payload.item_key),
-        )
-        cur.execute(
-            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-            (ts, payload.shop_id),
-        )
-        item = cur.execute(
-            "SELECT nbt_blob FROM shop_items WHERE item_key=?", (payload.item_key,)
-        ).fetchone()
-        if item:
-            grant.append(
-                {
-                    "item_key": payload.item_key,
-                    "qty": payload.qty,
-                    "nbt_blob": base64.b64encode(item["nbt_blob"]).decode("ascii"),
-                    "grant_token": secrets.token_hex(8),
-                }
-            )
-    return {"status": "success", "grant": grant}
+            result = "error"
+            reason = "not_owner"
+        else:
+            row = cur.execute(
+                "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                (payload.shop_id, payload.item_key),
+            ).fetchone()
+            if not row or row["stock"] < payload.qty:
+                result = "error"
+                reason = "insufficient_stock"
+            else:
+                ts = int(time.time())
+                cur.execute(
+                    "UPDATE shop_stock SET stock=stock-?, updated_at=? WHERE shop_id=? AND item_key=?",
+                    (payload.qty, ts, payload.shop_id, payload.item_key),
+                )
+                cur.execute(
+                    "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                    (ts, payload.shop_id),
+                )
+                item = cur.execute(
+                    "SELECT nbt_blob FROM shop_items WHERE item_key=?", (payload.item_key,)
+                ).fetchone()
+                if item:
+                    grant.append(
+                        {
+                            "item_key": payload.item_key,
+                            "qty": payload.qty,
+                            "nbt_blob": base64.b64encode(item["nbt_blob"]).decode("ascii"),
+                            "grant_token": secrets.token_hex(8),
+                        }
+                    )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_take_stock",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "item_key": payload.item_key,
+        "qty": payload.qty,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    if result == "success":
+        return {"status": "success", "grant": grant}
+    return {"status": "error", "reason": reason}
 
 
 @app.post("/api/shop/set_price")
 async def shop_set_price(payload: ShopSetPricePayload):
+    start = time.time()
+    result = "success"
+    reason: Optional[str] = None
     with transaction() as cur:
         shop = cur.execute(
             "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
         if not shop or shop["owner_uuid"] != payload.owner_uuid or shop["status"] != "active":
-            return {"status": "error", "reason": "not_owner"}
-        ensure_currency(cur, payload.currency)
-        ts = int(time.time())
-        cur.execute(
-            """
-            INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
-            ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
-            """,
-            (payload.shop_id, payload.item_key, payload.currency, payload.price),
-        )
-        cur.execute(
-            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-            (ts, payload.shop_id),
-        )
-    return {"status": "success"}
+            result = "error"
+            reason = "not_owner"
+        else:
+            ensure_currency(cur, payload.currency)
+            ts = int(time.time())
+            cur.execute(
+                """
+                INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
+                ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
+                """,
+                (payload.shop_id, payload.item_key, payload.currency, payload.price),
+            )
+            cur.execute(
+                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                (ts, payload.shop_id),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_set_price",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "item_key": payload.item_key,
+        "currency": payload.currency,
+        "price": payload.price,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    if result == "success":
+        return {"status": "success"}
+    return {"status": "error", "reason": reason}
 
 
 @app.post("/api/shop/ping")
 async def shop_ping(payload: ShopPingPayload):
+    start = time.time()
     with transaction() as cur:
         cur.execute(
             "UPDATE shops SET last_activity_at=? WHERE shop_id=? AND status='active'",
             (payload.timestamp, payload.shop_id),
         )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_ping",
+        "timestamp": payload.timestamp,
+        "shop_id": payload.shop_id,
+        "latency_ms": latency_ms,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
     return {"status": "ok"}
 
 
 @app.post("/api/shop/reopen")
 async def shop_reopen(payload: ShopReopenPayload):
+    start = time.time()
+    result = "success"
+    reason: Optional[str] = None
     with transaction() as cur:
         shop = cur.execute(
             "SELECT owner_uuid FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
         if not shop or shop["owner_uuid"] != payload.owner_uuid:
-            return {"status": "error", "reason": "not_owner"}
-        cur.execute(
-            "UPDATE shops SET status='active', last_activity_at=? WHERE shop_id=?",
-            (payload.timestamp, payload.shop_id),
-        )
-    return {"status": "success"}
+            result = "error"
+            reason = "not_owner"
+        else:
+            cur.execute(
+                "UPDATE shops SET status='active', last_activity_at=? WHERE shop_id=?",
+                (payload.timestamp, payload.shop_id),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_reopen",
+        "timestamp": payload.timestamp,
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    if result == "success":
+        return {"status": "success"}
+    return {"status": "error", "reason": reason}
 
 
 @app.post("/api/shop/remove")
 async def shop_remove(payload: ShopRemovePayload):
+    start = time.time()
     grants: List[Dict[str, str]] = []
     with transaction() as cur:
         if payload.refund:
@@ -1549,4 +1717,14 @@ async def shop_remove(payload: ShopRemovePayload):
             cur.execute("DELETE FROM shop_stock WHERE shop_id=?", (payload.shop_id,))
         cur.execute("DELETE FROM shop_locations WHERE shop_id=?", (payload.shop_id,))
         cur.execute("UPDATE shops SET status='suspended' WHERE shop_id=?", (payload.shop_id,))
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_remove",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "refund": payload.refund,
+        "latency_ms": latency_ms,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
     return {"status": "success", "grant": grants}
