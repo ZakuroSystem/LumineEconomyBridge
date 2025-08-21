@@ -14,16 +14,30 @@
         <a class="navbar-brand" href="{{ url_for('index') }}">Lumine Economy</a>
         <div class="collapse navbar-collapse">
           <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('index') }}">Dashboard</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('accounts') }}">Accounts</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('currencies') }}">Currencies</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('transactions') }}">Transactions</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('analytics') }}">Analytics</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('systems') }}">Systems</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('command') }}">Execute</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('issuance') }}">Issuance</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('logs') }}">Logs</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('backups') }}">Backups</a></li>
+            {% if user %}
+              <li class="nav-item"><a class="nav-link" href="{{ url_for('index') }}">Dashboard</a></li>
+              {% if user['is_admin'] %}
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('accounts') }}">Accounts</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('currencies') }}">Currencies</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('transactions') }}">Transactions</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('analytics') }}">Analytics</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('systems') }}">Systems</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('command') }}">Execute</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('issuance') }}">Issuance</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('logs') }}">Logs</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('backups') }}">Backups</a></li>
+              {% else %}
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('profile') }}">My Account</a></li>
+              {% endif %}
+            {% endif %}
+          </ul>
+          <ul class="navbar-nav ms-auto">
+            {% if user %}
+              <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}">Logout</a></li>
+            {% else %}
+              <li class="nav-item"><a class="nav-link" href="{{ url_for('login') }}">Login</a></li>
+              <li class="nav-item"><a class="nav-link" href="{{ url_for('register') }}">Register</a></li>
+            {% endif %}
           </ul>
         </div>
       </div>

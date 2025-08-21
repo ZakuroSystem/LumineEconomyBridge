@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>My Account</h2>
+<table class="table">
+  <thead><tr><th>Currency</th><th>Balance</th></tr></thead>
+  <tbody>
+  {% for b in balances %}
+    <tr><td>{{ b['currency'] }}</td><td>{{ b['balance'] }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<h3>Recent Transactions</h3>
+<table class="table datatable">
+  <thead><tr><th>Time</th><th>From</th><th>To</th><th>Currency</th><th>Amount</th><th>Reason</th></tr></thead>
+  <tbody>
+  {% for t in txs %}
+    <tr>
+      <td>{{ t['timestamp']|fmt_ts }}</td>
+      <td>{{ t['from_account'] }}</td>
+      <td>{{ t['to_account'] }}</td>
+      <td>{{ t['currency'] }}</td>
+      <td>{{ t['amount'] }}</td>
+      <td>{{ t['reason'] }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

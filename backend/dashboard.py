@@ -1,10 +1,22 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file
+from flask import (
+    Flask,
+    render_template,
+    request,
+    redirect,
+    url_for,
+    flash,
+    send_file,
+    session,
+    g,
+)
 import sqlite3
 import time
 import os
 import json
 import shutil
 import requests
+from functools import wraps
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = "lumineeconomy"
@@ -58,6 +70,11 @@ def init_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                password TEXT NOT NULL,
+                is_admin INTEGER NOT NULL DEFAULT 0
+            );
             """
         )
         try:
@@ -73,8 +90,53 @@ def init_db() -> None:
         except sqlite3.OperationalError:
             pass
 
+        db.execute(
+            "INSERT OR IGNORE INTO users(username, password, is_admin) VALUES(?,?,1)",
+            ("admin", generate_password_hash("admin")),
+        )
+        db.commit()
+
 
 init_db()
+
+
+@app.before_request
+def load_user():
+    username = session.get("user")
+    if username:
+        with get_db() as db:
+            g.user = db.execute(
+                "SELECT username, is_admin FROM users WHERE username=?",
+                (username,),
+            ).fetchone()
+    else:
+        g.user = None
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if g.user is None:
+            return redirect(url_for("login"))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def admin_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if g.user is None or not g.user["is_admin"]:
+            flash("Admin login required")
+            return redirect(url_for("index") if g.user else url_for("login"))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+@app.context_processor
+def inject_user():
+    return {"user": g.user}
 
 
 def get_setting(key: str, default: int) -> int:
@@ -131,8 +193,73 @@ def fmt_ts(ts: int) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form["username"].strip()
+        password = request.form["password"]
+        with get_db() as db:
+            row = db.execute(
+                "SELECT username, password, is_admin FROM users WHERE username=?",
+                (username,),
+            ).fetchone()
+        if row and check_password_hash(row["password"], password):
+            session["user"] = row["username"]
+            return redirect(url_for("index"))
+        flash("Invalid credentials")
+    return render_template("login.html")
+
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        username = request.form["username"].strip()
+        password = generate_password_hash(request.form["password"])
+        try:
+            with get_db() as db:
+                db.execute(
+                    "INSERT INTO users(username, password, is_admin) VALUES(?,?,0)",
+                    (username, password),
+                )
+                db.commit()
+            flash("Registered, please login")
+            return redirect(url_for("login"))
+        except sqlite3.IntegrityError:
+            flash("Username already exists")
+    return render_template("register.html")
+
+
+@app.route("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect(url_for("login"))
+
+
+@app.route("/me")
+@login_required
+def profile():
+    with get_db() as db:
+        balances = db.execute(
+            "SELECT currency, balance FROM accounts WHERE uuid=?",
+            (g.user["username"],),
+        ).fetchall()
+        txs = db.execute(
+            """
+            SELECT timestamp, from_account, to_account, currency, amount, reason
+            FROM transactions
+            WHERE from_account=? OR to_account=?
+            ORDER BY id DESC LIMIT 50
+            """,
+            (g.user["username"], g.user["username"]),
+        ).fetchall()
+    return render_template("profile.html", balances=balances, txs=txs)
+
+
 @app.route("/")
+@login_required
 def index():
+    if not g.user["is_admin"]:
+        return redirect(url_for("profile"))
     with get_db() as db:
         currencies = [r["name"] for r in db.execute("SELECT name FROM currencies WHERE active=1 ORDER BY name").fetchall()]
         rows = db.execute("SELECT uuid, currency, balance FROM accounts").fetchall()
@@ -163,6 +290,7 @@ def index():
 
 
 @app.route("/transactions")
+@admin_required
 def transactions():
     player = request.args.get("player", "").strip()
     currency = request.args.get("currency", "").strip()
@@ -238,6 +366,7 @@ def transactions():
 
 
 @app.route("/logs")
+@admin_required
 def logs():
     exec_q = request.args.get("executor", "").strip()
     type_q = request.args.get("type", "").strip()
@@ -268,11 +397,13 @@ def logs():
 
 
 @app.route("/logs/download")
+@admin_required
 def download_logs():
     return send_file(LOG_PATH, as_attachment=True)
 
 
 @app.route("/backups", methods=["GET", "POST"])
+@admin_required
 def backups():
     interval = get_setting("auto_backup_interval", 3600)
     keep = get_setting("auto_backup_keep", 10)
@@ -302,6 +433,7 @@ def backups():
 
 
 @app.route("/backups/restore/<name>")
+@admin_required
 def restore_backup(name: str):
     path = os.path.join(BACKUP_DIR, name)
     try:
@@ -313,6 +445,7 @@ def restore_backup(name: str):
 
 
 @app.route("/issuance")
+@admin_required
 def issuance():
     with get_db() as db:
         totals = db.execute(
@@ -332,6 +465,7 @@ def issuance():
 
 
 @app.route("/adjust", methods=["GET", "POST"])
+@admin_required
 def adjust():
     preset_uuid = request.args.get("uuid", "")
     if request.method == "POST":
@@ -376,6 +510,7 @@ def adjust():
 
 
 @app.route("/accounts")
+@admin_required
 def accounts():
     q = request.args.get("q", "").strip()
     with get_db() as db:
@@ -408,6 +543,7 @@ def accounts():
 
 
 @app.route("/accounts/freeze/<uuid>/<int:state>")
+@admin_required
 def toggle_freeze(uuid: str, state: int):
     with get_db() as db:
         db.execute("UPDATE accounts SET frozen=? WHERE uuid=?", (state, uuid))
@@ -417,6 +553,7 @@ def toggle_freeze(uuid: str, state: int):
 
 
 @app.route("/currencies", methods=["GET", "POST"])
+@admin_required
 def currencies():
     with get_db() as db:
         if request.method == "POST":
@@ -458,6 +595,7 @@ def currencies():
 
 
 @app.route("/systems", methods=["GET", "POST"])
+@admin_required
 def systems():
     if request.method == "POST":
         name = request.form.get("name", "").strip()
@@ -485,6 +623,7 @@ def systems():
 
 
 @app.route("/command", methods=["GET", "POST"])
+@admin_required
 def command():
     output = None
     if request.method == "POST":
@@ -514,6 +653,7 @@ def command():
 
 
 @app.route("/analytics")
+@admin_required
 def analytics():
     with get_db() as db:
         supply_rows = db.execute(

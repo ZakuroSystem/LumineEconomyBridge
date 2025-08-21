@@ -28,4 +28,8 @@ Use `/le` followed by a subcommand. Common commands:
 - The web dashboard (run `python backend/dashboard.py`) summarizes total accounts, per-currency supply, recent transaction stats, and active players. It also provides account search/editing, currency management tools, and a filterable transaction history page for auditing.
   Additional tools include a command log viewer with filters and download button, and a backup manager to create, restore, and schedule automatic backups.
 
+### Dashboard Login
+
+The dashboard now requires registration and login. Navigate to `/register` to create a user (a default `admin`/`admin` account is available) and log in via `/login`. Regular users can view only their own balances and recent transactions, while admins access all management pages.
+
 For developer details, see `plugin.yml` and the Python sources under `backend/`.
