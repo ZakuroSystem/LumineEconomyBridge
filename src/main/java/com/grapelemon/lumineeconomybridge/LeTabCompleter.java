@@ -128,7 +128,7 @@ public class LeTabCompleter implements TabCompleter {
             }
             if (first.equals("balance")) {
                 List<String> opts = new ArrayList<>();
-                Stream.of("currency1", "currency2")
+                Stream.of("thy")
                         .filter(s -> s.startsWith(args[1].toLowerCase()))
                         .forEach(opts::add);
                 for (Player p : Bukkit.getOnlinePlayers()) {
@@ -160,7 +160,7 @@ public class LeTabCompleter implements TabCompleter {
                 return names;
             }
             if (first.equals("balance")) {
-                boolean secondIsCurrency = Stream.of("currency1", "currency2")
+                boolean secondIsCurrency = Stream.of("thy")
                         .anyMatch(c -> c.equalsIgnoreCase(args[1]));
                 if (secondIsCurrency) {
                     List<String> names = new ArrayList<>();
@@ -172,7 +172,7 @@ public class LeTabCompleter implements TabCompleter {
                 }
             }
             if (first.equals("money") && args[1].equalsIgnoreCase("top")) {
-                return Stream.of("currency1", "currency2")
+                return Stream.of("thy")
                         .filter(s -> s.startsWith(args[2].toLowerCase()))
                         .collect(Collectors.toList());
             }

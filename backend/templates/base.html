@@ -72,7 +72,9 @@
       $(function(){
         $('.datatable').DataTable();
         $('form[method="post"]').each(function(){
-          $(this).append('<input type="hidden" name="_csrf_token" value="{{ csrf_token_value }}">');
+          if($(this).find('input[name="_csrf_token"]').length === 0){
+            $(this).append('<input type="hidden" name="_csrf_token" value="{{ csrf_token_value }}">');
+          }
         });
       });
     </script>

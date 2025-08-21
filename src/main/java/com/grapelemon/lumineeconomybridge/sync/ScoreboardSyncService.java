@@ -22,8 +22,8 @@ public class ScoreboardSyncService {
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
     // 同期用の状態
-    private final Map<UUID, int[]> lastSentAbs = new ConcurrentHashMap<>();
-    private final Map<UUID, int[]> appliedFromPython = new ConcurrentHashMap<>();
+    private final Map<UUID, Map<String, Integer>> lastSentAbs = new ConcurrentHashMap<>();
+    private final Map<UUID, Map<String, Integer>> appliedFromPython = new ConcurrentHashMap<>();
 
     public ScoreboardSyncService(OkHttpClient http, String baseUrl, LumineEconomyBridge plugin) {
         this.http = http;
@@ -33,9 +33,9 @@ public class ScoreboardSyncService {
 
     public void seed(Player p) {
         // 初期観測: メインスレッドで読み取り
-        int[] current = callSync(() -> ScoreboardUtil.readBothSync(p));
+        Map<String, Integer> current = callSync(() -> ScoreboardUtil.readAllSync(p));
         lastSentAbs.putIfAbsent(p.getUniqueId(), current);
-        appliedFromPython.putIfAbsent(p.getUniqueId(), new int[]{0,0});
+        appliedFromPython.putIfAbsent(p.getUniqueId(), new ConcurrentHashMap<>());
         sendAbsolute(p);
     }
 
@@ -59,16 +59,17 @@ public class ScoreboardSyncService {
     // Pythonからの絶対値適用（将来使用）
     public void applyFromPython(Player p, Map<String, Integer> abs) {
         Bukkit.getScheduler().runTask(plugin, () -> {
-            int[] before = ScoreboardUtil.readBothSync(p);
-            Integer c1 = abs.get("currency1");
-            Integer c2 = abs.get("currency2");
-            ScoreboardUtil.applyAbsoluteSync(p, c1, c2);
-            int[] after = ScoreboardUtil.readBothSync(p);
+            Map<String, Integer> before = ScoreboardUtil.readAllSync(p);
+            ScoreboardUtil.applyAbsoluteSync(p, abs);
+            Map<String, Integer> after = ScoreboardUtil.readAllSync(p);
 
-            int d1 = after[0] - before[0];
-            int d2 = after[1] - before[1];
-            int[] buf = appliedFromPython.computeIfAbsent(p.getUniqueId(), k -> new int[]{0,0});
-            buf[0] += d1; buf[1] += d2;
+            Map<String, Integer> buf = appliedFromPython.computeIfAbsent(p.getUniqueId(), k -> new ConcurrentHashMap<>());
+            for (Map.Entry<String, Integer> e : after.entrySet()) {
+                int d = e.getValue() - before.getOrDefault(e.getKey(), 0);
+                if (d != 0) {
+                    buf.merge(e.getKey(), d, Integer::sum);
+                }
+            }
 
             lastSentAbs.put(p.getUniqueId(), after);
         });
@@ -78,26 +79,30 @@ public class ScoreboardSyncService {
         UUID id = p.getUniqueId();
 
         // メインスレッドで現在値を取得
-        int[] current = callSync(() -> ScoreboardUtil.readBothSync(p));
-        int[] last = lastSentAbs.computeIfAbsent(id, k -> current.clone());
+        Map<String, Integer> current = callSync(() -> ScoreboardUtil.readAllSync(p));
+        Map<String, Integer> last = lastSentAbs.computeIfAbsent(id, k -> new ConcurrentHashMap<>());
 
-        int d1 = current[0] - last[0];
-        int d2 = current[1] - last[1];
+        Map<String, Integer> applied = appliedFromPython.computeIfAbsent(id, k -> new ConcurrentHashMap<>());
+        Map<String, Integer> delta = new HashMap<>();
 
-        // Python由来の適用分を差し引く
-        int[] applied = appliedFromPython.computeIfAbsent(id, k -> new int[]{0,0});
-        d1 -= applied[0];
-        d2 -= applied[1];
-        applied[0] = 0; applied[1] = 0;
+        Set<String> keys = new HashSet<>();
+        keys.addAll(current.keySet());
+        keys.addAll(last.keySet());
+
+        for (String k : keys) {
+            int d = current.getOrDefault(k, 0) - last.getOrDefault(k, 0);
+            d -= applied.getOrDefault(k, 0);
+            if (d != 0) {
+                delta.put(k, d);
+            }
+        }
+        applied.clear();
 
         // 送る差分がゼロならスキップ
-        if (d1 == 0 && d2 == 0) return;
+        if (delta.isEmpty()) return;
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("player", id.toString());
-        Map<String, Integer> delta = new HashMap<>();
-        delta.put("currency1", d1);
-        delta.put("currency2", d2);
         payload.put("delta", delta);
         payload.put("timestamp", System.currentTimeMillis() / 1000);
 
@@ -136,14 +141,11 @@ public class ScoreboardSyncService {
 
     public void sendAbsolute(Player p) {
         UUID id = p.getUniqueId();
-        int[] current = callSync(() -> ScoreboardUtil.readBothSync(p));
+        Map<String, Integer> current = callSync(() -> ScoreboardUtil.readAllSync(p));
         lastSentAbs.put(id, current);
         Map<String, Object> payload = new HashMap<>();
         payload.put("player", id.toString());
-        Map<String, Integer> scoreboard = new HashMap<>();
-        scoreboard.put("currency1", current[0]);
-        scoreboard.put("currency2", current[1]);
-        payload.put("scoreboard", scoreboard);
+        payload.put("scoreboard", current);
         payload.put("timestamp", System.currentTimeMillis() / 1000);
 
         Request req = new Request.Builder()
