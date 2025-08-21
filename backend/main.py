@@ -2363,6 +2363,7 @@ class ChunkSnapshotRequest(BaseModel):
     ts: int
 
 
+@app.post("/plugin/chunk/snapshot")
 @app.post("/plugin/chunk_snapshot")
 def chunk_snapshot(
     req: ChunkSnapshotRequest,

@@ -65,6 +65,14 @@ public class MapColorService {
             arr.add(t);
         }
         obj.add("palette", arr);
+        JsonArray worlds = new JsonArray();
+        JsonObject info = new JsonObject();
+        info.addProperty("name", "world");
+        info.addProperty("minY", 0);
+        info.addProperty("maxY", plugin.getServer().getMaxHeight());
+        info.addProperty("border", 29999984);
+        worlds.add(info);
+        obj.add("world_info", worlds);
         obj.addProperty("server_version", plugin.getServer().getVersion());
         byte[] out = gson.toJson(obj).getBytes();
         ex.sendResponseHeaders(200, out.length);

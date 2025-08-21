@@ -32,7 +32,7 @@ def test_chunk_snapshot_merge():
 
         with TestClient(app) as client:
             headers = {"X-LE-Token": main.SHARED_TOKEN}
-            resp = client.post("/plugin/chunk_snapshot", json=payload, headers=headers)
+            resp = client.post("/plugin/chunk/snapshot", json=payload, headers=headers)
             assert resp.status_code == 200
 
             main.tile_store.process_dirty(0)
@@ -60,7 +60,7 @@ def test_chunk_snapshot_rate_limit():
         with TestClient(app) as client:
             headers = {"X-LE-Token": main.SHARED_TOKEN}
             for _ in range(10):
-                r = client.post("/plugin/chunk_snapshot", json=payload, headers=headers)
+                r = client.post("/plugin/chunk/snapshot", json=payload, headers=headers)
                 assert r.status_code == 200
-            resp = client.post("/plugin/chunk_snapshot", json=payload, headers=headers)
+            resp = client.post("/plugin/chunk/snapshot", json=payload, headers=headers)
             assert resp.status_code == 429
