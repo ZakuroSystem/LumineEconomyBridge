@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Shop {{ shop.shop_id }}</h2>
+<p>Owner: {{ shop.owner_uuid }} | Status: {{ shop.status }} | Last Activity: {{ shop.last_activity_at|fmt_ts }}</p>
+<h3>Inventory</h3>
+<table class="table table-sm">
+  <thead><tr><th>Item</th><th>Stock</th><th>Prices</th></tr></thead>
+  <tbody>
+  {% for i in items %}
+    <tr>
+      <td>{{ i.display_name or i.material }}</td>
+      <td>
+        <form method="post" class="d-flex">
+          <input type="hidden" name="action" value="set_stock">
+          <input type="hidden" name="item_key" value="{{ i.item_key }}">
+          <input type="number" name="stock" value="{{ i.stock }}" class="form-control form-control-sm me-2">
+          <button class="btn btn-sm btn-outline-primary">Save</button>
+        </form>
+      </td>
+      <td>
+        {% for cur, price in i.prices.items() %}
+        <div>{{ cur }}: {{ price }}</div>
+        {% endfor %}
+        <form method="post" class="d-flex mt-1">
+          <input type="hidden" name="action" value="set_price">
+          <input type="hidden" name="item_key" value="{{ i.item_key }}">
+          <input type="text" name="currency" placeholder="Currency" class="form-control form-control-sm me-1" style="max-width:80px;">
+          <input type="number" name="price" placeholder="Price" class="form-control form-control-sm me-1" style="max-width:80px;">
+          <button class="btn btn-sm btn-outline-secondary">Set</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<h3>Sales</h3>
+<table class="table table-striped datatable">
+  <thead><tr><th>Time</th><th>Buyer</th><th>Item</th><th>Qty</th><th>Currency</th><th>Total</th></tr></thead>
+  <tbody>
+    {% for tx in sales %}
+    <tr>
+      <td>{{ tx.timestamp|fmt_ts }}</td>
+      <td>{{ tx.buyer_uuid }}</td>
+      <td>{{ tx.item_key }}</td>
+      <td>{{ tx.qty }}</td>
+      <td>{{ tx.currency }}</td>
+      <td>{{ tx.total_price }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -422,6 +422,26 @@ def download_logs():
     return send_file(LOG_PATH, as_attachment=True)
 
 
+@app.route("/logstats")
+@admin_required
+def logstats():
+    stats = {}
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                key = (obj.get("command", ""), obj.get("success", False))
+                stats[key] = stats.get(key, 0) + 1
+    chart = {
+        "labels": [f"{k[0]} {'✔' if k[1] else '✖'}" for k in stats],
+        "datasets": [{"label": "Count", "data": [stats[k] for k in stats]}],
+    }
+    return render_template("logstats.html", stats=stats, chart_json=json.dumps(chart))
+
+
 @app.route("/backups", methods=["GET", "POST"])
 @admin_required
 def backups():
@@ -640,6 +660,111 @@ def systems():
             ).fetchall()
             balances[r["uuid"]] = {b["currency"]: b["balance"] for b in bal_rows}
     return render_template("systems.html", systems=rows, accounts=balances)
+
+
+@app.route("/shops")
+@admin_required
+def shops():
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT shop_id, owner_uuid, status, last_activity_at FROM shops"
+        ).fetchall()
+        stats_rows = db.execute(
+            """
+            SELECT shop_id, COUNT(*) AS cnt, COALESCE(SUM(total_price),0) AS total
+            FROM shop_tx WHERE result='success' GROUP BY shop_id
+            """
+        ).fetchall()
+    stats = {r["shop_id"]: r for r in stats_rows}
+    shops = []
+    for r in rows:
+        info = dict(r)
+        s = stats.get(r["shop_id"], {"cnt": 0, "total": 0})
+        info["sales"] = s["cnt"]
+        info["revenue"] = s["total"]
+        shops.append(info)
+    return render_template("shops.html", shops=shops)
+
+
+@app.route("/shops/<shop_id>", methods=["GET", "POST"])
+@admin_required
+def shop_detail(shop_id: str):
+    with get_db() as db:
+        if request.method == "POST":
+            action = request.form.get("action")
+            cur = db.cursor()
+            if action == "set_stock":
+                item_key = request.form["item_key"]
+                try:
+                    stock = int(request.form["stock"])
+                except ValueError:
+                    stock = 0
+                ts = int(time.time())
+                cur.execute(
+                    """
+                    INSERT INTO shop_stock(shop_id,item_key,stock,updated_at)
+                    VALUES (?,?,?,?)
+                    ON CONFLICT(shop_id,item_key)
+                    DO UPDATE SET stock=excluded.stock, updated_at=excluded.updated_at
+                    """,
+                    (shop_id, item_key, stock, ts),
+                )
+            elif action == "set_price":
+                item_key = request.form["item_key"]
+                currency = request.form["currency"].strip()
+                try:
+                    price = int(request.form["price"])
+                except ValueError:
+                    price = 0
+                cur.execute(
+                    """
+                    INSERT INTO shop_prices(shop_id,item_key,currency,price)
+                    VALUES (?,?,?,?)
+                    ON CONFLICT(shop_id,item_key,currency)
+                    DO UPDATE SET price=excluded.price
+                    """,
+                    (shop_id, item_key, currency, price),
+                )
+            db.commit()
+            flash("Updated")
+            return redirect(url_for("shop_detail", shop_id=shop_id))
+
+        shop = db.execute(
+            "SELECT shop_id, owner_uuid, status, last_activity_at FROM shops WHERE shop_id=?",
+            (shop_id,),
+        ).fetchone()
+        item_rows = db.execute(
+            """
+            SELECT si.item_key, si.material, si.display_name, ss.stock
+            FROM shop_stock ss JOIN shop_items si ON ss.item_key=si.item_key
+            WHERE ss.shop_id=?
+            """,
+            (shop_id,),
+        ).fetchall()
+        items = []
+        for r in item_rows:
+            price_rows = db.execute(
+                "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                (shop_id, r["item_key"]),
+            ).fetchall()
+            items.append(
+                {
+                    "item_key": r["item_key"],
+                    "material": r["material"],
+                    "display_name": r["display_name"],
+                    "stock": r["stock"],
+                    "prices": {p["currency"]: p["price"] for p in price_rows},
+                }
+            )
+        sales = db.execute(
+            """
+            SELECT timestamp, buyer_uuid, item_key, qty, currency, total_price
+            FROM shop_tx WHERE shop_id=? AND result='success'
+            ORDER BY id DESC LIMIT 100
+            """,
+            (shop_id,),
+        ).fetchall()
+    return render_template("shop_detail.html", shop=shop, items=items, sales=sales)
 
 
 @app.route("/command", methods=["GET", "POST"])
