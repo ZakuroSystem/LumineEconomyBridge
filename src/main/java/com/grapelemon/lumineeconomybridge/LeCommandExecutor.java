@@ -251,6 +251,19 @@ public class LeCommandExecutor implements CommandExecutor {
                                                     }
                                                 });
                                             }
+                                            if (res.has("location")) {
+                                                JsonObject loc = res.getAsJsonObject("location");
+                                                String world = loc.get("world").getAsString();
+                                                int x = loc.get("x").getAsInt();
+                                                int y = loc.get("y").getAsInt();
+                                                int z = loc.get("z").getAsInt();
+                                                Bukkit.getScheduler().runTask(plugin, () -> {
+                                                    var w = Bukkit.getWorld(world);
+                                                    if (w != null) {
+                                                        w.getBlockAt(x, y, z).setType(Material.AIR);
+                                                    }
+                                                });
+                                            }
                                             p.sendMessage("Removed");
                                         } else {
                                             p.sendMessage("Failed: " + res.get("reason").getAsString());

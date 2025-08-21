@@ -1699,6 +1699,7 @@ async def shop_reopen(payload: ShopReopenPayload):
 async def shop_remove(payload: ShopRemovePayload):
     start = time.time()
     grants: List[Dict[str, str]] = []
+    location: Optional[Dict[str, Union[str, float]]] = None
     with transaction() as cur:
         if payload.refund:
             rows = cur.execute(
@@ -1715,6 +1716,17 @@ async def shop_remove(payload: ShopRemovePayload):
                     }
                 )
             cur.execute("DELETE FROM shop_stock WHERE shop_id=?", (payload.shop_id,))
+        loc_row = cur.execute(
+            "SELECT world, x, y, z FROM shop_locations WHERE shop_id=?",
+            (payload.shop_id,),
+        ).fetchone()
+        if loc_row:
+            location = {
+                "world": loc_row["world"],
+                "x": loc_row["x"],
+                "y": loc_row["y"],
+                "z": loc_row["z"],
+            }
         cur.execute("DELETE FROM shop_locations WHERE shop_id=?", (payload.shop_id,))
         cur.execute("UPDATE shops SET status='suspended' WHERE shop_id=?", (payload.shop_id,))
     latency_ms = int((time.time() - start) * 1000)
@@ -1727,4 +1739,4 @@ async def shop_remove(payload: ShopRemovePayload):
     }
     with open(LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-    return {"status": "success", "grant": grants}
+    return {"status": "success", "grant": grants, "location": location}
