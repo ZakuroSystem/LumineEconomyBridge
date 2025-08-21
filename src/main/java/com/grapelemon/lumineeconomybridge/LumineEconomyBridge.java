@@ -1,6 +1,10 @@
 package com.grapelemon.lumineeconomybridge;
 
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
+import com.grapelemon.lumineeconomybridge.map.MapColorService;
+import com.grapelemon.lumineeconomybridge.map.SnapshotService;
+import com.grapelemon.lumineeconomybridge.map.TileDebounceManager;
+import com.grapelemon.lumineeconomybridge.map.BlockEventListener;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import okhttp3.OkHttpClient;
@@ -30,6 +34,10 @@ public class LumineEconomyBridge extends JavaPlugin {
     private int timeout = 2000;
     private long syncInterval = 10L;
 
+    private MapColorService mapColorService;
+    private SnapshotService snapshotService;
+    private TileDebounceManager tileDebounceManager;
+
     private final Map<String, Long> grantTokens = new ConcurrentHashMap<>();
 
     @Override
@@ -48,6 +56,8 @@ public class LumineEconomyBridge extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new ShopListener(this), this);
 
         startBridge();
+        startMapColorService();
+        startTileUpdates();
     }
 
     public void startBridge() {
@@ -108,6 +118,39 @@ public class LumineEconomyBridge extends JavaPlugin {
         syncService = null;
         httpClient = null;
         getLogger().info("LumineEconomyBridge stopped.");
+    }
+
+    private void startMapColorService() {
+        if (mapColorService != null) return;
+        int port = getConfig().getInt("mapcolor.port", 8765);
+        String token = getConfig().getString("api.token", "");
+        try {
+            mapColorService = new MapColorService(this, token, port);
+            mapColorService.start();
+            getLogger().info("server_version=" + getServer().getVersion() +
+                    " palette_len=" + mapColorService.getPaletteLength());
+        } catch (IOException e) {
+            getLogger().warning("failed to start mapcolor service: " + e.getMessage());
+        }
+    }
+
+    private void startTileUpdates() {
+        String token = getConfig().getString("api.token", "");
+        int debounce = getConfig().getInt("mapcolor.debounce_ms", 1000);
+        snapshotService = new SnapshotService(this, token, baseUrl);
+        tileDebounceManager = new TileDebounceManager(this, snapshotService, debounce);
+        getServer().getPluginManager().registerEvents(new BlockEventListener(tileDebounceManager), this);
+    }
+
+    @Override
+    public void onDisable() {
+        stopBridge();
+        if (mapColorService != null) {
+            mapColorService.stop();
+            mapColorService = null;
+        }
+        snapshotService = null;
+        tileDebounceManager = null;
     }
 
     public void reloadBridge() {

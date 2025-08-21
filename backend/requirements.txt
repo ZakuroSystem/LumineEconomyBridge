@@ -3,3 +3,5 @@ uvicorn
 PyYAML
 Flask
 requests
+anvil-parser
+httpx
