@@ -24,6 +24,8 @@ import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.ItemFlag;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import java.time.Instant;
@@ -325,7 +327,31 @@ public class ShopListener implements Listener {
                 }
             });
         } else if (holder.getItems().containsKey(e.getSlot())) {
+            Inventory inv = e.getInventory();
+            int prev = holder.getSelected();
+            if (prev != -1) {
+                ItemStack prevStack = inv.getItem(prev);
+                if (prevStack != null) {
+                    ItemMeta pm = prevStack.getItemMeta();
+                    if (pm != null) {
+                        for (var en : new HashSet<>(pm.getEnchants().keySet())) {
+                            pm.removeEnchant(en);
+                        }
+                        pm.removeItemFlags(ItemFlag.HIDE_ENCHANTS);
+                        prevStack.setItemMeta(pm);
+                    }
+                }
+            }
             holder.setSelected(e.getSlot());
+            ItemStack newStack = inv.getItem(e.getSlot());
+            if (newStack != null) {
+                ItemMeta nm = newStack.getItemMeta();
+                if (nm != null) {
+                    nm.addEnchant(Enchantment.LUCK, 1, true);
+                    nm.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+                    newStack.setItemMeta(nm);
+                }
+            }
             holder.setQuantity(1);
             ShopItem si = holder.getSelectedItem();
             String cur = si.getPrices().keySet().stream().findFirst().orElse(null);
@@ -350,10 +376,11 @@ public class ShopListener implements Listener {
             int total = unit * holder.getQuantity();
             lore.add("Qty: " + holder.getQuantity());
             lore.add(holder.getCurrency() + ": " + total);
-            cm.setDisplayName("Purchase");
-        } else {
-            cm.setDisplayName("Purchase");
         }
+        lore.add("");
+        lore.add("Right-click to change currency");
+        lore.add("Shift-click to change quantity");
+        cm.setDisplayName("Purchase");
         cm.setLore(lore);
         confirm.setItemMeta(cm);
         inv.setItem(slot, confirm);
