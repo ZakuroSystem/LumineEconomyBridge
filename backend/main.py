@@ -196,7 +196,11 @@ with conn:
             timestamp INTEGER NOT NULL,
             result TEXT NOT NULL,
             reason TEXT,
-            grant_token TEXT
+            grant_token TEXT,
+            world TEXT,
+            x INTEGER,
+            y INTEGER,
+            z INTEGER
         )
         """
     )
@@ -208,6 +212,16 @@ with conn:
         conn.execute("ALTER TABLE shop_tx ADD COLUMN grant_token TEXT")
     except sqlite3.OperationalError:
         pass
+    for col, typ in [
+        ("world", "TEXT"),
+        ("x", "INTEGER"),
+        ("y", "INTEGER"),
+        ("z", "INTEGER"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE shop_tx ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError:
+            pass
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_shop_tx_client ON shop_tx(client_tx_id)"
     )
@@ -1415,6 +1429,7 @@ async def shop_buy(payload: ShopBuyPayload):
     reason: Optional[str] = None
     total_price = 0
     grant_token: Optional[str] = None
+    location: Optional[sqlite3.Row] = None
     with transaction() as cur:
         existing = cur.execute(
             "SELECT * FROM shop_tx WHERE client_tx_id=?",
@@ -1475,6 +1490,10 @@ async def shop_buy(payload: ShopBuyPayload):
                 "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
                 (payload.shop_id,),
             ).fetchone()
+            location = cur.execute(
+                "SELECT world, x, y, z FROM shop_locations WHERE shop_id=?",
+                (payload.shop_id,),
+            ).fetchone()
             if not shop:
                 reason = "shop_not_found"
             elif shop["status"] != "active":
@@ -1513,7 +1532,7 @@ async def shop_buy(payload: ShopBuyPayload):
                                 (payload.timestamp, payload.shop_id),
                             )
                             cur.execute(
-                                "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,grant_token) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                                "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,grant_token,world,x,y,z) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (
                                     payload.client_tx_id,
                                     payload.shop_id,
@@ -1525,6 +1544,10 @@ async def shop_buy(payload: ShopBuyPayload):
                                     payload.timestamp,
                                     "success",
                                     grant_token,
+                                    location["world"] if location else None,
+                                    location["x"] if location else None,
+                                    location["y"] if location else None,
+                                    location["z"] if location else None,
                                 ),
                             )
                             success = True
@@ -1562,7 +1585,7 @@ async def shop_buy(payload: ShopBuyPayload):
                             )
             if not success:
                 cur.execute(
-                    "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,reason) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,reason,world,x,y,z) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         payload.client_tx_id,
                         payload.shop_id,
@@ -1574,6 +1597,10 @@ async def shop_buy(payload: ShopBuyPayload):
                         payload.timestamp,
                         "fail",
                         reason,
+                        location["world"] if location else None,
+                        location["x"] if location else None,
+                        location["y"] if location else None,
+                        location["z"] if location else None,
                     ),
                 )
                 messages.append(
@@ -1597,6 +1624,10 @@ async def shop_buy(payload: ShopBuyPayload):
         "reason": reason,
         "client_tx_id": payload.client_tx_id,
         "latency_ms": latency_ms,
+        "world": location["world"] if location else None,
+        "x": location["x"] if location else None,
+        "y": location["y"] if location else None,
+        "z": location["z"] if location else None,
     }
     with open(LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")

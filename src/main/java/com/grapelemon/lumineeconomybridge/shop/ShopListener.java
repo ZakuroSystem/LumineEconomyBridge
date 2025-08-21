@@ -28,6 +28,7 @@ import org.bukkit.inventory.ItemFlag;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.ChatColor;
 import java.time.Instant;
 
 import java.io.IOException;
@@ -275,7 +276,7 @@ public class ShopListener implements Listener {
                             if (res.has("messages")) {
                                 res.getAsJsonArray("messages").forEach(m -> {
                                     JsonObject msg = m.getAsJsonObject();
-                                    String text = msg.has("text") ? msg.get("text").getAsString() : "";
+                                    String text = msg.has("text") ? ChatColor.translateAlternateColorCodes('&', msg.get("text").getAsString()) : "";
                                     Player recv = p;
                                     if (msg.has("player")) {
                                         try {

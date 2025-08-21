@@ -379,7 +379,7 @@ public class LeCommandExecutor implements CommandExecutor {
                           if (res.has("messages")) {
                               res.getAsJsonArray("messages").forEach(el -> {
                                   JsonObject msg = el.getAsJsonObject();
-                                  String text = msg.has("text") ? msg.get("text").getAsString() : "";
+                                  String text = msg.has("text") ? ChatColor.translateAlternateColorCodes('&', msg.get("text").getAsString()) : "";
                                   String target = msg.has("target") ? msg.get("target").getAsString() : "chat";
                                   long delay = msg.has("delay") ? msg.get("delay").getAsLong() : 0;
                                   Player recv = p;
@@ -397,9 +397,10 @@ public class LeCommandExecutor implements CommandExecutor {
                                       }
                                   }
                                   Player finalRecv = recv;
+                                  String subtitle = msg.has("subtitle") ? ChatColor.translateAlternateColorCodes('&', msg.get("subtitle").getAsString()) : "";
                                   Runnable task = switch (target.toLowerCase()) {
                                       case "actionbar" -> () -> finalRecv.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(text));
-                                      case "title" -> () -> finalRecv.sendTitle(text, msg.has("subtitle") ? msg.get("subtitle").getAsString() : "", 10, 40, 10);
+                                      case "title" -> () -> finalRecv.sendTitle(text, subtitle, 10, 40, 10);
                                       default -> () -> finalRecv.sendMessage(text);
                                   };
                                   if (delay > 0) {
