@@ -622,8 +622,13 @@ def is_shop_owner(cur: sqlite3.Cursor, shop_id: str, uuid: str) -> bool:
 
 
 def get_balance(cur: sqlite3.Cursor, uuid: str, currency: str) -> int:
+    cur.execute(
+        "INSERT OR IGNORE INTO accounts(uuid, currency, balance) VALUES (?,?,0)",
+        (uuid, currency),
+    )
     row = cur.execute(
-        "SELECT balance FROM accounts WHERE uuid=? AND currency=?", (uuid, currency)
+        "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
+        (uuid, currency),
     ).fetchone()
     return row["balance"] if row else 0
 
@@ -674,6 +679,14 @@ def list_balances(cur: sqlite3.Cursor, uuid: str) -> Dict[str, int]:
     rows = cur.execute(
         "SELECT currency, balance FROM accounts WHERE uuid=?", (uuid,)
     ).fetchall()
+    if not rows:
+        cur.execute(
+            "INSERT OR IGNORE INTO accounts(uuid, currency, balance) VALUES (?,?,0)",
+            (uuid, get_default_currency(cur)),
+        )
+        rows = cur.execute(
+            "SELECT currency, balance FROM accounts WHERE uuid=?", (uuid,)
+        ).fetchall()
     return {r["currency"]: r["balance"] for r in rows}
 
 
@@ -988,6 +1001,10 @@ async def message(payload: MessagePayload):
             cur.execute(
                 "UPDATE players SET last_seen=? WHERE uuid=?",
                 (payload.timestamp, payload.player),
+            )
+            cur.execute(
+                "INSERT OR IGNORE INTO accounts(uuid, currency, balance) VALUES (?,?,0)",
+                (payload.player, get_default_currency(cur)),
             )
 
             exec_uuid = payload.player
@@ -1486,7 +1503,7 @@ async def message(payload: MessagePayload):
                                 })
                                 scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
                                 scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
-            elif action == "balance":
+            elif action in {"balance", "wallet"}:
                 target_name = None
                 currency = None
                 if len(cmd) >= 3 and is_currency(cur, cmd[1]):

@@ -6,6 +6,7 @@ LumineEconomyBridge bridges a Minecraft server's scoreboard economy with a Pytho
 Use `/le` followed by a subcommand. Common commands:
 
  - `/le balance [currency] [player]` – Show your or another player's balance.
+ - `/le wallet` – Display your own balances (creates an account automatically if needed).
 - `/le money give <player> <currency> <amount>` – Mint funds for a player.
 - `/le money take <player> <currency> <amount>` – Remove funds from a player.
 - `/le money pay [src] <dst> [currency] <amount>` – Pay from one player to another. Omitting `src` uses the executor; omitting `currency` uses the default.
@@ -31,6 +32,7 @@ Use `/le` followed by a subcommand. Common commands:
 ## Notes
 - All command validation and economy processing happen on the Python backend.
 - Unknown or invalid commands return an error followed by a suggestion to use `/le help`.
+- Player accounts are created automatically when checking your wallet or handling funds.
 - Scoreboards for `currency1` and `currency2` are synchronized with the backend every 10 seconds.
 - The web dashboard (run `python backend/dashboard.py`) summarizes total accounts, per-currency supply, recent transaction stats, and active players. It also provides account search/editing, currency management tools, and a filterable transaction history page for auditing.
   Additional tools include a command log viewer with filters and download button, and a backup manager to create, restore, and schedule automatic backups.

@@ -42,6 +42,7 @@ en:
     header: "§6§lAvailable commands:§r"
     lines:
       - "§e/le balance [currency] [player]§r"
+      - "§e/le wallet§r"
       - "§e/le money give <player> [currency] <amount>§r"
       - "§e/le money take <player> [currency] <amount>§r"
       - "§e/le money pay [src] <dst> [currency] <amount>§r"
@@ -125,6 +126,7 @@ jp:
     header: "§6§l使用可能なコマンド:§r"
     lines:
       - "§e/le balance [currency] [player]§r"
+      - "§e/le wallet§r"
       - "§e/le money give <player> [currency] <amount>§r"
       - "§e/le money take <player> [currency] <amount>§r"
       - "§e/le money pay [src] <dst> [currency] <amount>§r"

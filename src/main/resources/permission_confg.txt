@@ -7,3 +7,4 @@ pay=user
 deposit=user
 withdraw=user
 transfer=user
+wallet=user
