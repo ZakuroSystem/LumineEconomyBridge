@@ -82,9 +82,10 @@ public class LeCommandExecutor implements CommandExecutor {
                     }
                     if (args.length >= 2 && args[1].equalsIgnoreCase("help")) {
                         p.sendMessage(ChatColor.GREEN + "/le shop create " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Create a shop barrel / ショップ樽を作成");
-                        p.sendMessage(ChatColor.GREEN + "/le shop add " + ChatColor.YELLOW + "<id> <qty> " + ChatColor.GRAY + "- Deposit items / 在庫追加");
+                        p.sendMessage(ChatColor.GREEN + "/le shop add " + ChatColor.YELLOW + "<id> <qty> <price> <name> " + ChatColor.GRAY + "- Deposit item / 在庫追加");
                         p.sendMessage(ChatColor.GREEN + "/le shop take " + ChatColor.YELLOW + "<id> <item> <qty> " + ChatColor.GRAY + "- Withdraw stock / 在庫回収");
-                        p.sendMessage(ChatColor.GREEN + "/le shop price " + ChatColor.YELLOW + "<id> <hand|item> <currency> <amount> " + ChatColor.GRAY + "- Set price / 価格設定");
+                        p.sendMessage(ChatColor.GREEN + "/le shop price " + ChatColor.YELLOW + "<id> <name> <currency> <amount> [<currency> <amount>...] " + ChatColor.GRAY + "- Set price / 価格設定");
+                        p.sendMessage(ChatColor.GREEN + "/le shop remove " + ChatColor.YELLOW + "<id> <name> [refund] " + ChatColor.GRAY + "- Remove item / 在庫削除");
                         p.sendMessage(ChatColor.GREEN + "/le shop remove " + ChatColor.YELLOW + "<id> [refund] " + ChatColor.GRAY + "- Remove shop / 撤去");
                         p.sendMessage(ChatColor.GREEN + "/le shop reopen " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Reopen suspended shop / 再開");
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
@@ -109,10 +110,13 @@ public class LeCommandExecutor implements CommandExecutor {
                         barrel.setItemMeta(meta);
                         p.getInventory().addItem(barrel);
                         p.sendMessage(ChatColor.GREEN + "Shop barrel created: " + shopId);
-                    } else if (args.length >= 4 && args[1].equalsIgnoreCase("add")) {
+                    } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
                         int qty;
+                        int price;
                         try { qty = Integer.parseInt(args[3]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid qty"); return true; }
+                        try { price = Integer.parseInt(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid price"); return true; }
+                        String saleName = String.join(" ", java.util.Arrays.copyOfRange(args,5,args.length));
                         ItemStack hand = p.getInventory().getItemInMainHand();
                         if (hand.getType() == Material.AIR) { p.sendMessage(ChatColor.RED + "Hold item in hand"); return true; }
                         if (hand.getAmount() < qty) { p.sendMessage(ChatColor.RED + "Not enough items"); return true; }
@@ -125,6 +129,8 @@ public class LeCommandExecutor implements CommandExecutor {
                         ItemMeta hm = hand.getItemMeta();
                         if (hm != null && hm.hasDisplayName()) payload.put("display_name", hm.getDisplayName());
                         payload.put("qty", qty);
+                        payload.put("price", price);
+                        payload.put("sale_name", saleName);
                         Request req = new Request.Builder()
                                 .url(plugin.getBaseUrl() + "/api/shop/add_stock")
                                 .post(RequestBody.create(gson.toJson(payload), JSON))
@@ -142,11 +148,7 @@ public class LeCommandExecutor implements CommandExecutor {
                                         if ("success".equals(res.get("status").getAsString())) {
                                             hand.setAmount(hand.getAmount() - qty);
                                             p.getInventory().setItemInMainHand(hand.getAmount() > 0 ? hand : null);
-                                            if (res.has("item_key")) {
-                                                p.sendMessage(ChatColor.GREEN + "Stock added: " + res.get("item_key").getAsString());
-                                            } else {
-                                                p.sendMessage(ChatColor.GREEN + "Stock added");
-                                            }
+                                            p.sendMessage(ChatColor.GREEN + "Stock added: " + saleName);
                                         } else {
                                             p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
                                         }
@@ -229,99 +231,142 @@ public class LeCommandExecutor implements CommandExecutor {
                         });
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("remove")) {
                         String shopId = args[2];
-                        boolean refund = args.length >= 4 && args[3].equalsIgnoreCase("refund");
-                        Map<String, Object> payload = new HashMap<>();
-                        payload.put("shop_id", shopId);
-                        payload.put("refund", refund);
-                        Request req = new Request.Builder()
-                                .url(plugin.getBaseUrl() + "/api/shop/remove")
-                                .post(RequestBody.create(gson.toJson(payload), JSON))
-                                .build();
-                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
-                            @Override public void onFailure(Call call, IOException ex) {
-                                plugin.getLogger().warning("Remove failed: " + ex.getMessage());
-                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
-                            }
-                            @Override public void onResponse(Call call, Response response) throws IOException {
-                                try (response) {
-                                    String body = response.body() != null ? response.body().string() : "{}";
-                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
-                                    Bukkit.getScheduler().runTask(plugin, () -> {
-                                        if ("success".equals(res.get("status").getAsString())) {
-                                            if (refund && res.has("grant")) {
-                                                res.getAsJsonArray("grant").forEach(g -> {
-                                                    JsonObject gg = g.getAsJsonObject();
-                                                    String token = gg.get("grant_token").getAsString();
-                                                    if (plugin.consumeGrantToken(token)) {
-                                                        ItemStack item = itemFromBase64(gg.get("nbt_blob").getAsString());
-                                                        item.setAmount(gg.get("qty").getAsInt());
-                                                        p.getInventory().addItem(item);
-                                                    }
-                                                });
-                                            }
-                                            if (res.has("location")) {
-                                                JsonObject loc = res.getAsJsonObject("location");
-                                                String world = loc.get("world").getAsString();
-                                                int x = loc.get("x").getAsInt();
-                                                int y = loc.get("y").getAsInt();
-                                                int z = loc.get("z").getAsInt();
-                                                Bukkit.getScheduler().runTask(plugin, () -> {
-                                                    var w = Bukkit.getWorld(world);
-                                                    if (w != null) {
-                                                        w.getBlockAt(x, y, z).setType(Material.AIR);
-                                                    }
-                                                });
-                                            }
-                                            p.sendMessage(ChatColor.GREEN + "Removed");
-                                        } else {
-                                            p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
-                                        }
-                                    });
+                        if (args.length >= 4 && !args[3].equalsIgnoreCase("refund")) {
+                            String saleName = args[3];
+                            boolean refund = args.length >= 5 && args[4].equalsIgnoreCase("refund");
+                            Map<String, Object> payload = new HashMap<>();
+                            payload.put("owner_uuid", p.getUniqueId().toString());
+                            payload.put("shop_id", shopId);
+                            payload.put("sale_name", saleName);
+                            payload.put("refund", refund);
+                            Request req = new Request.Builder()
+                                    .url(plugin.getBaseUrl() + "/api/shop/remove_item")
+                                    .post(RequestBody.create(gson.toJson(payload), JSON))
+                                    .build();
+                            plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                                @Override public void onFailure(Call call, IOException ex) {
+                                    plugin.getLogger().warning("Remove item failed: " + ex.getMessage());
+                                    Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
                                 }
-                            }
-                        });
+                                @Override public void onResponse(Call call, Response response) throws IOException {
+                                    try (response) {
+                                        String body = response.body() != null ? response.body().string() : "{}";
+                                        JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                        Bukkit.getScheduler().runTask(plugin, () -> {
+                                            if ("success".equals(res.get("status").getAsString())) {
+                                                if (refund && res.has("grant")) {
+                                                    res.getAsJsonArray("grant").forEach(g -> {
+                                                        JsonObject gg = g.getAsJsonObject();
+                                                        String token = gg.get("grant_token").getAsString();
+                                                        if (plugin.consumeGrantToken(token)) {
+                                                            ItemStack item = itemFromBase64(gg.get("nbt_blob").getAsString());
+                                                            item.setAmount(gg.get("qty").getAsInt());
+                                                            p.getInventory().addItem(item);
+                                                        }
+                                                    });
+                                                }
+                                                p.sendMessage(ChatColor.GREEN + "Item removed: " + saleName);
+                                            } else {
+                                                p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+                        } else {
+                            boolean refund = args.length >= 4 && args[3].equalsIgnoreCase("refund");
+                            Map<String, Object> payload = new HashMap<>();
+                            payload.put("shop_id", shopId);
+                            payload.put("refund", refund);
+                            Request req = new Request.Builder()
+                                    .url(plugin.getBaseUrl() + "/api/shop/remove")
+                                    .post(RequestBody.create(gson.toJson(payload), JSON))
+                                    .build();
+                            plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                                @Override public void onFailure(Call call, IOException ex) {
+                                    plugin.getLogger().warning("Remove failed: " + ex.getMessage());
+                                    Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                                }
+                                @Override public void onResponse(Call call, Response response) throws IOException {
+                                    try (response) {
+                                        String body = response.body() != null ? response.body().string() : "{}";
+                                        JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                        Bukkit.getScheduler().runTask(plugin, () -> {
+                                            if ("success".equals(res.get("status").getAsString())) {
+                                                if (refund && res.has("grant")) {
+                                                    res.getAsJsonArray("grant").forEach(g -> {
+                                                        JsonObject gg = g.getAsJsonObject();
+                                                        String token = gg.get("grant_token").getAsString();
+                                                        if (plugin.consumeGrantToken(token)) {
+                                                            ItemStack item = itemFromBase64(gg.get("nbt_blob").getAsString());
+                                                            item.setAmount(gg.get("qty").getAsInt());
+                                                            p.getInventory().addItem(item);
+                                                        }
+                                                    });
+                                                }
+                                                if (res.has("location")) {
+                                                    JsonObject loc = res.getAsJsonObject("location");
+                                                    String world = loc.get("world").getAsString();
+                                                    int x = loc.get("x").getAsInt();
+                                                    int y = loc.get("y").getAsInt();
+                                                    int z = loc.get("z").getAsInt();
+                                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                                        var w = Bukkit.getWorld(world);
+                                                        if (w != null) {
+                                                            w.getBlockAt(x, y, z).setType(Material.AIR);
+                                                        }
+                                                    });
+                                                }
+                                                p.sendMessage(ChatColor.GREEN + "Removed");
+                                            } else {
+                                                p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+                        }
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("price")) {
                         String shopId = args[2];
-                        String itemKey;
-                        if (args[3].equalsIgnoreCase("hand")) {
-                            ItemStack hand = p.getInventory().getItemInMainHand();
-                            if (hand.getType() == Material.AIR) { p.sendMessage(ChatColor.RED + "Hold item in hand"); return true; }
-                            itemKey = computeItemKey(hand);
-                        } else {
-                            itemKey = args[3];
+                        String saleName = args[3];
+                        if ((args.length - 4) % 2 != 0) {
+                            p.sendMessage(ChatColor.RED + "Usage: /le shop price <id> <name> <currency> <amount> [<currency> <amount>...]");
+                            return true;
                         }
-                        String currency = args[4];
-                        int amount;
-                        try { amount = Integer.parseInt(args[5]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid amount"); return true; }
-                        Map<String, Object> payload = new HashMap<>();
-                        payload.put("owner_uuid", p.getUniqueId().toString());
-                        payload.put("shop_id", shopId);
-                        payload.put("item_key", itemKey);
-                        payload.put("currency", currency);
-                        payload.put("price", amount);
-                        Request req = new Request.Builder()
-                                .url(plugin.getBaseUrl() + "/api/shop/set_price")
-                                .post(RequestBody.create(gson.toJson(payload), JSON))
-                                .build();
-                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
-                            @Override public void onFailure(Call call, IOException ex) {
-                                plugin.getLogger().warning("Set price failed: " + ex.getMessage());
-                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
-                            }
-                            @Override public void onResponse(Call call, Response response) throws IOException {
-                                try (response) {
-                                    String body = response.body() != null ? response.body().string() : "{}";
-                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
-                                    Bukkit.getScheduler().runTask(plugin, () -> {
-                                        if ("success".equals(res.get("status").getAsString())) {
-                                            p.sendMessage(ChatColor.GREEN + "Price updated");
-                                        } else {
-                                            p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
-                                        }
-                                    });
+                        for (int i = 4; i < args.length; i += 2) {
+                            String currency = args[i];
+                            int amount;
+                            try { amount = Integer.parseInt(args[i + 1]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid amount"); return true; }
+                            Map<String, Object> payload = new HashMap<>();
+                            payload.put("owner_uuid", p.getUniqueId().toString());
+                            payload.put("shop_id", shopId);
+                            payload.put("sale_name", saleName);
+                            payload.put("currency", currency);
+                            payload.put("price", amount);
+                            Request req = new Request.Builder()
+                                    .url(plugin.getBaseUrl() + "/api/shop/set_price")
+                                    .post(RequestBody.create(gson.toJson(payload), JSON))
+                                    .build();
+                            plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                                @Override public void onFailure(Call call, IOException ex) {
+                                    plugin.getLogger().warning("Set price failed: " + ex.getMessage());
+                                    Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
                                 }
-                            }
-                        });
+                                @Override public void onResponse(Call call, Response response) throws IOException {
+                                    try (response) {
+                                        String body = response.body() != null ? response.body().string() : "{}";
+                                        JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                        Bukkit.getScheduler().runTask(plugin, () -> {
+                                            if ("success".equals(res.get("status").getAsString())) {
+                                                p.sendMessage(ChatColor.GREEN + "Price updated");
+                                            } else {
+                                                p.sendMessage(ChatColor.RED + "Failed: " + res.get("reason").getAsString());
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+                        }
                     } else {
                         p.sendMessage(ChatColor.YELLOW + "Usage: /le shop <create|add|take|price|remove|reopen|help> ...");
                     }

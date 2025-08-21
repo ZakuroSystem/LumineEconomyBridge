@@ -193,10 +193,12 @@ public class ShopListener implements Listener {
                 if (idx >= size - 1) break;
                 JsonObject it = el.getAsJsonObject();
                 String key = it.get("item_key").getAsString();
+                String saleName = it.has("sale_name") ? it.get("sale_name").getAsString() : "";
                 String blob = it.get("nbt_blob").getAsString();
                 ItemStack item = itemFromBase64(blob);
                 ItemMeta meta = item.getItemMeta();
                 List<String> lore = new ArrayList<>();
+                lore.add("Name: " + saleName);
                 lore.add("Stock: " + it.get("stock").getAsInt());
                 JsonObject prices = it.getAsJsonObject("prices");
                 Map<String, Integer> priceMap = new HashMap<>();
@@ -207,7 +209,7 @@ public class ShopListener implements Listener {
                 meta.setLore(lore);
                 item.setItemMeta(meta);
                 inv.setItem(idx, item);
-                holder.getItems().put(idx, new ShopItem(key, item, priceMap));
+                holder.getItems().put(idx, new ShopItem(key, saleName, item, priceMap));
                 idx++;
             }
             ItemStack confirm = new ItemStack(Material.EMERALD);

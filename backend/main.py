@@ -171,9 +171,11 @@ with conn:
         CREATE TABLE IF NOT EXISTS shop_stock (
             shop_id TEXT NOT NULL,
             item_key TEXT NOT NULL,
+            sale_name TEXT NOT NULL,
             stock INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             PRIMARY KEY(shop_id, item_key),
+            UNIQUE(shop_id, sale_name),
             FOREIGN KEY(shop_id) REFERENCES shops(shop_id),
             FOREIGN KEY(item_key) REFERENCES shop_items(item_key)
         )
@@ -350,6 +352,9 @@ class ShopAddStockPayload(BaseModel):
     material: str
     display_name: Optional[str]
     qty: int
+    price: int
+    sale_name: str
+    currency: Optional[str] = None
 
 
 class ShopTakeStockPayload(BaseModel):
@@ -362,7 +367,8 @@ class ShopTakeStockPayload(BaseModel):
 class ShopSetPricePayload(BaseModel):
     owner_uuid: str
     shop_id: str
-    item_key: str
+    item_key: Optional[str] = None
+    sale_name: Optional[str] = None
     currency: str
     price: int
 
@@ -380,6 +386,13 @@ class ShopReopenPayload(BaseModel):
 
 class ShopRemovePayload(BaseModel):
     shop_id: str
+    refund: bool = False
+
+
+class ShopRemoveItemPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    sale_name: str
     refund: bool = False
 
 
@@ -1463,7 +1476,7 @@ async def shop_items(shop_id: str):
             result = {"status": srow["status"], "last_activity_at": srow["last_activity_at"]}
         else:
             rows = cur.execute(
-                "SELECT st.item_key, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+                "SELECT st.item_key, st.sale_name, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
                 (shop_id,),
             ).fetchall()
             items = []
@@ -1476,6 +1489,7 @@ async def shop_items(shop_id: str):
                 items.append(
                     {
                         "item_key": r["item_key"],
+                        "sale_name": r["sale_name"],
                         "material": r["material"],
                         "display_name": r["display_name"],
                         "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
@@ -1739,10 +1753,19 @@ async def shop_add_stock(payload: ShopAddStockPayload):
             )
             cur.execute(
                 """
-                INSERT INTO shop_stock(shop_id, item_key, stock, updated_at) VALUES(?,?,?,?)
-                ON CONFLICT(shop_id,item_key) DO UPDATE SET stock=stock+excluded.stock, updated_at=excluded.updated_at
+                INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at)
+                VALUES(?,?,?,?,?)
+                ON CONFLICT(shop_id,item_key) DO UPDATE SET stock=stock+excluded.stock, updated_at=excluded.updated_at, sale_name=excluded.sale_name
                 """,
-                (payload.shop_id, item_key, payload.qty, ts),
+                (payload.shop_id, item_key, payload.sale_name, payload.qty, ts),
+            )
+            currency = payload.currency or get_default_currency(cur)
+            cur.execute(
+                """
+                INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
+                ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
+                """,
+                (payload.shop_id, item_key, currency, payload.price),
             )
             cur.execute(
                 "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
@@ -1756,6 +1779,8 @@ async def shop_add_stock(payload: ShopAddStockPayload):
         "owner": payload.owner_uuid,
         "item_key": item_key,
         "qty": payload.qty,
+        "sale_name": payload.sale_name,
+        "price": payload.price,
         "result": result,
         "reason": reason,
         "latency_ms": latency_ms,
@@ -1842,26 +1867,39 @@ async def shop_set_price(payload: ShopSetPricePayload):
             result = "error"
             reason = "not_owner"
         else:
-            ensure_currency(cur, payload.currency)
-            ts = int(time.time())
-            cur.execute(
-                """
-                INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
-                ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
-                """,
-                (payload.shop_id, payload.item_key, payload.currency, payload.price),
-            )
-            cur.execute(
-                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-                (ts, payload.shop_id),
-            )
+            item_key = payload.item_key
+            if item_key is None and payload.sale_name:
+                row = cur.execute(
+                    "SELECT item_key FROM shop_stock WHERE shop_id=? AND sale_name=?",
+                    (payload.shop_id, payload.sale_name),
+                ).fetchone()
+                if row:
+                    item_key = row["item_key"]
+            if not item_key:
+                result = "error"
+                reason = "item_not_found"
+            else:
+                ensure_currency(cur, payload.currency)
+                ts = int(time.time())
+                cur.execute(
+                    """
+                    INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
+                    ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
+                    """,
+                    (payload.shop_id, item_key, payload.currency, payload.price),
+                )
+                cur.execute(
+                    "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                    (ts, payload.shop_id),
+                )
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_set_price",
         "timestamp": int(time.time()),
         "shop_id": payload.shop_id,
         "owner": payload.owner_uuid,
-        "item_key": payload.item_key,
+        "item_key": item_key,
+        "sale_name": payload.sale_name,
         "currency": payload.currency,
         "price": payload.price,
         "result": result,
@@ -1872,6 +1910,73 @@ async def shop_set_price(payload: ShopSetPricePayload):
     if result == "success":
         return {"status": "success"}
     return {"status": "error", "reason": reason}
+
+
+@app.post("/api/shop/remove_item")
+async def shop_remove_item(payload: ShopRemoveItemPayload):
+    start = time.time()
+    grants: List[Dict[str, str]] = []
+    result = "success"
+    reason: Optional[str] = None
+    with transaction() as cur:
+        shop = cur.execute(
+            "SELECT owner_uuid FROM shops WHERE shop_id=?",
+            (payload.shop_id,),
+        ).fetchone()
+        if not shop or shop["owner_uuid"] != payload.owner_uuid:
+            result = "error"
+            reason = "not_owner"
+        else:
+            row = cur.execute(
+                "SELECT item_key, stock FROM shop_stock WHERE shop_id=? AND sale_name=?",
+                (payload.shop_id, payload.sale_name),
+            ).fetchone()
+            if not row:
+                result = "error"
+                reason = "item_not_found"
+            else:
+                item_key = row["item_key"]
+                if payload.refund and row["stock"] > 0:
+                    blob_row = cur.execute(
+                        "SELECT nbt_blob FROM shop_items WHERE item_key=?",
+                        (item_key,),
+                    ).fetchone()
+                    if blob_row:
+                        grants.append(
+                            {
+                                "item_key": item_key,
+                                "qty": row["stock"],
+                                "nbt_blob": base64.b64encode(blob_row["nbt_blob"]).decode("ascii"),
+                                "grant_token": secrets.token_hex(8),
+                            }
+                        )
+                cur.execute(
+                    "DELETE FROM shop_stock WHERE shop_id=? AND item_key=?",
+                    (payload.shop_id, item_key),
+                )
+                cur.execute(
+                    "DELETE FROM shop_prices WHERE shop_id=? AND item_key=?",
+                    (payload.shop_id, item_key),
+                )
+                ts = int(time.time())
+                cur.execute(
+                    "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                    (ts, payload.shop_id),
+                )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_remove_item",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "sale_name": payload.sale_name,
+        "refund": payload.refund,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    return {"status": result, "reason": reason, "grant": grants}
 
 
 @app.post("/api/shop/ping")

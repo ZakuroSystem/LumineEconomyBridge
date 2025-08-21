@@ -25,7 +25,8 @@ public class LeTabCompleter implements TabCompleter {
     private long shopIdsFetched = 0L;
 
     private static class ItemCache {
-        List<String> items = new ArrayList<>();
+        List<String> itemKeys = new ArrayList<>();
+        List<String> saleNames = new ArrayList<>();
         long fetched = 0L;
     }
 
@@ -72,13 +73,16 @@ public class LeTabCompleter implements TabCompleter {
                     JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
                     if (!obj.has("items")) return;
                     JsonArray arr = obj.getAsJsonArray("items");
+                    List<String> keys = new ArrayList<>();
                     List<String> names = new ArrayList<>();
                     for (JsonElement el : arr) {
                         JsonObject it = el.getAsJsonObject();
-                        names.add(it.get("item_key").getAsString());
+                        keys.add(it.get("item_key").getAsString());
+                        if (it.has("sale_name")) names.add(it.get("sale_name").getAsString());
                     }
                     ItemCache cache = new ItemCache();
-                    cache.items = names;
+                    cache.itemKeys = keys;
+                    cache.saleNames = names;
                     cache.fetched = System.currentTimeMillis();
                     itemCache.put(shopId, cache);
                 }
@@ -194,8 +198,7 @@ public class LeTabCompleter implements TabCompleter {
             if (args[0].equalsIgnoreCase("money") && args[1].equalsIgnoreCase("top")) {
                 return Collections.singletonList("1");
             }
-            if (args[0].equalsIgnoreCase("shop") &&
-                    (args[1].equalsIgnoreCase("take") || args[1].equalsIgnoreCase("price"))) {
+            if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("take")) {
                 String shopId = args[2];
                 ItemCache cache = itemCache.get(shopId);
                 long now = System.currentTimeMillis();
@@ -203,7 +206,20 @@ public class LeTabCompleter implements TabCompleter {
                     refreshItems(shopId);
                 }
                 if (cache != null) {
-                    return cache.items.stream()
+                    return cache.itemKeys.stream()
+                            .filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase()))
+                            .collect(Collectors.toList());
+                }
+            }
+            if (args[0].equalsIgnoreCase("shop") && (args[1].equalsIgnoreCase("price") || args[1].equalsIgnoreCase("remove"))) {
+                String shopId = args[2];
+                ItemCache cache = itemCache.get(shopId);
+                long now = System.currentTimeMillis();
+                if (cache == null || now - cache.fetched > 5000) {
+                    refreshItems(shopId);
+                }
+                if (cache != null) {
+                    return cache.saleNames.stream()
                             .filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase()))
                             .collect(Collectors.toList());
                 }
