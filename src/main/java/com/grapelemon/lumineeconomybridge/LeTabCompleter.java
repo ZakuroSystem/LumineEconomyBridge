@@ -1,18 +1,90 @@
 package com.grapelemon.lumineeconomybridge;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import okhttp3.*;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class LeTabCompleter implements TabCompleter {
+
+    private final LumineEconomyBridge plugin;
+
+    private List<String> shopIds = new ArrayList<>();
+    private long shopIdsFetched = 0L;
+
+    private static class ItemCache {
+        List<String> items = new ArrayList<>();
+        long fetched = 0L;
+    }
+
+    private final Map<String, ItemCache> itemCache = new ConcurrentHashMap<>();
+
+    public LeTabCompleter(LumineEconomyBridge plugin) {
+        this.plugin = plugin;
+    }
+
+    private void refreshShopIds() {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) return;
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/ids")
+                .build();
+        http.newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException e) {}
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    String body = response.body() != null ? response.body().string() : "{}";
+                    JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
+                    JsonArray arr = obj.has("ids") ? obj.getAsJsonArray("ids") : new JsonArray();
+                    List<String> ids = new ArrayList<>();
+                    for (JsonElement el : arr) ids.add(el.getAsString());
+                    shopIds = ids;
+                    shopIdsFetched = System.currentTimeMillis();
+                }
+            }
+        });
+    }
+
+    private void refreshItems(String shopId) {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) return;
+        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
+                .addQueryParameter("shop_id", shopId)
+                .build();
+        Request req = new Request.Builder().url(url).build();
+        http.newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException e) {}
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    String body = response.body() != null ? response.body().string() : "{}";
+                    JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
+                    if (!obj.has("items")) return;
+                    JsonArray arr = obj.getAsJsonArray("items");
+                    List<String> names = new ArrayList<>();
+                    for (JsonElement el : arr) {
+                        JsonObject it = el.getAsJsonObject();
+                        names.add(it.get("item_key").getAsString());
+                    }
+                    ItemCache cache = new ItemCache();
+                    cache.items = names;
+                    cache.fetched = System.currentTimeMillis();
+                    itemCache.put(shopId, cache);
+                }
+            }
+        });
+    }
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
@@ -100,6 +172,15 @@ public class LeTabCompleter implements TabCompleter {
                         .filter(s -> s.startsWith(args[2].toLowerCase()))
                         .collect(Collectors.toList());
             }
+            if (first.equals("shop")) {
+                long now = System.currentTimeMillis();
+                if (now - shopIdsFetched > 5000) {
+                    refreshShopIds();
+                }
+                return shopIds.stream()
+                        .filter(s -> s.toLowerCase().startsWith(args[2].toLowerCase()))
+                        .collect(Collectors.toList());
+            }
         }
         if (args.length == 4) {
             if (args[0].equalsIgnoreCase("money") && args[1].equalsIgnoreCase("pay")) {
@@ -112,6 +193,20 @@ public class LeTabCompleter implements TabCompleter {
             }
             if (args[0].equalsIgnoreCase("money") && args[1].equalsIgnoreCase("top")) {
                 return Collections.singletonList("1");
+            }
+            if (args[0].equalsIgnoreCase("shop") &&
+                    (args[1].equalsIgnoreCase("take") || args[1].equalsIgnoreCase("price"))) {
+                String shopId = args[2];
+                ItemCache cache = itemCache.get(shopId);
+                long now = System.currentTimeMillis();
+                if (cache == null || now - cache.fetched > 5000) {
+                    refreshItems(shopId);
+                }
+                if (cache != null) {
+                    return cache.items.stream()
+                            .filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase()))
+                            .collect(Collectors.toList());
+                }
             }
         }
         return Collections.emptyList();

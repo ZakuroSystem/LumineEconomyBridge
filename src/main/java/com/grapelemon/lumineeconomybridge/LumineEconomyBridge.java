@@ -43,7 +43,7 @@ public class LumineEconomyBridge extends JavaPlugin {
 
         executor = new LeCommandExecutor(this);
         getCommand("le").setExecutor(executor);
-        getCommand("le").setTabCompleter(new LeTabCompleter());
+        getCommand("le").setTabCompleter(new LeTabCompleter(this));
         getServer().getPluginManager().registerEvents(new PlayerListener(this), this);
         getServer().getPluginManager().registerEvents(new ShopListener(this), this);
 

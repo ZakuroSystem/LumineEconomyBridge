@@ -1408,6 +1408,24 @@ async def shop_place(payload: ShopPlacePayload):
     return {"status": result}
 
 
+@app.get("/api/shop/ids")
+async def shop_ids():
+    start = time.time()
+    with transaction() as cur:
+        rows = cur.execute("SELECT shop_id FROM shops").fetchall()
+    ids = [r["shop_id"] for r in rows]
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_ids",
+        "timestamp": int(time.time()),
+        "count": len(ids),
+        "latency_ms": latency_ms,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    return {"ids": ids}
+
+
 @app.get("/api/shop/items")
 async def shop_items(shop_id: str):
     start = time.time()
