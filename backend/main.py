@@ -223,6 +223,7 @@ with conn:
             item_key TEXT NOT NULL,
             currency TEXT NOT NULL,
             price INTEGER NOT NULL,
+            qty INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY(shop_id, item_key, currency),
             FOREIGN KEY(shop_id) REFERENCES shops(shop_id),
             FOREIGN KEY(item_key) REFERENCES shop_items(item_key)
@@ -481,6 +482,7 @@ class ShopAddStockPayload(BaseModel):
     display_name: Optional[str]
     qty: int
     price: int
+    price_qty: int = 1
     sale_name: Optional[str] = None
     currency: Optional[str] = None
 
@@ -499,6 +501,7 @@ class ShopSetPricePayload(BaseModel):
     sale_name: Optional[str] = None
     currency: str
     price: int
+    qty: int = 1
 
 
 class ShopPingPayload(BaseModel):
@@ -1554,7 +1557,6 @@ async def message(payload: MessagePayload):
                             else:
                                 key = "balance.other_empty" if target_uuid != exec_uuid else "balance.empty"
                                 messages.append({"target": "chat", "text": t(key, lang=exec_lang, player=target_name or payload.executor)})
-                        scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
             elif action == "account" and len(cmd) >= 4 and cmd[1].lower() == "connect":
                 user_name = cmd[2].lower()
                 sys_name = cmd[3].lower()
@@ -1899,13 +1901,16 @@ async def shop_items(shop_id: str):
             ).fetchone()
             for r in rows:
                 price_rows = cur.execute(
-                    "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                    "SELECT currency, price, qty FROM shop_prices WHERE shop_id=? AND item_key=?",
                     (shop_id, r["item_key"]),
                 ).fetchall()
-                prices = {pr["currency"]: pr["price"] for pr in price_rows}
+                prices = {
+                    pr["currency"]: {"price": pr["price"], "qty": pr["qty"]}
+                    for pr in price_rows
+                }
                 if sale:
                     for k in list(prices.keys()):
-                        prices[k] = int(prices[k] * (100 - sale["pct"]) / 100)
+                        prices[k]["price"] = int(prices[k]["price"] * (100 - sale["pct"]) / 100)
                 items.append(
                     {
                         "item_key": r["item_key"],
@@ -2027,13 +2032,15 @@ async def shop_buy(payload: ShopBuyPayload):
                     reason = "insufficient_stock"
                 else:
                     price_row = cur.execute(
-                        "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
+                        "SELECT price, qty FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
                         (payload.shop_id, payload.item_key, payload.currency),
                     ).fetchone()
                     if not price_row:
                         reason = "invalid_currency"
+                    elif payload.qty % price_row["qty"] != 0:
+                        reason = "invalid_qty"
                     else:
-                        base_price = price_row["price"] * payload.qty
+                        base_price = price_row["price"] * (payload.qty // price_row["qty"])
                         sale = cur.execute(
                             "SELECT id,pct,account FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
                             (payload.timestamp, payload.timestamp),
@@ -2241,13 +2248,15 @@ async def shop_sell(payload: ShopSellPayload):
             else:
                 owner = shop["owner_uuid"]
                 price_row = cur.execute(
-                    "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
+                    "SELECT price, qty FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
                     (payload.shop_id, payload.item_key, payload.currency),
                 ).fetchone()
                 if not price_row:
                     reason = "invalid_currency"
+                elif payload.qty % price_row["qty"] != 0:
+                    reason = "invalid_qty"
                 else:
-                    total_price = price_row["price"] * payload.qty
+                    total_price = price_row["price"] * (payload.qty // price_row["qty"])
                     if get_balance(cur, owner, payload.currency) < total_price:
                         reason = "insufficient_funds"
                     elif not transfer(cur, owner, payload.player_uuid, payload.currency, total_price):
@@ -2388,10 +2397,10 @@ async def shop_add_stock(payload: ShopAddStockPayload):
             currency = payload.currency or get_default_currency(cur)
             cur.execute(
                 """
-                INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
-                ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
+                INSERT INTO shop_prices(shop_id, item_key, currency, price, qty) VALUES(?,?,?,?,?)
+                ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price, qty=excluded.qty
                 """,
-                (payload.shop_id, item_key, currency, payload.price),
+                (payload.shop_id, item_key, currency, payload.price, payload.price_qty),
             )
             cur.execute(
                 "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
@@ -2407,6 +2416,7 @@ async def shop_add_stock(payload: ShopAddStockPayload):
         "qty": payload.qty,
         "sale_name": sale_name,
         "price": payload.price,
+        "price_qty": payload.price_qty,
         "result": result,
         "reason": reason,
         "latency_ms": latency_ms,
@@ -2512,10 +2522,10 @@ async def shop_set_price(payload: ShopSetPricePayload):
                     ts = int(time.time())
                     cur.execute(
                         """
-                        INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
-                        ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
+                        INSERT INTO shop_prices(shop_id, item_key, currency, price, qty) VALUES(?,?,?,?,?)
+                        ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price, qty=excluded.qty
                         """,
-                        (payload.shop_id, item_key, payload.currency, payload.price),
+                        (payload.shop_id, item_key, payload.currency, payload.price, payload.qty),
                     )
                     cur.execute(
                         "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
@@ -2531,6 +2541,7 @@ async def shop_set_price(payload: ShopSetPricePayload):
         "sale_name": payload.sale_name,
         "currency": payload.currency,
         "price": payload.price,
+        "qty": payload.qty,
         "result": result,
         "reason": reason,
         "latency_ms": latency_ms,
@@ -2964,7 +2975,7 @@ def search_shops(
     item: Optional[str] = None,
 ):
     q = [
-        "SELECT s.shop_id, si.display_name, ss.sale_name, sp.currency, sp.price, sl.world, sl.x, sl.y, sl.z",
+        "SELECT s.shop_id, si.display_name, ss.sale_name, sp.currency, sp.price, sp.qty, sl.world, sl.x, sl.y, sl.z",
         "FROM shop_prices sp",
         "JOIN shop_stock ss ON sp.shop_id=ss.shop_id AND sp.item_key=ss.item_key",
         "JOIN shop_items si ON sp.item_key=si.item_key",
@@ -2996,6 +3007,7 @@ def search_shops(
                 "item": r["display_name"] or r["sale_name"],
                 "currency": r["currency"],
                 "price": r["price"],
+                "qty": r["qty"],
                 "world": r["world"],
                 "x": r["x"],
                 "y": r["y"],

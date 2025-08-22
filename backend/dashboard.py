@@ -791,10 +791,10 @@ def shop_detail(shop_id: str):
                     price = 0
                 cur.execute(
                     """
-                    INSERT INTO shop_prices(shop_id,item_key,currency,price)
-                    VALUES (?,?,?,?)
+                    INSERT INTO shop_prices(shop_id,item_key,currency,price,qty)
+                    VALUES (?,?,?,?,1)
                     ON CONFLICT(shop_id,item_key,currency)
-                    DO UPDATE SET price=excluded.price
+                    DO UPDATE SET price=excluded.price, qty=excluded.qty
                     """,
                     (shop_id, item_key, currency, price),
                 )
@@ -817,7 +817,7 @@ def shop_detail(shop_id: str):
         items = []
         for r in item_rows:
             price_rows = db.execute(
-                "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                "SELECT currency, price, qty FROM shop_prices WHERE shop_id=? AND item_key=?",
                 (shop_id, r["item_key"]),
             ).fetchall()
             items.append(
@@ -826,7 +826,7 @@ def shop_detail(shop_id: str):
                     "material": r["material"],
                     "display_name": r["display_name"],
                     "stock": r["stock"],
-                    "prices": {p["currency"]: p["price"] for p in price_rows},
+                    "prices": {p["currency"]: {"price": p["price"], "qty": p["qty"]} for p in price_rows},
                 }
             )
         sales = db.execute(
@@ -969,14 +969,14 @@ def portal_shop(shop_id: str):
                 except ValueError:
                     price = 0
                 cur.execute(
-                    """
-                    INSERT INTO shop_prices(shop_id,item_key,currency,price)
-                    VALUES (?,?,?,?)
-                    ON CONFLICT(shop_id,item_key,currency)
-                    DO UPDATE SET price=excluded.price
-                    """,
-                    (shop_id, item_key, currency, price),
-                )
+                """
+                INSERT INTO shop_prices(shop_id,item_key,currency,price,qty)
+                VALUES (?,?,?,?,1)
+                ON CONFLICT(shop_id,item_key,currency)
+                DO UPDATE SET price=excluded.price, qty=excluded.qty
+                """,
+                (shop_id, item_key, currency, price),
+            )
             elif action == "set_listing":
                 listed = 1 if request.form.get("listed") == "1" else 0
                 cur.execute("UPDATE shops SET listed=? WHERE shop_id=?", (listed, shop_id))
@@ -994,7 +994,7 @@ def portal_shop(shop_id: str):
         items = []
         for r in item_rows:
             price_rows = db.execute(
-                "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                "SELECT currency, price, qty FROM shop_prices WHERE shop_id=? AND item_key=?",
                 (shop_id, r["item_key"]),
             ).fetchall()
             items.append(
@@ -1003,7 +1003,7 @@ def portal_shop(shop_id: str):
                     "material": r["material"],
                     "display_name": r["display_name"],
                     "stock": r["stock"],
-                    "prices": {p["currency"]: p["price"] for p in price_rows},
+                    "prices": {p["currency"]: {"price": p["price"], "qty": p["qty"]} for p in price_rows},
                 }
             )
         sales = db.execute(
@@ -1044,7 +1044,7 @@ def shop_search():
     results: List[sqlite3.Row] = []
     if item or currency or min_price is not None or max_price is not None:
         q = [
-            "SELECT s.shop_id, si.display_name, ss.sale_name, sp.currency, sp.price, sl.world, sl.x, sl.y, sl.z",
+            "SELECT s.shop_id, si.display_name, ss.sale_name, sp.currency, sp.price, sp.qty, sl.world, sl.x, sl.y, sl.z",
             "FROM shop_prices sp",
             "JOIN shop_stock ss ON sp.shop_id=ss.shop_id AND sp.item_key=ss.item_key",
             "JOIN shop_items si ON sp.item_key=si.item_key",

@@ -293,14 +293,19 @@ public class ShopListener implements Listener {
                 lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + stock);
                 JsonObject prices = it.getAsJsonObject("prices");
                 Map<String, Integer> priceMap = new HashMap<>();
+                int priceQty = 1;
                 for (var en : prices.entrySet()) {
-                    lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + en.getValue().getAsInt());
-                    priceMap.put(en.getKey(), en.getValue().getAsInt());
+                    JsonObject po = en.getValue().getAsJsonObject();
+                    int price = po.get("price").getAsInt();
+                    int qty = po.has("qty") ? po.get("qty").getAsInt() : 1;
+                    lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + price + " / " + qty);
+                    priceMap.put(en.getKey(), price);
+                    priceQty = qty;
                 }
                 meta.setLore(lore);
                 item.setItemMeta(meta);
                 inv.setItem(idx, item);
-                holder.getItems().put(idx, new ShopItem(key, saleName, item, raw, stock, priceMap));
+                holder.getItems().put(idx, new ShopItem(key, saleName, item, raw, stock, priceMap, priceQty));
                 idx++;
             }
             p.openInventory(inv);
@@ -315,7 +320,7 @@ public class ShopListener implements Listener {
         lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + si.getSaleName());
         lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + si.getStock());
         for (var en : si.getPrices().entrySet()) {
-            lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + en.getValue());
+            lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + en.getValue() + " / " + si.getPriceQty());
         }
         meta.setLore(lore);
         stack.setItemMeta(meta);
@@ -335,6 +340,12 @@ public class ShopListener implements Listener {
                 }
             } else if (e.getSlot() == 6) {
                 p.openInventory(ch.getOrigin().getInventory());
+            } else if (e.getSlot() == 0) {
+                ch.adjustQty(-1);
+                updateConfirmMenu(e.getInventory(), ch);
+            } else if (e.getSlot() == 8) {
+                ch.adjustQty(1);
+                updateConfirmMenu(e.getInventory(), ch);
             }
             return;
         }
@@ -377,7 +388,7 @@ public class ShopListener implements Listener {
         payload.put("player_uuid", p.getUniqueId().toString());
         payload.put("shop_id", ch.getShopId());
         payload.put("item_key", si.getItemKey());
-        payload.put("qty", 1);
+        payload.put("qty", ch.getQty());
         payload.put("currency", currency);
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         payload.put("client_tx_id", UUID.randomUUID().toString());
@@ -445,7 +456,7 @@ public class ShopListener implements Listener {
                                 }
                             }
                         }
-                        si.setStock(si.getStock() - 1);
+                        si.setStock(si.getStock() - ch.getQty());
                         refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
                         p.openInventory(ch.getOrigin().getInventory());
                     });
@@ -455,35 +466,79 @@ public class ShopListener implements Listener {
     }
 
     private void openConfirm(Player p, ShopMenuHolder holder, int slot, ShopItem si) {
-        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(holder.getShopId(), holder, slot, si, false), 9, "Confirm");
-        inv.setItem(4, si.getRawItem());
-        ItemStack ok = new ItemStack(Material.GREEN_STAINED_GLASS_PANE);
-        ItemMeta om = ok.getItemMeta();
-        om.setDisplayName(ChatColor.GREEN + "Buy");
-        ok.setItemMeta(om);
-        inv.setItem(2, ok);
-        ItemStack cancel = new ItemStack(Material.RED_STAINED_GLASS_PANE);
-        ItemMeta cm = cancel.getItemMeta();
-        cm.setDisplayName(ChatColor.RED + "Cancel");
-        cancel.setItemMeta(cm);
-        inv.setItem(6, cancel);
+        int step = si.getPriceQty();
+        int max = si.getStock() - (si.getStock() % step);
+        if (max < step) {
+            p.sendMessage(ChatColor.RED + "Out of stock" + ChatColor.RESET);
+            return;
+        }
+        ConfirmMenuHolder ch = new ConfirmMenuHolder(holder.getShopId(), holder, slot, si, false, step, max);
+        Inventory inv = Bukkit.createInventory(ch, 9, "Confirm");
+        updateConfirmMenu(inv, ch);
         p.openInventory(inv);
     }
 
     private void openSellConfirm(Player p, ShopMenuHolder holder, int slot, ShopItem si) {
-        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(holder.getShopId(), holder, slot, si, true), 9, "Confirm");
-        inv.setItem(4, si.getRawItem());
+        int step = si.getPriceQty();
+        int available = countItem(p, si.getRawItem());
+        int max = available - (available % step);
+        if (max < step) {
+            p.sendMessage(ChatColor.RED + "Not enough items" + ChatColor.RESET);
+            return;
+        }
+        ConfirmMenuHolder ch = new ConfirmMenuHolder(holder.getShopId(), holder, slot, si, true, step, max);
+        Inventory inv = Bukkit.createInventory(ch, 9, "Confirm");
+        updateConfirmMenu(inv, ch);
+        p.openInventory(inv);
+    }
+
+    private int countItem(Player p, ItemStack item) {
+        int count = 0;
+        for (ItemStack is : p.getInventory().getContents()) {
+            if (is != null && is.isSimilar(item)) count += is.getAmount();
+        }
+        return count;
+    }
+
+    private void updateConfirmMenu(Inventory inv, ConfirmMenuHolder ch) {
+        ShopItem si = ch.getItem();
+        String currency = si.getPrices().keySet().stream().findFirst().orElse("");
+        int unitPrice = si.getPrices().getOrDefault(currency, 0);
+        int total = unitPrice * ch.getQty() / si.getPriceQty();
+
+        ItemStack display = si.getRawItem().clone();
+        display.setAmount(Math.min(ch.getQty(), display.getMaxStackSize()));
+        ItemMeta dm = display.getItemMeta();
+        List<String> lore = new ArrayList<>();
+        lore.add(ChatColor.GREEN + "Qty: " + ChatColor.YELLOW + ch.getQty());
+        lore.add(ChatColor.GREEN + "Total: " + ChatColor.YELLOW + total + " " + currency);
+        dm.setLore(lore);
+        display.setItemMeta(dm);
+        inv.setItem(4, display);
+
         ItemStack ok = new ItemStack(Material.GREEN_STAINED_GLASS_PANE);
         ItemMeta om = ok.getItemMeta();
-        om.setDisplayName(ChatColor.GREEN + "Sell");
+        om.setDisplayName((ch.isSelling() ? ChatColor.GREEN + "Sell x" : ChatColor.GREEN + "Buy x") + ch.getQty());
         ok.setItemMeta(om);
         inv.setItem(2, ok);
+
         ItemStack cancel = new ItemStack(Material.RED_STAINED_GLASS_PANE);
         ItemMeta cm = cancel.getItemMeta();
         cm.setDisplayName(ChatColor.RED + "Cancel");
         cancel.setItemMeta(cm);
         inv.setItem(6, cancel);
-        p.openInventory(inv);
+
+        ItemStack minus = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
+        ItemMeta mim = minus.getItemMeta();
+        mim.setDisplayName(ChatColor.YELLOW + "-" + ch.getStep());
+        minus.setItemMeta(mim);
+        inv.setItem(0, minus);
+
+        ItemStack plus = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
+        ItemMeta pim = plus.getItemMeta();
+        pim.setDisplayName(ChatColor.YELLOW + "+" + ch.getStep());
+        plus.setItemMeta(pim);
+        inv.setItem(8, plus);
     }
 
     private void handlePlayerSell(Player p, ShopMenuHolder holder, ItemStack stack) {
@@ -506,7 +561,7 @@ public class ShopListener implements Listener {
         payload.put("player_uuid", p.getUniqueId().toString());
         payload.put("shop_id", ch.getShopId());
         payload.put("item_key", si.getItemKey());
-        payload.put("qty", 1);
+        payload.put("qty", ch.getQty());
         payload.put("currency", currency);
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         payload.put("client_tx_id", UUID.randomUUID().toString());
@@ -514,8 +569,7 @@ public class ShopListener implements Listener {
                 .url(plugin.getBaseUrl() + "/api/shop/sell")
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
-        ItemStack remove = si.getRawItem().clone();
-        remove.setAmount(1);
+        int removeQty = ch.getQty();
         plugin.getHttpClient().newCall(req).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException ex) {
                 plugin.getLogger().warning("Sell failed: " + ex.getMessage());
@@ -543,8 +597,15 @@ public class ShopListener implements Listener {
                             });
                         }
                         if ("success".equals(res.get("status").getAsString())) {
-                            p.getInventory().removeItem(remove);
-                            si.setStock(si.getStock() + 1);
+                            int rem = removeQty;
+                            while (rem > 0) {
+                                ItemStack part = si.getRawItem().clone();
+                                int take = Math.min(part.getMaxStackSize(), rem);
+                                part.setAmount(take);
+                                p.getInventory().removeItem(part);
+                                rem -= take;
+                            }
+                            si.setStock(si.getStock() + ch.getQty());
                             refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
                             p.openInventory(ch.getOrigin().getInventory());
                         }
@@ -585,6 +646,7 @@ public class ShopListener implements Listener {
             payload.put("currency", currency);
             int price = currency != null ? existing.getPrices().get(currency) : 0;
             payload.put("price", price);
+            payload.put("price_qty", existing.getPriceQty());
             payload.put("timestamp", System.currentTimeMillis() / 1000);
             Request req = new Request.Builder()
                     .url(plugin.getBaseUrl() + "/api/shop/add_stock")
@@ -604,7 +666,7 @@ public class ShopListener implements Listener {
             int qty = 1;
             PendingSale pending = new PendingSale(holder.getShopId(), blob, refund, qty, System.currentTimeMillis() + 20000, holder);
             pendingSales.put(p.getUniqueId(), pending);
-            p.sendMessage(ChatColor.YELLOW + "Enter sale name and price (e.g. apple 100) / 販売名と金額を入力してください (例: apple 100)" + ChatColor.RESET);
+            p.sendMessage(ChatColor.YELLOW + "Enter sale name, price and qty (e.g. apple 100 64) / 販売名と金額と個数を入力してください (例: apple 100 64)" + ChatColor.RESET);
             Bukkit.getScheduler().runTaskLater(plugin, () -> {
                 PendingSale ps = pendingSales.get(p.getUniqueId());
                 if (ps != null && ps.deadline <= System.currentTimeMillis()) {
@@ -674,14 +736,17 @@ public class ShopListener implements Listener {
         if (ps == null) return;
         e.setCancelled(true);
         String[] parts = e.getMessage().split(" ");
-        if (parts.length < 2) {
+        if (parts.length < 3) {
             e.getPlayer().sendMessage(ChatColor.RED + "Cancelled / キャンセルされました" + ChatColor.RESET);
             Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
             return;
         }
         String saleName = parts[0];
-        int price;
-        try { price = Integer.parseInt(parts[1]); } catch (NumberFormatException ex) {
+        int price; int priceQty;
+        try {
+            price = Integer.parseInt(parts[1]);
+            priceQty = Integer.parseInt(parts[2]);
+        } catch (NumberFormatException ex) {
             e.getPlayer().sendMessage(ChatColor.RED + "Cancelled / キャンセルされました" + ChatColor.RESET);
             Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
             return;
@@ -696,6 +761,7 @@ public class ShopListener implements Listener {
         payload.put("display_name", dn);
         payload.put("sale_name", saleName);
         payload.put("price", price);
+        payload.put("price_qty", priceQty);
         payload.put("currency", null);
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         Request req = new Request.Builder()
@@ -722,11 +788,11 @@ public class ShopListener implements Listener {
                 List<String> lore = new ArrayList<>();
                 lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + saleName);
                 lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + ps.qty);
-                lore.add(ChatColor.GREEN + "Price: " + ChatColor.YELLOW + price);
+                lore.add(ChatColor.GREEN + "Price: " + ChatColor.YELLOW + price + " / " + priceQty);
                 meta.setLore(lore);
                 display.setItemMeta(meta);
                 inv.setItem(slot, display);
-                holder.getItems().put(slot, new ShopItem(sha256(Base64.getDecoder().decode(ps.blob)), saleName, display, ps.item, ps.qty, priceMap));
+                holder.getItems().put(slot, new ShopItem(sha256(Base64.getDecoder().decode(ps.blob)), saleName, display, ps.item, ps.qty, priceMap, priceQty));
             }
         });
     }
