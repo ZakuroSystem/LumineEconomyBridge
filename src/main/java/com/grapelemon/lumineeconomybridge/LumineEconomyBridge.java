@@ -38,7 +38,7 @@ public class LumineEconomyBridge extends JavaPlugin {
 
     private String baseUrl;
     private int timeout = 2000;
-    private long syncInterval = 10L;
+    private long syncInterval = 1L;
 
     private MapColorService mapColorService;
     private SnapshotService snapshotService;
@@ -109,7 +109,7 @@ public class LumineEconomyBridge extends JavaPlugin {
             for (Player p : Bukkit.getOnlinePlayers()) {
                 syncService.seed(p);
             }
-            long period = syncInterval * 20L;
+            long period = 1L;
             syncTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, () -> syncService.tickAll(), period, period);
             Bukkit.getScheduler().runTaskAsynchronously(this, () -> syncService.rewriteAll());
 

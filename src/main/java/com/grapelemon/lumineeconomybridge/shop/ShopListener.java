@@ -142,12 +142,27 @@ public class ShopListener implements Listener {
                 .url(plugin.getBaseUrl() + "/api/shop/place")
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
+        Player player = e.getPlayer();
+        ItemStack placedItem = e.getItemInHand().clone();
+        Block placedBlock = e.getBlockPlaced();
         http.newCall(req).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException ex) {
                 plugin.getLogger().warning("Shop place failed: " + ex.getMessage());
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    placedBlock.setType(Material.AIR);
+                    player.getInventory().addItem(placedItem);
+                });
             }
             @Override public void onResponse(Call call, Response response) throws IOException {
-                response.close();
+                try (response) {
+                    if (!response.isSuccessful()) {
+                        Bukkit.getScheduler().runTask(plugin, () -> {
+                            placedBlock.setType(Material.AIR);
+                            player.getInventory().addItem(placedItem);
+                            player.sendMessage(ChatColor.RED + "Failed to register shop" + ChatColor.RESET);
+                        });
+                    }
+                }
             }
         });
     }
@@ -541,13 +556,19 @@ public class ShopListener implements Listener {
 
 
     private void handleOwnerDeposit(Player p, ShopMenuHolder holder, ItemStack stack) {
-        String blob = itemToBase64(stack);
+        if (pendingSales.containsKey(p.getUniqueId())) {
+            p.sendMessage(ChatColor.RED + "Finish previous listing first / 前の設定を完了してください" + ChatColor.RESET);
+            return;
+        }
+        ItemStack single = stack.clone();
+        single.setAmount(1);
+        stack.setAmount(stack.getAmount() - 1);
+        String blob = itemToBase64(single);
         String key = sha256(Base64.getDecoder().decode(blob));
         ShopItem existing = holder.getItems().values().stream().filter(it -> it.getItemKey().equals(key)).findFirst().orElse(null);
         if (existing != null) {
-            ItemStack refund = stack.clone();
-            int qty = stack.getAmount();
-            stack.setAmount(0);
+            ItemStack refund = single.clone();
+            int qty = 1;
             existing.setStock(existing.getStock() + qty);
             int slot = holder.getItems().entrySet().stream().filter(en -> en.getValue() == existing).map(Map.Entry::getKey).findFirst().orElse(-1);
             if (slot >= 0) refreshDisplay(holder, slot, existing);
@@ -556,8 +577,8 @@ public class ShopListener implements Listener {
             payload.put("shop_id", holder.getShopId());
             payload.put("nbt_blob", blob);
             payload.put("qty", qty);
-            payload.put("material", stack.getType().name());
-            String dn = stack.getItemMeta() != null ? stack.getItemMeta().getDisplayName() : "";
+            payload.put("material", single.getType().name());
+            String dn = single.getItemMeta() != null ? single.getItemMeta().getDisplayName() : "";
             payload.put("display_name", dn);
             payload.put("sale_name", existing.getSaleName());
             String currency = existing.getPrices().keySet().stream().findFirst().orElse(null);
@@ -579,9 +600,8 @@ public class ShopListener implements Listener {
                 @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
             });
         } else {
-            ItemStack refund = stack.clone();
-            int qty = stack.getAmount();
-            stack.setAmount(0);
+            ItemStack refund = single.clone();
+            int qty = 1;
             PendingSale pending = new PendingSale(holder.getShopId(), blob, refund, qty, System.currentTimeMillis() + 20000, holder);
             pendingSales.put(p.getUniqueId(), pending);
             p.sendMessage(ChatColor.YELLOW + "Enter sale name and price (e.g. apple 100) / 販売名と金額を入力してください (例: apple 100)" + ChatColor.RESET);

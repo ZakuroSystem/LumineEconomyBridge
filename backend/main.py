@@ -1819,6 +1819,11 @@ async def shop_place(payload: ShopPlacePayload):
     start = time.time()
     result = "ok"
     with transaction() as cur:
+        existing = cur.execute(
+            "SELECT owner_uuid FROM shops WHERE shop_id=?", (payload.shop_id,)
+        ).fetchone()
+        if existing and existing["owner_uuid"] != payload.owner_uuid:
+            raise HTTPException(status_code=403, detail="not_owner")
         cur.execute(
             "INSERT OR IGNORE INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
             (payload.shop_id, payload.owner_uuid, "active", payload.timestamp, payload.timestamp),
