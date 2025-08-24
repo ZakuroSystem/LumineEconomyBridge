@@ -9,15 +9,17 @@ public class ShopItem {
     private final ItemStack item;
     private final ItemStack rawItem;
     private final Map<String, Integer> prices;
+    private final int priceQty;
     private int stock;
 
-    public ShopItem(String itemKey, String saleName, ItemStack item, ItemStack rawItem, int stock, Map<String, Integer> prices) {
+    public ShopItem(String itemKey, String saleName, ItemStack item, ItemStack rawItem, int stock, Map<String, Integer> prices, int priceQty) {
         this.itemKey = itemKey;
         this.saleName = saleName;
         this.item = item;
         this.rawItem = rawItem;
         this.stock = stock;
         this.prices = prices;
+        this.priceQty = priceQty;
     }
 
     public String getItemKey() {
@@ -38,6 +40,10 @@ public class ShopItem {
 
     public Map<String, Integer> getPrices() {
         return prices;
+    }
+
+    public int getPriceQty() {
+        return priceQty;
     }
 
     public int getStock() {

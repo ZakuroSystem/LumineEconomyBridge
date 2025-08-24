@@ -17,15 +17,30 @@
 <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
 <script>
 const token = {{ token|tojson }};
-const world = 'world';
-const tileBase = `/tiles/${world}`;
+const params = new URLSearchParams(location.search);
+let world = params.get('world');
+let tileBase = '';
 const canvas = document.getElementById('mapCanvas');
 const ctx = canvas.getContext('2d');
 const tileCache = {};
 let palette = [];
-fetch('/api/mapcolor/palette', {headers:{'X-LE-Token': token}})
-  .then(r => r.json())
-  .then(data => { palette = data.palette; init(); });
+
+async function resolveWorld(){
+  if(!world){
+    const r = await fetch('/tiles/worlds', {headers:{'X-LE-Token': token}});
+    const js = await r.json();
+    world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
+  }
+  tileBase = `/tiles/${encodeURIComponent(world)}`;
+}
+
+(async () => {
+  await resolveWorld();
+  const resp = await fetch('/api/mapcolor/palette', {headers:{'X-LE-Token': token}});
+  const data = await resp.json();
+  palette = data.palette;
+  init();
+})();
 function loadTile(tx, tz){
   const key = `${tx},${tz}`;
   fetch(`${tileBase}/${tx}/${tz}`, {headers:{'X-LE-Token': token}})
