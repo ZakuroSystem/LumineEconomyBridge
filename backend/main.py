@@ -16,6 +16,7 @@ import json
 from contextlib import closing, contextmanager, asynccontextmanager, suppress
 import yaml
 import os
+import re
 import time
 import shutil
 import threading
@@ -1754,7 +1755,7 @@ async def message(payload: MessagePayload):
 
 
 @app.post("/api/sync")
-async def sync(payload: DeltaPayload):
+async def sync(payload: DeltaPayload, token: None = Depends(verify_token)):
     with transaction() as cur:
         for k, v in payload.delta.items():
             if is_currency(cur, k):
@@ -1771,7 +1772,7 @@ async def sync(payload: DeltaPayload):
 
 
 @app.post("/api/rewrite")
-async def rewrite(payload: RewritePayload):
+async def rewrite(payload: RewritePayload, token: None = Depends(verify_token)):
     msgs = []
     hint_sent = False
     with transaction() as cur:
@@ -2896,6 +2897,16 @@ async def mapcolor_resolve(req: Request, token: None = Depends(verify_token)):
         status_code=resp.status_code,
         media_type=resp.headers.get("content-type"),
     )
+
+
+@app.get("/tiles/worlds")
+def list_worlds(token: None = Depends(verify_token)):
+    worlds = set()
+    for name in os.listdir(tile_store.base_dir):
+        m = re.match(r"tile_(.+?)_(-?\d+)_(-?\d+)\.tile\.zlib$", name)
+        if m:
+            worlds.add(m.group(1))
+    return {"worlds": sorted(worlds)}
 
 
 @app.api_route("/tiles/{world}/{tx}/{tz}", methods=["GET", "HEAD"])

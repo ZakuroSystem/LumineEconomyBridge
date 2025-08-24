@@ -5,8 +5,6 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.bukkit.World;
-import org.bukkit.Chunk;
-import org.bukkit.block.Block;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.net.URI;
@@ -66,12 +64,13 @@ public class SnapshotService {
 
     private byte[] makeChunkTop(World world, int cx, int cz) {
         byte[] data = new byte[256];
-        Chunk chunk = world.getChunkAt(cx, cz);
-        int maxY = world.getMaxHeight() - 1;
-        for (int x = 0; x < 16; x++) {
-            for (int z = 0; z < 16; z++) {
-                Block b = chunk.getBlock(x, maxY, z);
-                data[z * 16 + x] = (byte) (b.isEmpty() ? 0 : 1);
+        int baseX = cx * 16, baseZ = cz * 16;
+        for (int lx = 0; lx < 16; lx++) {
+            for (int lz = 0; lz < 16; lz++) {
+                int ax = baseX + lx, az = baseZ + lz;
+                org.bukkit.block.Block top = world.getHighestBlockAt(ax, az);
+                int idx = com.grapelemon.lumineeconomybridge.map.MapPalette.indexOf(top.getType());
+                data[lz * 16 + lx] = (byte) idx;
             }
         }
         return data;

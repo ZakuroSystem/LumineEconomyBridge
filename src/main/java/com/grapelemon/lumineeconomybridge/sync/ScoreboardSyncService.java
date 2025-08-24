@@ -109,6 +109,7 @@ public class ScoreboardSyncService {
 
         Request req = new Request.Builder()
                 .url(baseUrl + "/api/sync")
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
 
@@ -151,6 +152,7 @@ public class ScoreboardSyncService {
 
         Request req = new Request.Builder()
                 .url(baseUrl + "/api/rewrite")
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
 
