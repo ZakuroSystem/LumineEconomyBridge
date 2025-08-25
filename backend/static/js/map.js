@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const params = new URLSearchParams(location.search);
   let world = params.get('world');
   let tileBase = '';
+  let tilesPrefix = '/api/tiles';
   const canvas = document.getElementById('mapCanvas');
   const ctx = canvas.getContext('2d');
   const tileCache = {};
@@ -11,17 +12,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function resolveWorld(){
     if(!world){
-      const r = await fetch('/api/tiles/worlds', {headers:{'X-LE-Token': token}});
+      let r = await fetch(`${tilesPrefix}/worlds`, {headers: token? {'X-LE-Token': token} : {}});
+      if(!r.ok){
+        tilesPrefix = '/tiles';
+        r = await fetch(`${tilesPrefix}/worlds`, {headers: token? {'X-LE-Token': token} : {}});
+      }
       if(!r.ok) throw new Error('world list fetch failed');
       const js = await r.json();
       world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
     }
-    tileBase = `/api/tiles/${encodeURIComponent(world)}`;
+    tileBase = `${tilesPrefix}/${encodeURIComponent(world)}`;
   }
 
   function loadTile(tx, tz){
     const key = `${tx},${tz}`;
-    fetch(`${tileBase}/${tx}/${tz}`, {headers:{'X-LE-Token': token}})
+    fetch(`${tileBase}/${tx}/${tz}`, {headers: token? {'X-LE-Token': token} : {}})
       .then(r => r.arrayBuffer())
       .then(buf => {
         if(buf.byteLength < 24) return;
