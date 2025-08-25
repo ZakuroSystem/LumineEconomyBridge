@@ -47,14 +47,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-const labels = {{ labels|tojson }}.reverse();
-const amounts = {{ amounts|tojson }}.reverse();
-new Chart(document.getElementById('txChart'), {
-  type: 'line',
-  data: { labels: labels, datasets: [{ label: 'Amount', data: amounts, borderColor: 'rgb(75, 192, 192)', tension: 0.1 }] },
-  options: { scales: { y: { beginAtZero: true } } }
-});
-</script>
+<script id="tx-data" type="application/json">{{ {'labels': labels, 'amounts': amounts}|tojson }}</script>
+<script src="{{ url_for('static', filename='js/transactions.js') }}"></script>
 {% endblock %}
 

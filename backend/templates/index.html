@@ -57,14 +57,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-const totals = {{ totals|tojson }};
-const labels = Object.keys(totals);
-const data = Object.values(totals);
-  new Chart(document.getElementById('balanceChart'), {
-    type: 'bar',
-    data: { labels: labels, datasets: [{ label: 'Total Balance', data: data, backgroundColor: 'rgba(54,162,235,0.5)', borderColor: 'rgb(54,162,235)', borderWidth: 1 }]},
-    options: { scales: { y: { beginAtZero: true } } }
-  });
-</script>
+<script id="totals-data" type="application/json">{{ totals|tojson }}</script>
+<script src="{{ url_for('static', filename='js/index.js') }}"></script>
 {% endblock %}

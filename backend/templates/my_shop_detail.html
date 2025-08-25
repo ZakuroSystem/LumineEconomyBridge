@@ -57,10 +57,6 @@
 </table>
 {% endblock %}
 {% block scripts %}
-<script>
-new Chart(document.getElementById('salesChart'),{
-  type:'line',
-  data:{labels: {{ chart_labels|safe }}, datasets:[{label:'Revenue', data: {{ chart_data|safe }} }]}
-});
-</script>
+<script id="shop-detail-data" type="application/json">{{ {'labels': chart_labels, 'data': chart_data}|tojson }}</script>
+<script src="{{ url_for('static', filename='js/shop_detail.js') }}"></script>
 {% endblock %}

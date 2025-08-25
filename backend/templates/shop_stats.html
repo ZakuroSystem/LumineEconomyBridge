@@ -18,10 +18,6 @@
 </table>
 {% endblock %}
 {% block scripts %}
-<script>
-new Chart(document.getElementById('rankChart'),{
-  type:'bar',
-  data:{labels: {{ chart_labels|safe }}, datasets:[{label:'Revenue', data: {{ chart_data|safe }} }]}
-});
-</script>
+<script id="shop-stats-data" type="application/json">{{ {'labels': chart_labels, 'data': chart_data}|tojson }}</script>
+<script src="{{ url_for('static', filename='js/shop_stats.js') }}"></script>
 {% endblock %}
