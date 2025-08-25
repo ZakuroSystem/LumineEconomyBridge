@@ -334,6 +334,15 @@ with conn:
     )
 
 app = FastAPI()
+# allow the dashboard to access API endpoints when served from a different
+# origin (e.g., Flask on another port)
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 tile_store = TileStore("tiles")
 
 # separate cash transaction persistence

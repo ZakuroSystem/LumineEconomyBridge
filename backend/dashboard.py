@@ -35,7 +35,10 @@ LOG_PATH = "economy_commands.log"
 BACKUP_DIR = "backups"
 os.makedirs(BACKUP_DIR, exist_ok=True)
 API_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
-API_BASE = os.environ.get("LE_API_BASE", "/api")
+# Base URL of the FastAPI backend. Default to the local dev server so that
+# dashboard requests can reach API endpoints even when a reverse proxy is not
+# configured.
+API_BASE = os.environ.get("LE_API_BASE", "http://127.0.0.1:5100/api")
 
 with open("lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
