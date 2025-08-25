@@ -101,6 +101,23 @@ with conn:
         conn.execute("ALTER TABLE currencies ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute("ALTER TABLE currencies ADD COLUMN treasury TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE currencies ADD COLUMN tax_rate INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS currency_managers (
+            currency TEXT NOT NULL,
+            uuid TEXT NOT NULL,
+            PRIMARY KEY(currency, uuid)
+        )
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS name_index (
@@ -643,6 +660,26 @@ def is_frozen(cur: sqlite3.Cursor, uuid: str, currency: str) -> bool:
     return bool(row and row["frozen"])
 
 
+def is_currency_manager(cur: sqlite3.Cursor, uuid: str, currency: str) -> bool:
+    return (
+        cur.execute(
+            "SELECT 1 FROM currency_managers WHERE currency=? AND uuid=?",
+            (currency, uuid),
+        ).fetchone()
+        is not None
+    )
+
+
+def tax_info(cur: sqlite3.Cursor, currency: str) -> Tuple[int, Optional[str]]:
+    row = cur.execute(
+        "SELECT tax_rate, treasury FROM currencies WHERE name=?",
+        (currency,),
+    ).fetchone()
+    if not row:
+        return 0, None
+    return row["tax_rate"], row["treasury"]
+
+
 def set_balance(cur: sqlite3.Cursor, uuid: str, currency: str, amount: int) -> None:
     cur.execute(
         """
@@ -1082,8 +1119,112 @@ async def message(payload: MessagePayload):
                                 }
                             )
                 else:
-                    success = False
-                    error_text = t("error.invalid_args", lang=exec_lang)
+                    if sub == "manager" and len(cmd) >= 5 and cmd[2] in {"add", "remove"}:
+                        cname = resolve_currency(cur, cmd[3])
+                        target_name = cmd[4].lower()
+                        target_uuid = get_uuid(target_name)
+                        if not is_exec_admin:
+                            success = False
+                            error_text = t("error.no_permission", lang=exec_lang)
+                        elif target_uuid is None or not is_currency(cur, cname):
+                            success = False
+                            error_text = t("error.invalid_args", lang=exec_lang)
+                        else:
+                            if cmd[2] == "add":
+                                cur.execute(
+                                    "INSERT OR IGNORE INTO currency_managers(currency, uuid) VALUES(?,?)",
+                                    (cname, target_uuid),
+                                )
+                                messages.append(
+                                    {
+                                        "target": "chat",
+                                        "text": t(
+                                            "currency.manager_add",
+                                            lang=exec_lang,
+                                            currency=cname,
+                                            player=target_name,
+                                        ),
+                                    }
+                                )
+                            else:
+                                cur.execute(
+                                    "DELETE FROM currency_managers WHERE currency=? AND uuid=?",
+                                    (cname, target_uuid),
+                                )
+                                messages.append(
+                                    {
+                                        "target": "chat",
+                                        "text": t(
+                                            "currency.manager_remove",
+                                            lang=exec_lang,
+                                            currency=cname,
+                                            player=target_name,
+                                        ),
+                                    }
+                                )
+                    elif sub == "tax" and len(cmd) >= 4:
+                        cname = resolve_currency(cur, cmd[2])
+                        if not (
+                            is_exec_admin
+                            or is_currency_manager(cur, exec_uuid, cname)
+                        ):
+                            success = False
+                            error_text = t("error.no_permission", lang=exec_lang)
+                        else:
+                            try:
+                                rate_dec = Decimal(cmd[3])
+                            except InvalidOperation:
+                                success = False
+                                error_text = t("error.invalid_args", lang=exec_lang)
+                            else:
+                                rate = int((rate_dec * 10).to_integral_value(rounding=ROUND_HALF_UP))
+                                cur.execute(
+                                    "UPDATE currencies SET tax_rate=? WHERE name=?",
+                                    (rate, cname),
+                                )
+                                messages.append(
+                                    {
+                                        "target": "chat",
+                                        "text": t(
+                                            "currency.tax",
+                                            lang=exec_lang,
+                                            currency=cname,
+                                            rate=f"{rate/10:.1f}",
+                                        ),
+                                    }
+                                )
+                    elif sub == "treasury" and len(cmd) >= 4:
+                        cname = resolve_currency(cur, cmd[2])
+                        target_name = cmd[3].lower()
+                        target_uuid = get_uuid(target_name)
+                        if not (
+                            is_exec_admin
+                            or is_currency_manager(cur, exec_uuid, cname)
+                        ):
+                            success = False
+                            error_text = t("error.no_permission", lang=exec_lang)
+                        elif target_uuid is None:
+                            success = False
+                            error_text = t("error.invalid_args", lang=exec_lang)
+                        else:
+                            cur.execute(
+                                "UPDATE currencies SET treasury=? WHERE name=?",
+                                (target_uuid, cname),
+                            )
+                            messages.append(
+                                {
+                                    "target": "chat",
+                                    "text": t(
+                                        "currency.treasury",
+                                        lang=exec_lang,
+                                        currency=cname,
+                                        account=target_name,
+                                    ),
+                                }
+                            )
+                    else:
+                        success = False
+                        error_text = t("error.invalid_args", lang=exec_lang)
             elif action == "money" and len(cmd) >= 2:
                 sub = cmd[1].lower()
                 if sub in {"give", "take"} and len(cmd) >= 4:
@@ -1100,7 +1241,13 @@ async def message(payload: MessagePayload):
                         success = False
                         error_text = t("error.invalid_args", lang=exec_lang) if amt is None or target_uuid is None else t("error.invalid_currency", lang=exec_lang)
                     else:
-                        if is_frozen(cur, target_uuid, currency):
+                        if not (
+                            is_exec_admin
+                            or is_currency_manager(cur, exec_uuid, currency)
+                        ):
+                            success = False
+                            error_text = t("error.no_permission", lang=exec_lang)
+                        elif is_frozen(cur, target_uuid, currency):
                             success = False
                             error_text = t("error.frozen", lang=exec_lang)
                         else:
@@ -1247,55 +1394,71 @@ async def message(payload: MessagePayload):
                             success = False
                             error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                         else:
+                            rate, treasury = tax_info(cur, currency)
+                            tax_amt = amt * rate // 1000
+                            required = amt + tax_amt
                             if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
                                 success = False
                                 error_text = t("error.frozen", lang=exec_lang)
-                            elif get_balance(cur, src_uuid, currency) < amt:
+                            elif get_balance(cur, src_uuid, currency) < required:
                                 success = False
                                 error_text = t("error.insufficient", lang=exec_lang)
-                            elif not transfer(cur, src_uuid, dst_uuid, currency, amt):
-                                success = False
-                                error_text = t("error.pay_failed", lang=exec_lang)
                             else:
-                                messages.append({
-                                    "target": "chat",
-                                    "text": t(
-                                        "money.pay",
-                                        lang=exec_lang,
-                                        src=src_name,
-                                        dst=dst_name,
-                                        amount=format_amount(cur, amt, currency),
-                                    ),
-                                })
-                                messages.append(
-                                    {
+                                if not add_balance(cur, src_uuid, currency, -required):
+                                    success = False
+                                    error_text = t("error.pay_failed", lang=exec_lang)
+                                else:
+                                    add_balance(cur, dst_uuid, currency, amt)
+                                    if tax_amt > 0 and treasury:
+                                        add_balance(cur, treasury, currency, tax_amt)
+                                        record_transaction(
+                                            cur,
+                                            payload.timestamp,
+                                            src_uuid,
+                                            treasury,
+                                            currency,
+                                            tax_amt,
+                                            "tax",
+                                        )
+                                    messages.append({
                                         "target": "chat",
-                                        "player": dst_uuid,
                                         "text": t(
-                                            "receive",
-                                            lang=get_lang(dst_uuid),
+                                            "money.pay",
+                                            lang=exec_lang,
                                             src=src_name,
+                                            dst=dst_name,
                                             amount=format_amount(cur, amt, currency),
                                         ),
-                                    }
-                                )
-                                record_transaction(
-                                    cur,
-                                    payload.timestamp,
-                                    src_uuid,
-                                    dst_uuid,
-                                    currency,
-                                    amt,
-                                    "pay",
-                                )
-                                actions.append({
-                                    "src": src_uuid,
-                                    "dst": dst_uuid,
-                                    "currency": currency,
-                                    "amount": amt,
-                                })
-                                scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
-                                scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
+                                    })
+                                    messages.append(
+                                        {
+                                            "target": "chat",
+                                            "player": dst_uuid,
+                                            "text": t(
+                                                "receive",
+                                                lang=get_lang(dst_uuid),
+                                                src=src_name,
+                                                amount=format_amount(cur, amt, currency),
+                                            ),
+                                        }
+                                    )
+                                    record_transaction(
+                                        cur,
+                                        payload.timestamp,
+                                        src_uuid,
+                                        dst_uuid,
+                                        currency,
+                                        amt,
+                                        "pay",
+                                    )
+                                    actions.append({
+                                        "src": src_uuid,
+                                        "dst": dst_uuid,
+                                        "currency": currency,
+                                        "amount": amt,
+                                    })
+                                    scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
+                                    scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
                 else:
                     success = False
                     error_text = t("error.invalid_args", lang=exec_lang)
@@ -1314,16 +1477,31 @@ async def message(payload: MessagePayload):
                     success = False
                     error_text = t("error.invalid_args", lang=exec_lang) if amt is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                 else:
+                    rate, treasury = tax_info(cur, currency)
+                    tax_amt = amt * rate // 1000
+                    required = amt + tax_amt
                     if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
                         success = False
                         error_text = t("error.frozen", lang=exec_lang)
-                    elif get_balance(cur, src_uuid, currency) < amt:
+                    elif get_balance(cur, src_uuid, currency) < required:
                         success = False
                         error_text = t("error.insufficient", lang=exec_lang)
-                    elif not transfer(cur, src_uuid, dst_uuid, currency, amt):
+                    elif not add_balance(cur, src_uuid, currency, -required):
                         success = False
                         error_text = t("error.pay_failed", lang=exec_lang)
                     else:
+                        add_balance(cur, dst_uuid, currency, amt)
+                        if tax_amt > 0 and treasury:
+                            add_balance(cur, treasury, currency, tax_amt)
+                            record_transaction(
+                                cur,
+                                payload.timestamp,
+                                src_uuid,
+                                treasury,
+                                currency,
+                                tax_amt,
+                                "tax",
+                            )
                         messages.append({
                             "target": "chat",
                             "text": t(
@@ -1389,16 +1567,31 @@ async def message(payload: MessagePayload):
                         success = False
                         error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                     else:
+                        rate, treasury = tax_info(cur, currency)
+                        tax_amt = amt * rate // 1000
+                        required = amt + tax_amt
                         if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
                             success = False
                             error_text = t("error.frozen", lang=exec_lang)
-                        elif get_balance(cur, src_uuid, currency) < amt:
+                        elif get_balance(cur, src_uuid, currency) < required:
                             success = False
                             error_text = t("error.insufficient", lang=exec_lang)
-                        elif not transfer(cur, src_uuid, dst_uuid, currency, amt):
+                        elif not add_balance(cur, src_uuid, currency, -required):
                             success = False
                             error_text = t("error.pay_failed", lang=exec_lang)
                         else:
+                            add_balance(cur, dst_uuid, currency, amt)
+                            if tax_amt > 0 and treasury:
+                                add_balance(cur, treasury, currency, tax_amt)
+                                record_transaction(
+                                    cur,
+                                    payload.timestamp,
+                                    src_uuid,
+                                    treasury,
+                                    currency,
+                                    tax_amt,
+                                    "tax",
+                                )
                             msg_key = "money.pay" if action == "pay" else "transfer"
                             messages.append({
                                 "target": "chat",

@@ -107,7 +107,7 @@ public class LeTabCompleter implements TabCompleter {
                 return names;
             }
             if (first.equals("currency")) {
-                return Stream.of("create", "supply", "default")
+                return Stream.of("create", "supply", "default", "manager", "tax", "treasury")
                         .filter(s -> s.startsWith(args[1].toLowerCase()))
                         .toList();
             }

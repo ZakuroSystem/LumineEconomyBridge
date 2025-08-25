@@ -50,6 +50,14 @@ def parse_amount_field(value: str) -> int:
     return int((dec * 1000).to_integral_value(rounding=ROUND_HALF_UP))
 
 
+def is_currency_manager(db: sqlite3.Connection, uuid: str, currency: str) -> bool:
+    row = db.execute(
+        "SELECT 1 FROM currency_managers WHERE currency=? AND uuid=?",
+        (currency, uuid),
+    ).fetchone()
+    return row is not None
+
+
 def init_db() -> None:
     with get_db() as db:
         db.executescript(
@@ -74,7 +82,14 @@ def init_db() -> None:
                 name TEXT PRIMARY KEY,
                 symbol TEXT,
                 description TEXT,
-                active INTEGER NOT NULL DEFAULT 1
+                active INTEGER NOT NULL DEFAULT 1,
+                treasury TEXT,
+                tax_rate INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS currency_managers (
+                currency TEXT NOT NULL,
+                uuid TEXT NOT NULL,
+                PRIMARY KEY(currency, uuid)
             );
             CREATE TABLE IF NOT EXISTS name_index (
                 name TEXT PRIMARY KEY,
@@ -123,6 +138,17 @@ def init_db() -> None:
         except sqlite3.OperationalError:
             pass
         try:
+            db.execute("ALTER TABLE currencies ADD COLUMN treasury TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("ALTER TABLE currencies ADD COLUMN tax_rate INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS currency_managers (currency TEXT NOT NULL, uuid TEXT NOT NULL, PRIMARY KEY(currency, uuid))"
+        )
+        try:
             db.execute("ALTER TABLE players ADD COLUMN lang_hint INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass
@@ -169,6 +195,14 @@ def load_user():
                     session.setdefault("admin_mode", True)
                 else:
                     session.pop("admin_mode", None)
+                with get_db() as db2:
+                    g.user["is_currency_manager"] = (
+                        db2.execute(
+                            "SELECT 1 FROM currency_managers WHERE uuid=? LIMIT 1",
+                            (row["uuid"],),
+                        ).fetchone()
+                        is not None
+                    )
             else:
                 g.user = None
     else:
@@ -716,6 +750,81 @@ def currencies():
             """,
         ).fetchall()
     return render_template("currencies.html", currencies=rows)
+
+
+@app.route("/currency/manage", methods=["GET", "POST"])
+@login_required
+def currency_manage():
+    with get_db() as db:
+        if request.method == "POST":
+            op = request.form.get("op", "")
+            cname = request.form.get("currency", "").strip()
+            if op in {"add_manager", "remove_manager"}:
+                if not g.user["is_admin"] or not session.get("admin_mode", False):
+                    abort(403)
+                name = request.form.get("manager", "").strip().lower()
+                row = db.execute("SELECT uuid FROM name_index WHERE name=?", (name,)).fetchone()
+                if row:
+                    if op == "add_manager":
+                        db.execute(
+                            "INSERT OR IGNORE INTO currency_managers(currency, uuid) VALUES(?,?)",
+                            (cname, row["uuid"]),
+                        )
+                    else:
+                        db.execute(
+                            "DELETE FROM currency_managers WHERE currency=? AND uuid=?",
+                            (cname, row["uuid"]),
+                        )
+                    db.commit()
+                return redirect(url_for("currency_manage"))
+            elif op == "set":
+                if not (
+                    g.user["is_admin"]
+                    and session.get("admin_mode", False)
+                    or is_currency_manager(db, g.user["uuid"], cname)
+                ):
+                    abort(403)
+                try:
+                    tax = Decimal(request.form.get("tax", "0"))
+                except InvalidOperation:
+                    tax = Decimal(0)
+                tax_int = int((tax * 10).to_integral_value(rounding=ROUND_HALF_UP))
+                tre_name = request.form.get("treasury", "").strip().lower()
+                tre_uuid = None
+                if tre_name:
+                    row = db.execute("SELECT uuid FROM name_index WHERE name=?", (tre_name,)).fetchone()
+                    if row:
+                        tre_uuid = row["uuid"]
+                db.execute(
+                    "UPDATE currencies SET tax_rate=?, treasury=? WHERE name=?",
+                    (tax_int, tre_uuid, cname),
+                )
+                db.commit()
+                return redirect(url_for("currency_manage"))
+        if g.user["is_admin"] and session.get("admin_mode", False):
+            rows = db.execute(
+                "SELECT c.name, c.tax_rate, n.name AS treasury_name FROM currencies c LEFT JOIN name_index n ON n.uuid=c.treasury"
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT c.name, c.tax_rate, n.name AS treasury_name FROM currencies c JOIN currency_managers m ON m.currency=c.name AND m.uuid=? LEFT JOIN name_index n ON n.uuid=c.treasury",
+                (g.user["uuid"],),
+            ).fetchall()
+        currencies = []
+        for r in rows:
+            mgrs = db.execute(
+                "SELECT n.name FROM currency_managers m LEFT JOIN name_index n ON n.uuid=m.uuid WHERE m.currency=?",
+                (r["name"],),
+            ).fetchall()
+            currencies.append(
+                {
+                    "name": r["name"],
+                    "tax_rate": r["tax_rate"],
+                    "treasury_name": r["treasury_name"],
+                    "managers": [m["name"] for m in mgrs],
+                }
+            )
+    return render_template("currency_manage.html", currencies=currencies)
 
 
 @app.route("/systems", methods=["GET", "POST"])

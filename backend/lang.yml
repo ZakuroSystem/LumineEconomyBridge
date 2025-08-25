@@ -4,6 +4,10 @@ en:
     supply_header: "§6§lCurrent currency supply:§r"
     supply_entry: "§a§e{currency}§a: {amount}§r"
     default: "§aDefault currency set to §e{currency}§a.§r"
+    manager_add: "§aAdded §e{player}§a as manager for §e{currency}§a.§r"
+    manager_remove: "§aRemoved §e{player}§a from managers of §e{currency}§a.§r"
+    tax: "§aSet tax for §e{currency}§a to {rate}%§r"
+    treasury: "§aSet treasury for §e{currency}§a to §e{account}§a.§r"
   money:
     give: "§aGave {amount}§a §e{currency}§a to §e{target}§a.§r"
     take: "§aRemoved {amount}§a §e{currency}§a from §e{target}§a.§r"
@@ -88,6 +92,10 @@ jp:
     supply_header: "§6§l現在の通貨供給量:§r"
     supply_entry: "§a§e{currency}§a: {amount}§r"
     default: "§aデフォルト通貨を §e{currency}§a に設定しました。§r"
+    manager_add: "§a§e{currency}§a の管理者に §e{player}§a を追加しました。§r"
+    manager_remove: "§a§e{currency}§a の管理者から §e{player}§a を削除しました。§r"
+    tax: "§a§e{currency}§a の税率を {rate}% に設定しました。§r"
+    treasury: "§a§e{currency}§a の国庫アカウントを §e{account}§a に設定しました。§r"
   money:
     give: "§a§e{target}§a の §e{currency}§a を {amount}§a 付与しました。§r"
     take: "§a§e{target}§a の §e{currency}§a を {amount}§a 減少しました。§r"

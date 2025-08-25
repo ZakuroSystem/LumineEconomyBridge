@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Currency Management</h2>
+{% for c in currencies %}
+<div class="card mb-3">
+  <div class="card-header fw-bold">{{ c.name }}</div>
+  <div class="card-body">
+    <form method="post" class="row gy-2 gx-2 align-items-center">
+      <input type="hidden" name="currency" value="{{ c.name }}">
+      <div class="col-auto">
+        <label class="form-label">Tax %</label>
+        <input name="tax" class="form-control form-control-sm" value="{{ '%.1f'|format(c.tax_rate/10) }}">
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Treasury</label>
+        <input name="treasury" class="form-control form-control-sm" value="{{ c.treasury_name or '' }}">
+      </div>
+      <div class="col-auto mt-4">
+        <button class="btn btn-sm btn-primary" name="op" value="set">Save</button>
+      </div>
+    </form>
+    <div class="mt-2">
+      <div>Managers:
+        {% for m in c.managers %}
+          <span class="badge bg-secondary">{{ m }}</span>
+          {% if user.is_admin and session.admin_mode %}
+          <form method="post" class="d-inline">
+            <input type="hidden" name="currency" value="{{ c.name }}">
+            <input type="hidden" name="manager" value="{{ m }}">
+            <button class="btn btn-sm btn-link text-danger" name="op" value="remove_manager">x</button>
+          </form>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% if user.is_admin and session.admin_mode %}
+      <form method="post" class="mt-2 d-flex" style="max-width:200px;">
+        <input type="hidden" name="currency" value="{{ c.name }}">
+        <input name="manager" class="form-control form-control-sm me-1" placeholder="player">
+        <button class="btn btn-sm btn-success" name="op" value="add_manager">Add</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}
