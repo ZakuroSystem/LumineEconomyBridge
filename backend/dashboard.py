@@ -35,6 +35,7 @@ LOG_PATH = "economy_commands.log"
 BACKUP_DIR = "backups"
 os.makedirs(BACKUP_DIR, exist_ok=True)
 API_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
+API_BASE = os.environ.get("LE_API_BASE", "/api")
 
 with open("lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
@@ -584,7 +585,7 @@ def logstats():
 @app.route("/map")
 @login_required
 def map_view():
-    return render_template("map.html", token=API_TOKEN)
+    return render_template("map.html", token=API_TOKEN, api_base=API_BASE)
 
 
 @app.route("/backups", methods=["GET", "POST"])

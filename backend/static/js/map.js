@@ -1,6 +1,9 @@
 document.addEventListener('DOMContentLoaded', async () => {
   const tokenMeta = document.querySelector('meta[name="le-token"]');
   const token = tokenMeta ? tokenMeta.content : '';
+  const apiBaseMeta = document.querySelector('meta[name="api-base"]');
+  const apiBase = apiBaseMeta ? apiBaseMeta.content : '';
+  const apiUrl = apiBase ? new URL(apiBase, location.href) : null;
   const params = new URLSearchParams(location.search);
   let world = params.get('world');
   let tileBase = '';
@@ -11,19 +14,30 @@ document.addEventListener('DOMContentLoaded', async () => {
   let palette = [];
 
   async function resolveWorld(){
-    const prefixes = ['/api/tiles', '/tiles', '/plugin/tiles'];
-    let resp;
-    for(const p of prefixes){
-      try{ resp = await fetch(`${p}/worlds`, {headers: token? {'X-LE-Token': token} : {}}); }
-      catch{ resp = null; }
-      if(resp && resp.ok){ tilesPrefix = p; break; }
+    if(apiBase){
+      const resp = await fetch(`${apiBase}/tiles/worlds`, {headers: token? {'X-LE-Token': token} : {}});
+      if(!resp.ok) throw new Error('world list fetch failed');
+      if(!world){
+        const js = await resp.json();
+        world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
+      }
+      tileBase = `${apiBase}/tiles/${encodeURIComponent(world)}`;
+      tilesPrefix = `${apiBase}/tiles`;
+    } else {
+      const prefixes = ['/api/tiles', '/tiles', '/plugin/tiles'];
+      let resp;
+      for(const p of prefixes){
+        try{ resp = await fetch(`${p}/worlds`, {headers: token? {'X-LE-Token': token} : {}}); }
+        catch{ resp = null; }
+        if(resp && resp.ok){ tilesPrefix = p; break; }
+      }
+      if(!tilesPrefix) throw new Error('world list fetch failed');
+      if(!world){
+        const js = await resp.json();
+        world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
+      }
+      tileBase = `${tilesPrefix}/${encodeURIComponent(world)}`;
     }
-    if(!tilesPrefix) throw new Error('world list fetch failed');
-    if(!world){
-      const js = await resp.json();
-      world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
-    }
-    tileBase = `${tilesPrefix}/${encodeURIComponent(world)}`;
   }
 
   function loadTile(tx, tz){
@@ -57,13 +71,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function updateCharts(){
-    fetch('/metrics',{headers:{'X-LE-Token': token}}).then(r=>r.text()).then(t=>{
+    const metricsUrl = apiBase ? `${apiBase}/metrics` : '/metrics';
+    fetch(metricsUrl,{headers:{'X-LE-Token': token}}).then(r=>r.text()).then(t=>{
       const m=parseMetrics(t);
       const labels=Object.keys(m), vals=Object.values(m);
       if(metricsChart){metricsChart.data.labels=labels;metricsChart.data.datasets[0].data=vals;metricsChart.update();}
       else metricsChart=new Chart(document.getElementById('metricsChart'),{type:'bar',data:{labels:labels,datasets:[{label:'value',data:vals}]}});
     });
-    fetch('/logs/summary',{headers:{'X-LE-Token': token}}).then(r=>r.json()).then(sum=>{
+    const logsUrl = apiBase ? `${apiBase}/logs/summary` : '/logs/summary';
+    fetch(logsUrl,{headers:{'X-LE-Token': token}}).then(r=>r.json()).then(sum=>{
       const labels=Object.keys(sum); const counts=labels.map(k=>sum[k].count);
       if(logChart){logChart.data.labels=labels;logChart.data.datasets[0].data=counts;logChart.update();}
       else logChart=new Chart(document.getElementById('logChart'),{type:'bar',data:{labels:labels,datasets:[{label:'count',data:counts}]}});
@@ -80,11 +96,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function init(){
     await resolveWorld();
-    const resp = await fetch('/api/mapcolor/palette', {headers:{'X-LE-Token': token}});
+    const paletteUrl = apiBase ? `${apiBase}/mapcolor/palette` : '/api/mapcolor/palette';
+    const resp = await fetch(paletteUrl, {headers:{'X-LE-Token': token}});
     const data = await resp.json();
     palette = data.palette;
     for(let tx=-4;tx<4;tx++) for(let tz=-4;tz<4;tz++) loadTile(tx,tz);
-    const ws = new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws/tiles');
+    const wsHost = apiUrl ? apiUrl.host : location.host;
+    const wsScheme = (apiUrl ? apiUrl.protocol : location.protocol) === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${wsScheme}://${wsHost}/ws/tiles`);
     ws.onmessage = ev => {
       const msg = JSON.parse(ev.data);
       if(msg.world===world) loadTile(msg.tx, msg.tz);
