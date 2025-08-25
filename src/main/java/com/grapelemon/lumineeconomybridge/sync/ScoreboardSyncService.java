@@ -10,6 +10,8 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import net.md_5.bungee.api.ChatMessageType;
 import net.md_5.bungee.api.chat.TextComponent;
+import org.bukkit.scoreboard.Objective;
+import org.bukkit.scoreboard.Scoreboard;
 
 import java.io.IOException;
 import java.util.*;
@@ -138,6 +140,33 @@ public class ScoreboardSyncService {
             try {
                 sendDelta(p);
             } catch (Exception ignored) {}
+        }
+    }
+
+    private void settlePlayer(Player p) {
+        callSync(() -> {
+            Scoreboard sb = p.getScoreboard() != null ? p.getScoreboard() : Bukkit.getScoreboardManager().getMainScoreboard();
+            String entry = p.getName();
+            for (Objective obj : sb.getObjectives()) {
+                String name = obj.getName();
+                if (name.startsWith("currency") && name.endsWith("_cash")) {
+                    int delta = obj.getScore(entry).getScore();
+                    if (delta != 0) {
+                        String baseName = name.substring(0, name.length() - 5);
+                        int cur = ScoreboardUtil.readCurrency(sb, baseName, entry);
+                        ScoreboardUtil.writeCurrency(sb, baseName, baseName, entry, cur + delta);
+                        obj.getScore(entry).setScore(0);
+                    }
+                }
+            }
+            return null;
+        });
+        sendDelta(p);
+    }
+
+    public void settleAll() {
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            try { settlePlayer(p); } catch (Exception ignored) {}
         }
     }
 

@@ -33,6 +33,7 @@ public class LumineEconomyBridge extends JavaPlugin {
     private OkHttpClient httpClient;
     private ScoreboardSyncService syncService;
     private BukkitTask syncTask;
+    private BukkitTask settleTask;
     private BukkitTask retryTask;
     private LeCommandExecutor executor;
 
@@ -111,6 +112,8 @@ public class LumineEconomyBridge extends JavaPlugin {
             }
             long period = syncInterval * 20L;
             syncTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, () -> syncService.tickAll(), period, period);
+            long settlePeriod = 20L * 20L;
+            settleTask = Bukkit.getScheduler().runTaskTimer(this, () -> syncService.settleAll(), settlePeriod, settlePeriod);
             Bukkit.getScheduler().runTaskAsynchronously(this, () -> syncService.rewriteAll());
 
             getLogger().info("LumineEconomyBridge started. Endpoint = " + baseUrl);
@@ -124,6 +127,7 @@ public class LumineEconomyBridge extends JavaPlugin {
     public void stopBridge() {
         if (retryTask != null) { retryTask.cancel(); retryTask = null; }
         if (syncTask != null) { syncTask.cancel(); syncTask = null; }
+        if (settleTask != null) { settleTask.cancel(); settleTask = null; }
         syncService = null;
         httpClient = null;
         getLogger().info("LumineEconomyBridge stopped.");
