@@ -1,6 +1,6 @@
 document.addEventListener('DOMContentLoaded', async () => {
-  const tokenData = document.getElementById('map-data');
-  const token = JSON.parse(tokenData.textContent).token;
+  const tokenMeta = document.querySelector('meta[name="le-token"]');
+  const token = tokenMeta ? tokenMeta.content : '';
   const params = new URLSearchParams(location.search);
   let world = params.get('world');
   let tileBase = '';
@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function resolveWorld(){
     if(!world){
       const r = await fetch('/api/tiles/worlds', {headers:{'X-LE-Token': token}});
+      if(!r.ok) throw new Error('world list fetch failed');
       const js = await r.json();
       world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
     }

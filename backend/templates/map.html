@@ -1,4 +1,7 @@
 {% extends 'base.html' %}
+{% block head %}
+<meta name="le-token" content="{{ token }}">
+{% endblock %}
 {% block content %}
 <h2>World Map</h2>
 <canvas id="mapCanvas" width="512" height="512" class="border mb-4"></canvas>
@@ -14,7 +17,6 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script id="map-data" type="application/json">{{ {'token': token}|tojson }}</script>
 <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
 <script src="{{ url_for('static', filename='js/map.js') }}"></script>
 {% endblock %}
