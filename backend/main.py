@@ -3152,6 +3152,8 @@ def chunk_snapshot(
 
 
 @app.get("/api/mapcolor/palette")
+@app.get("/mapcolor/palette")
+@app.get("/plugin/mapcolor/palette")
 async def mapcolor_palette(token: None = Depends(verify_token)):
     async with httpx.AsyncClient() as client:
         resp = await client.get(
@@ -3167,6 +3169,8 @@ async def mapcolor_palette(token: None = Depends(verify_token)):
 
 
 @app.post("/api/mapcolor/resolve")
+@app.post("/mapcolor/resolve")
+@app.post("/plugin/mapcolor/resolve")
 async def mapcolor_resolve(req: Request, token: None = Depends(verify_token)):
     body = await req.body()
     async with httpx.AsyncClient() as client:
@@ -3188,6 +3192,7 @@ async def mapcolor_resolve(req: Request, token: None = Depends(verify_token)):
 
 @app.get("/tiles/worlds")
 @app.get("/api/tiles/worlds")
+@app.get("/plugin/tiles/worlds")
 def list_worlds(token: None = Depends(verify_token)):
     worlds = set()
     for name in os.listdir(tile_store.base_dir):
@@ -3199,6 +3204,7 @@ def list_worlds(token: None = Depends(verify_token)):
 
 @app.api_route("/tiles/{world}/{tx}/{tz}", methods=["GET", "HEAD"])
 @app.api_route("/api/tiles/{world}/{tx}/{tz}", methods=["GET", "HEAD"])
+@app.api_route("/plugin/tiles/{world}/{tx}/{tz}", methods=["GET", "HEAD"])
 def get_tile(
     world: str,
     tx: int,
