@@ -388,7 +388,7 @@ def verify_token(x_le_token: str = Header(...)) -> None:
 
 
 def verify_token_optional(x_le_token: str | None = Header(None)) -> None:
-    if SHARED_TOKEN and x_le_token != SHARED_TOKEN:
+    if SHARED_TOKEN and x_le_token and x_le_token != SHARED_TOKEN:
         raise HTTPException(status_code=401, detail="invalid token")
 
 

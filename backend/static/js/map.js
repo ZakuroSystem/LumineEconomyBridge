@@ -52,7 +52,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       .then(buf => {
         if(buf.byteLength < 24) return;
         const payload = new Uint8Array(buf,24);
-        const unpack = pako.inflate(payload);
+        if(payload[0] !== 0x78) return;
+        let unpack;
+        try{ unpack = pako.inflate(payload); }
+        catch{ return; }
         const img = ctx.createImageData(64,64);
         let bit=0;
         for(let i=0;i<4096;i++){
