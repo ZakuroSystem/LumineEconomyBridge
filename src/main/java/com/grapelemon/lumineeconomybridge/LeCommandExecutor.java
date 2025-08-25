@@ -631,7 +631,7 @@ public class LeCommandExecutor implements CommandExecutor {
         OkHttpClient http = plugin.getHttpClient();
         String baseUrl = plugin.getBaseUrl();
 
-        sync.seed(p); // 安全に初期化
+        sync.sendDelta(p); // avoid resetting scoreboard
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("player", p.getUniqueId().toString());
