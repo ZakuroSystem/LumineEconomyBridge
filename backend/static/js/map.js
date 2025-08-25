@@ -15,40 +15,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   let palette = [];
 
   async function resolveWorld(){
+    const prefixes = [];
     if(apiBase){
-      let resp;
-      try {
-        resp = await fetch(`${apiBase}/tiles/worlds`, {headers: token? {'X-LE-Token': token} : {}});
-      } catch {}
-      if(resp && resp.ok){
-        if(!world){
-          const js = await resp.json();
-          world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
-        }
-      } else {
-        world = world || 'world';
-      }
-      tilesPrefix = `${apiBase}/tiles`;
-      tileBase = `${tilesPrefix}/${encodeURIComponent(world)}`;
-    } else {
-      const prefixes = ['/api/tiles', '/tiles', '/plugin/tiles'];
-      let resp;
-      for(const p of prefixes){
-        try{ resp = await fetch(`${p}/worlds`, {headers: token? {'X-LE-Token': token} : {}}); }
-        catch{ resp = null; }
-        if(resp && resp.ok){ tilesPrefix = p; break; }
-      }
-      if(!tilesPrefix){
-        tilesPrefix = '/tiles';
-        world = world || 'world';
-      } else {
-        if(!world){
-          const js = await resp.json();
-          world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
-        }
-      }
-      tileBase = `${tilesPrefix}/${encodeURIComponent(world)}`;
+      prefixes.push(`${apiBase}/tiles`);
+      // also try dropping a trailing /api for misconfigured bases
+      if(apiBase.endsWith('/api')) prefixes.push(`${apiBase.slice(0,-4)}/tiles`);
     }
+    prefixes.push('/api/tiles', '/tiles', '/plugin/tiles');
+    let resp = null;
+    for(const p of prefixes){
+      try{ resp = await fetch(`${p}/worlds`, {headers: token? {'X-LE-Token': token} : {}}); }
+      catch{ resp = null; }
+      if(resp && resp.ok){ tilesPrefix = p; break; }
+    }
+    if(!tilesPrefix){
+      tilesPrefix = prefixes[0] || '/tiles';
+      world = world || 'world';
+    } else {
+      if(!world){
+        try{
+          const js = await resp.json();
+          world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
+        }catch{ world = world || 'world'; }
+      }
+    }
+    tileBase = `${tilesPrefix}/${encodeURIComponent(world)}`;
   }
 
   function loadTile(tx, tz){
@@ -107,10 +98,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function init(){
     await resolveWorld();
-    const paletteUrl = apiBase ? `${apiBase}/mapcolor/palette` : '/api/mapcolor/palette';
-    const resp = await fetch(paletteUrl, {headers:{'X-LE-Token': token}});
-    const data = await resp.json();
-    palette = data.palette;
+    const paletteUrls = [];
+    if(apiBase){
+      paletteUrls.push(`${apiBase}/mapcolor/palette`);
+      if(apiBase.endsWith('/api')) paletteUrls.push(`${apiBase.slice(0,-4)}/mapcolor/palette`);
+    }
+    paletteUrls.push('/api/mapcolor/palette', '/plugin/mapcolor/palette', '/mapcolor/palette');
+    let pResp = null;
+    for(const url of paletteUrls){
+      try{ pResp = await fetch(url, {headers:{'X-LE-Token': token}}); } catch{ pResp=null; }
+      if(pResp && pResp.ok) break;
+    }
+    if(!pResp || !pResp.ok) throw new Error('palette fetch failed');
+    try{
+      const data = await pResp.json();
+      palette = data.palette;
+    } catch { throw new Error('palette parse failed'); }
     for(let tx=-4;tx<4;tx++) for(let tz=-4;tz<4;tz++) loadTile(tx,tz);
     const wsHost = apiUrl ? apiUrl.host : location.host;
     const wsScheme = (apiUrl ? apiUrl.protocol : location.protocol) === 'https:' ? 'wss' : 'ws';
