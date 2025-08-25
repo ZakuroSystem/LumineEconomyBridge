@@ -4,21 +4,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   const params = new URLSearchParams(location.search);
   let world = params.get('world');
   let tileBase = '';
-  let tilesPrefix = '/api/tiles';
+  let tilesPrefix = '';
   const canvas = document.getElementById('mapCanvas');
   const ctx = canvas.getContext('2d');
   const tileCache = {};
   let palette = [];
 
   async function resolveWorld(){
+    const prefixes = ['/api/tiles', '/tiles', '/plugin/tiles'];
+    let resp;
+    for(const p of prefixes){
+      try{ resp = await fetch(`${p}/worlds`, {headers: token? {'X-LE-Token': token} : {}}); }
+      catch{ resp = null; }
+      if(resp && resp.ok){ tilesPrefix = p; break; }
+    }
+    if(!tilesPrefix) throw new Error('world list fetch failed');
     if(!world){
-      let r = await fetch(`${tilesPrefix}/worlds`, {headers: token? {'X-LE-Token': token} : {}});
-      if(!r.ok){
-        tilesPrefix = '/tiles';
-        r = await fetch(`${tilesPrefix}/worlds`, {headers: token? {'X-LE-Token': token} : {}});
-      }
-      if(!r.ok) throw new Error('world list fetch failed');
-      const js = await r.json();
+      const js = await resp.json();
       world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
     }
     tileBase = `${tilesPrefix}/${encodeURIComponent(world)}`;
