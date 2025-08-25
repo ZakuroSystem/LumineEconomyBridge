@@ -17,6 +17,7 @@ import json
 import yaml
 import shutil
 import requests
+from urllib.parse import urlparse
 from datetime import datetime
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -39,6 +40,7 @@ API_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
 # dashboard requests can reach API endpoints even when a reverse proxy is not
 # configured.
 API_BASE = os.environ.get("LE_API_BASE", "http://127.0.0.1:5100/api")
+API_ORIGIN = f"{urlparse(API_BASE).scheme}://{urlparse(API_BASE).netloc}"
 
 with open("lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
@@ -234,13 +236,12 @@ def load_user():
 def add_security_headers(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
-    resp.headers[
-        "Content-Security-Policy"
-    ] = (
-        "default-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com; "
-        "style-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com 'unsafe-inline'; "
-        "font-src 'self' https://cdn.jsdelivr.net https://fonts.gstatic.com; "
-        "script-src 'self' https://cdn.jsdelivr.net"
+    resp.headers["Content-Security-Policy"] = (
+        f"default-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com; "
+        f"style-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com 'unsafe-inline'; "
+        f"font-src 'self' https://cdn.jsdelivr.net https://fonts.gstatic.com; "
+        f"script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+        f"connect-src 'self' {API_ORIGIN}"
     )
     return resp
 
