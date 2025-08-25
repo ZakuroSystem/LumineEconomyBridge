@@ -1,5 +1,6 @@
 # Shop Help / ショップヘルプ
 
+§a/le shop §7- Quick-create a shop barrel / クイックショップ樽を作成
 §a/le shop create §e<id> §7- Create a shop barrel / ショップ樽を作成
 §a/le shop add §e<id> <qty> <price> <name> §7- Deposit item / 在庫追加
 §a/le shop take §e<id> <item> <qty> §7- Withdraw stock / 在庫回収

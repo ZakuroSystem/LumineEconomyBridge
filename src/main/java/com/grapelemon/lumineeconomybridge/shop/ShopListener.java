@@ -121,6 +121,13 @@ public class ShopListener implements Listener {
         if (meta == null) return;
         PersistentDataContainer c = meta.getPersistentDataContainer();
         if (!c.has(keyShop, PersistentDataType.BYTE)) return;
+        String expected = c.get(keyOwner, PersistentDataType.STRING);
+        String placer = e.getPlayer().getUniqueId().toString();
+        if (expected != null && !placer.equals(expected)) {
+            e.setCancelled(true);
+            e.getPlayer().sendMessage(ChatColor.RED + "You are not the owner / あなたはオーナーではありません" + ChatColor.RESET);
+            return;
+        }
         String shopId = c.get(keyId, PersistentDataType.STRING);
         BlockState state = e.getBlockPlaced().getState();
         if (state instanceof TileState tile) {

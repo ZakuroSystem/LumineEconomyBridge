@@ -1065,6 +1065,9 @@ async def message(payload: MessagePayload):
             if not cmd:
                 success = False
                 error_text = t("error.no_command", lang=exec_lang)
+            elif action == "shop" and len(cmd) >= 2 and cmd[1].lower() == "quick":
+                shop = cmd[2] if len(cmd) >= 3 else ""
+                messages.append({"target": "chat", "text": t("shop.quick_created", lang=exec_lang, shop=shop)})
             elif action == "currency":
                 sub = cmd[1].lower() if len(cmd) >= 2 else ""
                 if sub == "create" and len(cmd) >= 3:

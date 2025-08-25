@@ -86,6 +86,37 @@ en:
     token: "§aUse this token on the website: §e{token}§r"
   account:
     connected: "§aLinked system account §e{system}§a to §e{user}§a.§r"
+  shop:
+    quick_created: "§aShop barrel §e{shop}§a created. Place it then run /le shop add §e{shop}§a <qty> <price> <name>.§r"
+  webui:
+    nav:
+      dashboard: "Dashboard"
+      accounts: "Accounts"
+      currencies: "Currencies"
+      transactions: "Transactions"
+      analytics: "Analytics"
+      shops: "Shops"
+      shop_search: "Shop Search"
+      shop_stats: "Shop Stats"
+      map: "Map"
+      sales: "Sales"
+      systems: "Systems"
+      execute: "Execute"
+      issuance: "Issuance"
+      logs: "Logs"
+      log_stats: "Log Stats"
+      backups: "Backups"
+      currency_manage: "Currency Manage"
+      profile: "My Account"
+      my_shops: "My Shops"
+      toggle_admin: "Switch to Admin Mode"
+      toggle_user: "Switch to User Mode"
+      login: "Login"
+      register: "Register"
+      logout: "Logout"
+    lang_menu:
+      en: "ENGLISH"
+      jp: "JAPANESE"
 jp:
   currency:
     create: "§a通貨 §e{currency}§a を作成しました。§r"
@@ -174,3 +205,34 @@ jp:
     token: "§a以下のトークンをWebサイトで使用してください: §e{token}§r"
   account:
     connected: "§aシステムアカウント §e{system}§a を §e{user}§a に紐づけました。§r"
+  shop:
+    quick_created: "§aショップ樽 §e{shop}§a を作成しました。設置してから /le shop add §e{shop}§a <数量> <価格> <名前> を実行してください。§r"
+  webui:
+    nav:
+      dashboard: "ダッシュボード"
+      accounts: "アカウント"
+      currencies: "通貨"
+      transactions: "取引"
+      analytics: "分析"
+      shops: "ショップ一覧"
+      shop_search: "ショップ検索"
+      shop_stats: "ショップ統計"
+      map: "マップ"
+      sales: "売上"
+      systems: "システム"
+      execute: "コマンド"
+      issuance: "発行"
+      logs: "ログ"
+      log_stats: "ログ統計"
+      backups: "バックアップ"
+      currency_manage: "通貨管理"
+      profile: "マイアカウント"
+      my_shops: "自分のショップ"
+      toggle_admin: "管理者モードに切替"
+      toggle_user: "ユーザーモードに切替"
+      login: "ログイン"
+      register: "登録"
+      logout: "ログアウト"
+    lang_menu:
+      en: "ENGLISH"
+      jp: "JAPANESE"

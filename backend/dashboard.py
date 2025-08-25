@@ -14,6 +14,7 @@ import sqlite3
 import time
 import os
 import json
+import yaml
 import shutil
 import requests
 from datetime import datetime
@@ -34,6 +35,20 @@ LOG_PATH = "economy_commands.log"
 BACKUP_DIR = "backups"
 os.makedirs(BACKUP_DIR, exist_ok=True)
 API_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
+
+with open("lang.yml", encoding="utf-8") as f:
+    LANG = yaml.safe_load(f)
+
+
+def wt(key: str) -> str:
+    lang = session.get("ui_lang", "en")
+    data = LANG.get(lang, {}).get("webui", {})
+    for part in key.split('.'):
+        if isinstance(data, dict):
+            data = data.get(part, {})
+        else:
+            return key
+    return data if isinstance(data, str) else key
 
 
 def get_db():
@@ -244,7 +259,7 @@ def admin_required(view):
 
 @app.context_processor
 def inject_user():
-    return {"user": g.user, "admin_mode": session.get("admin_mode", False)}
+    return {"user": g.user, "admin_mode": session.get("admin_mode", False), "wt": wt, "ui_lang": session.get("ui_lang", "en")}
 
 
 def get_setting(key: str, default: int) -> int:
@@ -364,6 +379,13 @@ def toggle_mode():
     if not g.user["is_admin"]:
         return redirect(url_for("index"))
     session["admin_mode"] = not session.get("admin_mode", False)
+    return redirect(request.referrer or url_for("index"))
+
+
+@app.get("/ui/lang/<code>")
+def set_ui_lang(code: str):
+    if code in {"en", "jp"}:
+        session["ui_lang"] = code
     return redirect(request.referrer or url_for("index"))
 
 
