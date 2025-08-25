@@ -588,6 +588,11 @@ def map_view():
     return render_template("map.html", token=API_TOKEN, api_base=API_BASE)
 
 
+@app.route("/guide")
+def guide_page():
+    return render_template("guide.html")
+
+
 @app.route("/backups", methods=["GET", "POST"])
 @admin_required
 def backups():
