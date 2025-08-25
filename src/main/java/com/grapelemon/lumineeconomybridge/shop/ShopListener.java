@@ -129,19 +129,21 @@ public class ShopListener implements Listener {
             return;
         }
         String shopId = c.get(keyId, PersistentDataType.STRING);
+        String owner = expected != null ? expected : placer;
         BlockState state = e.getBlockPlaced().getState();
         if (state instanceof TileState tile) {
             PersistentDataContainer tc = tile.getPersistentDataContainer();
             tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
             if (shopId != null) tc.set(keyId, PersistentDataType.STRING, shopId);
-            tc.set(keyOwner, PersistentDataType.STRING, e.getPlayer().getUniqueId().toString());
+            tc.set(keyOwner, PersistentDataType.STRING, owner);
             tile.update(true);
         }
         OkHttpClient http = plugin.getHttpClient();
         if (http == null) return;
         Map<String, Object> payload = new HashMap<>();
         payload.put("shop_id", shopId);
-        payload.put("owner_uuid", e.getPlayer().getUniqueId().toString());
+        payload.put("owner_uuid", owner);
+        payload.put("placer_uuid", placer);
         Location loc = e.getBlockPlaced().getLocation();
         payload.put("world", loc.getWorld().getName());
         payload.put("x", loc.getBlockX());

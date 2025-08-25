@@ -496,6 +496,7 @@ class RewritePayload(BaseModel):
 class ShopPlacePayload(BaseModel):
     shop_id: str
     owner_uuid: str
+    placer_uuid: str
     world: str
     x: float
     y: float
@@ -2071,7 +2072,7 @@ async def shop_place(payload: ShopPlacePayload, token: None = Depends(verify_tok
         if existing:
             authorized = cur.execute(
                 "SELECT 1 FROM shop_owners WHERE shop_id=? AND owner_uuid=?",
-                (payload.shop_id, payload.owner_uuid),
+                (payload.shop_id, payload.placer_uuid),
             ).fetchone()
             if not authorized:
                 raise HTTPException(status_code=403, detail="not owner")
@@ -2084,6 +2085,8 @@ async def shop_place(payload: ShopPlacePayload, token: None = Depends(verify_tok
                 (payload.timestamp, payload.shop_id),
             )
         else:
+            if payload.owner_uuid != payload.placer_uuid:
+                raise HTTPException(status_code=403, detail="owner mismatch")
             cur.execute(
                 "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
                 (payload.shop_id, payload.owner_uuid, "active", payload.timestamp, payload.timestamp),
@@ -2102,6 +2105,7 @@ async def shop_place(payload: ShopPlacePayload, token: None = Depends(verify_tok
         "timestamp": payload.timestamp,
         "shop_id": payload.shop_id,
         "owner": payload.owner_uuid,
+        "placer": payload.placer_uuid,
         "world": payload.world,
         "x": payload.x,
         "y": payload.y,
