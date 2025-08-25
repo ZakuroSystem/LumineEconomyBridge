@@ -336,6 +336,37 @@ with conn:
 app = FastAPI()
 tile_store = TileStore("tiles")
 
+# separate cash transaction persistence
+cash_conn = sqlite3.connect(
+    "cash_transaction.db", check_same_thread=False, isolation_level=None
+)
+cash_conn.row_factory = sqlite3.Row
+with cash_conn:
+    cash_conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notes (
+            note_id TEXT PRIMARY KEY,
+            currency TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            owner_uuid TEXT NOT NULL
+        )
+        """
+    )
+    cash_conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cash_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            note_id TEXT NOT NULL,
+            player_uuid TEXT NOT NULL,
+            action TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            location TEXT,
+            ts INTEGER NOT NULL
+        )
+        """
+    )
+
 SHARED_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
 MAPCOLOR_URL = os.environ.get("MAPCOLOR_URL", "http://127.0.0.1:8765")
 RATE_LIMIT: Dict[str, Tuple[float, int]] = {}
@@ -529,6 +560,15 @@ class ShopReopenPayload(BaseModel):
     owner_uuid: str
     shop_id: str
     timestamp: int
+
+
+class CashEvent(BaseModel):
+    note_id: str
+    player_uuid: str
+    action: str
+    currency: str
+    amount: int
+    location: Optional[str] = None
 
 
 class ShopRemovePayload(BaseModel):
@@ -3041,6 +3081,41 @@ class ChunkData(BaseModel):
     cx: int
     cz: int
     data: str
+
+
+@app.post("/api/cash/event")
+def cash_event(ev: CashEvent, token: None = Depends(verify_token)):
+    ts = int(time.time() * 1000)
+    with cash_conn:
+        cash_conn.execute(
+            "INSERT INTO cash_events(note_id, player_uuid, action, currency, amount, location, ts) VALUES(?,?,?,?,?,?,?)",
+            (
+                ev.note_id,
+                ev.player_uuid,
+                ev.action,
+                ev.currency,
+                ev.amount,
+                ev.location,
+                ts,
+            ),
+        )
+        if ev.action in ("issue", "transfer", "pickup", "store", "retrieve"):
+            cash_conn.execute(
+                "INSERT OR REPLACE INTO notes(note_id, currency, amount, owner_uuid) VALUES(?,?,?,?)",
+                (ev.note_id, ev.currency, ev.amount, ev.player_uuid),
+            )
+        elif ev.action == "destroy":
+            cash_conn.execute("DELETE FROM notes WHERE note_id=?", (ev.note_id,))
+    return {"status": "ok"}
+
+
+@app.get("/api/cash/holdings/{player_uuid}")
+def cash_holdings(player_uuid: str, token: None = Depends(verify_token)):
+    cur = cash_conn.execute(
+        "SELECT currency, SUM(amount) AS total FROM notes WHERE owner_uuid=? GROUP BY currency",
+        (player_uuid,),
+    )
+    return {"holdings": [dict(r) for r in cur.fetchall()]}
 
 
 class ChunkSnapshotRequest(BaseModel):

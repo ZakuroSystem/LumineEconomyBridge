@@ -11,6 +11,8 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import com.grapelemon.lumineeconomybridge.shop.ShopListener;
+import com.grapelemon.lumineeconomybridge.cash.PaperCurrencyService;
+import com.grapelemon.lumineeconomybridge.cash.PaperNoteListener;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -47,6 +49,7 @@ public class LumineEconomyBridge extends JavaPlugin {
 
     private final Map<String, Long> grantTokens = new ConcurrentHashMap<>();
     private Map<String, Boolean> commandPermissions = new HashMap<>();
+    private PaperCurrencyService cashService;
 
     @Override
     public void onEnable() {
@@ -106,6 +109,8 @@ public class LumineEconomyBridge extends JavaPlugin {
                     .writeTimeout(timeout, TimeUnit.MILLISECONDS)
                     .build();
             syncService = new ScoreboardSyncService(httpClient, baseUrl, this);
+            cashService = new PaperCurrencyService(this, httpClient, baseUrl);
+            getServer().getPluginManager().registerEvents(new PaperNoteListener(cashService), this);
 
             for (Player p : Bukkit.getOnlinePlayers()) {
                 syncService.seed(p);
@@ -182,6 +187,8 @@ public class LumineEconomyBridge extends JavaPlugin {
     public OkHttpClient getHttpClient() { return httpClient; }
 
     public ScoreboardSyncService getSyncService() { return syncService; }
+
+    public PaperCurrencyService getCashService() { return cashService; }
 
     public String getBaseUrl() { return baseUrl; }
 

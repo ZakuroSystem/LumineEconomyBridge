@@ -172,6 +172,28 @@ public class LeCommandExecutor implements CommandExecutor {
                     }
                     return true;
                 }
+                case "cash" -> {
+                    if (!plugin.isActive() || plugin.getCashService() == null) {
+                        p.sendMessage(Lang.get("error-unavailable"));
+                        return true;
+                    }
+                    if (args.length >= 3 && args[1].equalsIgnoreCase("issue")) {
+                        int amt;
+                        try {
+                            amt = parseAmount(args[2]);
+                        } catch (NumberFormatException ex) {
+                            p.sendMessage(ChatColor.RED + "Invalid amount" + ChatColor.RESET);
+                            return true;
+                        }
+                        String currency = args.length >= 4 ? args[3] : "thy";
+                        ItemStack note = plugin.getCashService().issue(p, currency, amt);
+                        p.getInventory().addItem(note);
+                        p.sendMessage(ChatColor.GREEN + "Issued note" + ChatColor.RESET);
+                    } else {
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le cash issue <amount> [currency]" + ChatColor.RESET);
+                    }
+                    return true;
+                }
                 case "shop" -> {
                     if (!plugin.isActive() || plugin.getHttpClient() == null) {
                         p.sendMessage(Lang.get("error-unavailable"));
