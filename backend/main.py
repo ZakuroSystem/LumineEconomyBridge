@@ -387,6 +387,11 @@ def verify_token(x_le_token: str = Header(...)) -> None:
         raise HTTPException(status_code=401, detail="invalid token")
 
 
+def verify_token_optional(x_le_token: str | None = Header(None)) -> None:
+    if SHARED_TOKEN and x_le_token != SHARED_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid token")
+
+
 def check_rate_limit(ip: str) -> None:
     """Very small per-IP rate limiter for snapshot posts."""
 
@@ -3163,7 +3168,7 @@ def chunk_snapshot(
 @app.get("/api/mapcolor/palette")
 @app.get("/mapcolor/palette")
 @app.get("/plugin/mapcolor/palette")
-async def mapcolor_palette(token: None = Depends(verify_token)):
+async def mapcolor_palette(token: None = Depends(verify_token_optional)):
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{MAPCOLOR_URL}/plugin/mapcolor/palette",
@@ -3180,7 +3185,7 @@ async def mapcolor_palette(token: None = Depends(verify_token)):
 @app.post("/api/mapcolor/resolve")
 @app.post("/mapcolor/resolve")
 @app.post("/plugin/mapcolor/resolve")
-async def mapcolor_resolve(req: Request, token: None = Depends(verify_token)):
+async def mapcolor_resolve(req: Request, token: None = Depends(verify_token_optional)):
     body = await req.body()
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -3202,7 +3207,7 @@ async def mapcolor_resolve(req: Request, token: None = Depends(verify_token)):
 @app.get("/tiles/worlds")
 @app.get("/api/tiles/worlds")
 @app.get("/plugin/tiles/worlds")
-def list_worlds(token: None = Depends(verify_token)):
+def list_worlds(token: None = Depends(verify_token_optional)):
     worlds = set()
     for name in os.listdir(tile_store.base_dir):
         m = re.match(r"tile_(.+?)_(-?\d+)_(-?\d+)\.tile\.zlib$", name)
@@ -3219,7 +3224,7 @@ def get_tile(
     tx: int,
     tz: int,
     request: Request,
-    token: None = Depends(verify_token),
+    token: None = Depends(verify_token_optional),
 ):
     data = tile_store.load_tile(world, tx, tz)
     if data is None:
