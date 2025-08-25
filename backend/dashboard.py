@@ -36,11 +36,13 @@ LOG_PATH = "economy_commands.log"
 BACKUP_DIR = "backups"
 os.makedirs(BACKUP_DIR, exist_ok=True)
 API_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
-# Base URL of the FastAPI backend. Default to the local dev server so that
-# dashboard requests can reach API endpoints even when a reverse proxy is not
-# configured.
-API_BASE = os.environ.get("LE_API_BASE", "http://127.0.0.1:5100/api")
-API_ORIGIN = f"{urlparse(API_BASE).scheme}://{urlparse(API_BASE).netloc}"
+# Base URL of the FastAPI backend.  Leave empty to use the dashboard's
+# own origin; set LE_API_BASE when the API is hosted elsewhere.
+API_BASE = os.environ.get("LE_API_BASE", "").rstrip("/")
+_parsed = urlparse(API_BASE) if API_BASE else None
+API_ORIGIN = (
+    f"{_parsed.scheme}://{_parsed.netloc}" if _parsed and _parsed.scheme and _parsed.netloc else ""
+)
 
 with open("lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
@@ -236,12 +238,13 @@ def load_user():
 def add_security_headers(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
+    connect_src = "connect-src 'self'" if not API_ORIGIN else f"connect-src 'self' {API_ORIGIN}"
     resp.headers["Content-Security-Policy"] = (
         f"default-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com; "
         f"style-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com 'unsafe-inline'; "
         f"font-src 'self' https://cdn.jsdelivr.net https://fonts.gstatic.com; "
         f"script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
-        f"connect-src 'self' {API_ORIGIN}"
+        f"{connect_src}"
     )
     return resp
 
