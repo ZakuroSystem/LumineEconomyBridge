@@ -1139,12 +1139,10 @@ def command():
                     "http://127.0.0.1:5100/api/message",
                     json={
                         "player": "Server",
+                        "executor": g.user["username"],
                         "command": cmd,
                         "timestamp": int(time.time()),
-                        "world": "world",
-                        "x": 0,
-                        "y": 0,
-                        "z": 0,
+                        "location": {"world": "world", "x": 0, "y": 0, "z": 0},
                     },
                     timeout=5,
                 )

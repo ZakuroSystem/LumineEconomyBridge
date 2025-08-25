@@ -140,6 +140,7 @@ public class ShopListener implements Listener {
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         Request req = new Request.Builder()
                 .url(plugin.getBaseUrl() + "/api/shop/place")
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
         http.newCall(req).enqueue(new Callback() {
@@ -579,10 +580,12 @@ public class ShopListener implements Listener {
                 @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
             });
         } else {
-            ItemStack refund = stack.clone();
-            int qty = stack.getAmount();
-            stack.setAmount(0);
-            PendingSale pending = new PendingSale(holder.getShopId(), blob, refund, qty, System.currentTimeMillis() + 20000, holder);
+            ItemStack single = stack.clone();
+            single.setAmount(1);
+            int qty = 1;
+            int remain = stack.getAmount() - 1;
+            stack.setAmount(Math.max(remain, 0));
+            PendingSale pending = new PendingSale(holder.getShopId(), blob, single, qty, System.currentTimeMillis() + 20000, holder);
             pendingSales.put(p.getUniqueId(), pending);
             p.sendMessage(ChatColor.YELLOW + "Enter sale name and price (e.g. apple 100) / 販売名と金額を入力してください (例: apple 100)" + ChatColor.RESET);
             Bukkit.getScheduler().runTaskLater(plugin, () -> {

@@ -914,7 +914,7 @@ async def remove_admin(payload: AdminUserPayload):
 
 @app.get("/api/config")
 async def get_config():
-    return {"timeout": 2000, "sync_interval": 10}
+    return {"timeout": 2000, "sync_interval": 1}
 
 
 @app.post("/api/message")
@@ -1816,22 +1816,42 @@ async def rewrite(payload: RewritePayload, token: None = Depends(verify_token)):
 
 
 @app.post("/api/shop/place")
-async def shop_place(payload: ShopPlacePayload):
+async def shop_place(payload: ShopPlacePayload, token: None = Depends(verify_token)):
     start = time.time()
     result = "ok"
     with transaction() as cur:
-        cur.execute(
-            "INSERT OR IGNORE INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
-            (payload.shop_id, payload.owner_uuid, "active", payload.timestamp, payload.timestamp),
-        )
-        cur.execute(
-            "INSERT OR REPLACE INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
-            (payload.shop_id, payload.world, payload.x, payload.y, payload.z),
-        )
-        cur.execute(
-            "INSERT OR IGNORE INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
-            (payload.shop_id, payload.owner_uuid),
-        )
+        existing = cur.execute(
+            "SELECT 1 FROM shops WHERE shop_id=?",
+            (payload.shop_id,),
+        ).fetchone()
+        if existing:
+            authorized = cur.execute(
+                "SELECT 1 FROM shop_owners WHERE shop_id=? AND owner_uuid=?",
+                (payload.shop_id, payload.owner_uuid),
+            ).fetchone()
+            if not authorized:
+                raise HTTPException(status_code=403, detail="not owner")
+            cur.execute(
+                "UPDATE shop_locations SET world=?, x=?, y=?, z=? WHERE shop_id=?",
+                (payload.world, payload.x, payload.y, payload.z, payload.shop_id),
+            )
+            cur.execute(
+                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                (payload.timestamp, payload.shop_id),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+                (payload.shop_id, payload.owner_uuid, "active", payload.timestamp, payload.timestamp),
+            )
+            cur.execute(
+                "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
+                (payload.shop_id, payload.world, payload.x, payload.y, payload.z),
+            )
+            cur.execute(
+                "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+                (payload.shop_id, payload.owner_uuid),
+            )
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_place",
