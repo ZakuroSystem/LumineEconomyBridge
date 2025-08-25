@@ -18,6 +18,7 @@ import yaml
 import os
 import time
 import shutil
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import threading
 import asyncio
 import secrets
@@ -700,7 +701,12 @@ def format_amount(cur: sqlite3.Cursor, amount: int, currency: str) -> str:
     symbol = ""
     if row and row["symbol"] and row["symbol"] != currency:
         symbol = row["symbol"]
-    return f"§e{symbol}{amount:,}§r"
+    sign = "-" if amount < 0 else ""
+    amt = abs(amount)
+    whole, frac = divmod(amt, 1000)
+    if frac:
+        return f"§e{sign}{symbol}{whole:,}.{frac:03d}§r"
+    return f"§e{sign}{symbol}{whole:,}§r"
 
 
 def is_online(cur: sqlite3.Cursor, uuid: str, now: int) -> bool:
@@ -932,15 +938,17 @@ async def message(payload: MessagePayload):
             if base is None:
                 return None
             try:
-                pct = float(token[:-1])
-            except ValueError:
+                pct = Decimal(token[:-1])
+            except InvalidOperation:
                 return None
-            amt = int(base * pct / 100)
+            amt_dec = (Decimal(base) * pct) / Decimal(100)
         else:
             try:
-                amt = int(token)
-            except ValueError:
+                amt_dec = Decimal(token)
+            except InvalidOperation:
                 return None
+            amt_dec *= 1000
+        amt = int(amt_dec.to_integral_value(rounding=ROUND_HALF_UP))
         if positive_only and amt <= 0:
             return None
         return amt

@@ -33,11 +33,14 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.math.BigDecimal;
+import java.text.DecimalFormat;
 
 public class LeCommandExecutor implements CommandExecutor {
 
     private final LumineEconomyBridge plugin;
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+    private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     public LeCommandExecutor(LumineEconomyBridge plugin) {
@@ -149,8 +152,9 @@ public class LeCommandExecutor implements CommandExecutor {
                                             int limit = Math.min(10, arr.size());
                                             for (int i = 0; i < limit; i++) {
                                                 JsonObject r = arr.get(i).getAsJsonObject();
+                                                int price = r.get("price").getAsInt();
                                                 String msg = ChatColor.GREEN + r.get("item").getAsString() + ChatColor.WHITE +
-                                                        " @ " + ChatColor.YELLOW + r.get("price").getAsInt() + " " +
+                                                        " @ " + ChatColor.YELLOW + formatAmount(price) + " " +
                                                         r.get("currency").getAsString() + ChatColor.WHITE + " - " +
                                                         ChatColor.AQUA + r.get("shop_id").getAsString() + ChatColor.WHITE +
                                                         " (" + r.get("world").getAsString() + " " + r.get("x").getAsInt() +
@@ -212,7 +216,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         int qty;
                         int price;
                         try { qty = Integer.parseInt(args[3]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid quantity / 数量が不正です" + ChatColor.RESET); return true; }
-                        try { price = Integer.parseInt(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid price / 価格が不正です" + ChatColor.RESET); return true; }
+                        try { price = parseAmount(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid price / 価格が不正です" + ChatColor.RESET); return true; }
                         String saleName = String.join(" ", java.util.Arrays.copyOfRange(args,5,args.length));
                         ItemStack hand = p.getInventory().getItemInMainHand();
                         if (hand.getType() == Material.AIR) { p.sendMessage(ChatColor.RED + "Hold item in hand / 手にアイテムを持ってください" + ChatColor.RESET); return true; }
@@ -441,7 +445,8 @@ public class LeCommandExecutor implements CommandExecutor {
                                             int limit = Math.min(10, arr.size());
                                             for (int i = 0; i < limit; i++) {
                                                 JsonObject r = arr.get(i).getAsJsonObject();
-                                                String msg = ChatColor.GREEN + r.get("item").getAsString() + ChatColor.WHITE + " @ " + ChatColor.YELLOW + r.get("price").getAsInt() + " " + r.get("currency").getAsString() + ChatColor.WHITE + " - " + ChatColor.AQUA + r.get("shop_id").getAsString() + ChatColor.WHITE + " (" + r.get("world").getAsString() + " " + r.get("x").getAsInt() + "," + r.get("y").getAsInt() + "," + r.get("z").getAsInt() + ")";
+                                                int price = r.get("price").getAsInt();
+                                                String msg = ChatColor.GREEN + r.get("item").getAsString() + ChatColor.WHITE + " @ " + ChatColor.YELLOW + formatAmount(price) + " " + r.get("currency").getAsString() + ChatColor.WHITE + " - " + ChatColor.AQUA + r.get("shop_id").getAsString() + ChatColor.WHITE + " (" + r.get("world").getAsString() + " " + r.get("x").getAsInt() + "," + r.get("y").getAsInt() + "," + r.get("z").getAsInt() + ")";
                                                 p.sendMessage(msg);
                                             }
                                         }
@@ -556,7 +561,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         for (int i = 4; i < args.length; i += 2) {
                             String currency = args[i];
                             int amount;
-                            try { amount = Integer.parseInt(args[i + 1]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid amount / 無効な金額です" + ChatColor.RESET); return true; }
+                            try { amount = parseAmount(args[i + 1]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid amount / 無効な金額です" + ChatColor.RESET); return true; }
                             Map<String, Object> payload = new HashMap<>();
                             payload.put("owner_uuid", p.getUniqueId().toString());
                             payload.put("shop_id", shopId);
@@ -593,7 +598,7 @@ public class LeCommandExecutor implements CommandExecutor {
                                                                 lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + en.getValue().getSaleName());
                                                                 lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + en.getValue().getStock());
                                                                 for (Map.Entry<String, Integer> pp : en.getValue().getPrices().entrySet()) {
-                                                                    lore.add(ChatColor.GREEN + pp.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + pp.getValue());
+                                                                    lore.add(ChatColor.GREEN + pp.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + formatAmount(pp.getValue()));
                                                                 }
                                                                 meta.setLore(lore);
                                                                 stack.setItemMeta(meta);
@@ -724,6 +729,16 @@ public class LeCommandExecutor implements CommandExecutor {
 
         p.sendActionBar(Lang.get("send-pending"));
         return true;
+    }
+
+    private int parseAmount(String s) throws NumberFormatException {
+        BigDecimal bd = new BigDecimal(s);
+        bd = bd.movePointRight(3);
+        return bd.intValueExact();
+    }
+
+    private String formatAmount(int amount) {
+        return AMT_FMT.format(amount / 1000.0);
     }
 
     private String computeItemKey(ItemStack item) {

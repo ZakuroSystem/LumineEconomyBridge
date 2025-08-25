@@ -45,6 +45,8 @@ import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.UUID;
+import java.math.BigDecimal;
+import java.text.DecimalFormat;
 
 public class ShopListener implements Listener {
     private final LumineEconomyBridge plugin;
@@ -54,6 +56,7 @@ public class ShopListener implements Listener {
     private final NamespacedKey keyId;
     private final NamespacedKey keyOwner;
     private static final long CACHE_MS = 3000;
+    private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
     private final Map<String, CacheEntry> itemCache = new ConcurrentHashMap<>();
     private final Map<UUID, PendingSale> pendingSales = new ConcurrentHashMap<>();
 
@@ -280,8 +283,9 @@ public class ShopListener implements Listener {
                 JsonObject prices = it.getAsJsonObject("prices");
                 Map<String, Integer> priceMap = new HashMap<>();
                 for (var en : prices.entrySet()) {
-                    lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + en.getValue().getAsInt());
-                    priceMap.put(en.getKey(), en.getValue().getAsInt());
+                    int val = en.getValue().getAsInt();
+                    lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + formatAmount(val));
+                    priceMap.put(en.getKey(), val);
                 }
                 meta.setLore(lore);
                 item.setItemMeta(meta);
@@ -301,7 +305,7 @@ public class ShopListener implements Listener {
         lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + si.getSaleName());
         lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + si.getStock());
         for (var en : si.getPrices().entrySet()) {
-            lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + en.getValue());
+            lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + formatAmount(en.getValue()));
         }
         meta.setLore(lore);
         stack.setItemMeta(meta);
@@ -664,7 +668,7 @@ public class ShopListener implements Listener {
         }
         String saleName = parts[0];
         int price;
-        try { price = Integer.parseInt(parts[1]); } catch (NumberFormatException ex) {
+        try { price = parseAmount(parts[1]); } catch (NumberFormatException ex) {
             e.getPlayer().sendMessage(ChatColor.RED + "Cancelled / キャンセルされました" + ChatColor.RESET);
             Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
             return;
@@ -705,7 +709,7 @@ public class ShopListener implements Listener {
                 List<String> lore = new ArrayList<>();
                 lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + saleName);
                 lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + ps.qty);
-                lore.add(ChatColor.GREEN + "Price: " + ChatColor.YELLOW + price);
+                lore.add(ChatColor.GREEN + "Price: " + ChatColor.YELLOW + formatAmount(price));
                 meta.setLore(lore);
                 display.setItemMeta(meta);
                 inv.setItem(slot, display);
@@ -782,5 +786,15 @@ public class ShopListener implements Listener {
             @Override public void onFailure(Call call, IOException ex) { }
             @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
         });
+    }
+
+    private int parseAmount(String s) throws NumberFormatException {
+        BigDecimal bd = new BigDecimal(s);
+        bd = bd.movePointRight(3);
+        return bd.intValueExact();
+    }
+
+    private String formatAmount(int amount) {
+        return AMT_FMT.format(amount / 1000.0);
     }
 }

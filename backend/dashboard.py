@@ -20,6 +20,7 @@ from datetime import datetime
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from typing import Callable, Dict, Iterable, Tuple, Optional, List
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 app = Flask(__name__)
 app.secret_key = "lumineeconomy"
@@ -39,6 +40,14 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def parse_amount_field(value: str) -> int:
+    try:
+        dec = Decimal(value)
+    except (InvalidOperation, ValueError):
+        raise ValueError
+    return int((dec * 1000).to_integral_value(rounding=ROUND_HALF_UP))
 
 
 def init_db() -> None:
@@ -588,9 +597,9 @@ def adjust():
         currency = request.form["currency"].strip()
         action = request.form.get("action", "grant")
         try:
-            amount = int(request.form.get("amount", 0))
+            amount = parse_amount_field(request.form.get("amount", "0"))
         except ValueError:
-            flash("Amount must be an integer")
+            flash("Amount must be a number")
             return redirect(url_for("adjust", uuid=uuid))
         reason = request.form.get("reason", "adjust")
         ts = int(time.time())
@@ -786,7 +795,7 @@ def shop_detail(shop_id: str):
                 item_key = request.form["item_key"]
                 currency = request.form["currency"].strip()
                 try:
-                    price = int(request.form["price"])
+                    price = parse_amount_field(request.form["price"])
                 except ValueError:
                     price = 0
                 cur.execute(
@@ -826,7 +835,7 @@ def shop_detail(shop_id: str):
                     "material": r["material"],
                     "display_name": r["display_name"],
                     "stock": r["stock"],
-                    "prices": {p["currency"]: p["price"] for p in price_rows},
+                    "prices": {p["currency"]: p["price"] / 1000 for p in price_rows},
                 }
             )
         sales = db.execute(
@@ -837,7 +846,10 @@ def shop_detail(shop_id: str):
             """,
             (shop_id,),
         ).fetchall()
-    return render_template("shop_detail.html", shop=shop, items=items, sales=sales)
+    sales_fmt = [
+        {**dict(r), "total_price": r["total_price"] / 1000} for r in sales
+    ]
+    return render_template("shop_detail.html", shop=shop, items=items, sales=sales_fmt)
 
 
 @app.route("/portal")
@@ -965,7 +977,7 @@ def portal_shop(shop_id: str):
                 item_key = request.form["item_key"]
                 currency = request.form["currency"].strip()
                 try:
-                    price = int(request.form["price"])
+                    price = parse_amount_field(request.form["price"])
                 except ValueError:
                     price = 0
                 cur.execute(
@@ -1003,7 +1015,7 @@ def portal_shop(shop_id: str):
                     "material": r["material"],
                     "display_name": r["display_name"],
                     "stock": r["stock"],
-                    "prices": {p["currency"]: p["price"] for p in price_rows},
+                    "prices": {p["currency"]: p["price"] / 1000 for p in price_rows},
                 }
             )
         sales = db.execute(
@@ -1014,6 +1026,7 @@ def portal_shop(shop_id: str):
             """,
             (shop_id,),
         ).fetchall()
+        sales = [{**dict(r), "total_price": r["total_price"] / 1000} for r in sales]
         series = db.execute(
             """
             SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch') AS day, SUM(total_price) total
@@ -1023,7 +1036,7 @@ def portal_shop(shop_id: str):
             (shop_id,),
         ).fetchall()
     labels = [r["day"] for r in series]
-    data = [r["total"] for r in series]
+    data = [r["total"] / 1000 for r in series]
     return render_template(
         "my_shop_detail.html",
         shop=shop,
