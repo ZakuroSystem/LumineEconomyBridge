@@ -11,11 +11,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function resolveWorld(){
     if(!world){
-      const r = await fetch('/tiles/worlds', {headers:{'X-LE-Token': token}});
+      const r = await fetch('/api/tiles/worlds', {headers:{'X-LE-Token': token}});
       const js = await r.json();
       world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
     }
-    tileBase = `/tiles/${encodeURIComponent(world)}`;
+    tileBase = `/api/tiles/${encodeURIComponent(world)}`;
   }
 
   function loadTile(tx, tz){

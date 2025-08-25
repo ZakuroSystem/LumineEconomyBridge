@@ -3187,6 +3187,7 @@ async def mapcolor_resolve(req: Request, token: None = Depends(verify_token)):
 
 
 @app.get("/tiles/worlds")
+@app.get("/api/tiles/worlds")
 def list_worlds(token: None = Depends(verify_token)):
     worlds = set()
     for name in os.listdir(tile_store.base_dir):
@@ -3197,6 +3198,7 @@ def list_worlds(token: None = Depends(verify_token)):
 
 
 @app.api_route("/tiles/{world}/{tx}/{tz}", methods=["GET", "HEAD"])
+@app.api_route("/api/tiles/{world}/{tx}/{tz}", methods=["GET", "HEAD"])
 def get_tile(
     world: str,
     tx: int,
