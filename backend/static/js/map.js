@@ -2,7 +2,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const tokenMeta = document.querySelector('meta[name="le-token"]');
   const token = tokenMeta ? tokenMeta.content : '';
   const apiBaseMeta = document.querySelector('meta[name="api-base"]');
-  const apiBase = apiBaseMeta ? apiBaseMeta.content : '';
+  let apiBase = apiBaseMeta ? apiBaseMeta.content : '';
+  if(apiBase.endsWith('/')) apiBase = apiBase.slice(0,-1);
   const apiUrl = apiBase ? new URL(apiBase, location.href) : null;
   const params = new URLSearchParams(location.search);
   let world = params.get('world');
@@ -15,14 +16,20 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function resolveWorld(){
     if(apiBase){
-      const resp = await fetch(`${apiBase}/tiles/worlds`, {headers: token? {'X-LE-Token': token} : {}});
-      if(!resp.ok) throw new Error('world list fetch failed');
-      if(!world){
-        const js = await resp.json();
-        world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
+      let resp;
+      try {
+        resp = await fetch(`${apiBase}/tiles/worlds`, {headers: token? {'X-LE-Token': token} : {}});
+      } catch {}
+      if(resp && resp.ok){
+        if(!world){
+          const js = await resp.json();
+          world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
+        }
+      } else {
+        world = world || 'world';
       }
-      tileBase = `${apiBase}/tiles/${encodeURIComponent(world)}`;
       tilesPrefix = `${apiBase}/tiles`;
+      tileBase = `${tilesPrefix}/${encodeURIComponent(world)}`;
     } else {
       const prefixes = ['/api/tiles', '/tiles', '/plugin/tiles'];
       let resp;
@@ -31,10 +38,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         catch{ resp = null; }
         if(resp && resp.ok){ tilesPrefix = p; break; }
       }
-      if(!tilesPrefix) throw new Error('world list fetch failed');
-      if(!world){
-        const js = await resp.json();
-        world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
+      if(!tilesPrefix){
+        tilesPrefix = '/tiles';
+        world = world || 'world';
+      } else {
+        if(!world){
+          const js = await resp.json();
+          world = (js.worlds && js.worlds.length) ? js.worlds[0] : 'world';
+        }
       }
       tileBase = `${tilesPrefix}/${encodeURIComponent(world)}`;
     }
