@@ -3209,7 +3209,11 @@ async def mapcolor_resolve(req: Request, token: None = Depends(verify_token_opti
 @app.get("/plugin/tiles/worlds")
 def list_worlds(token: None = Depends(verify_token_optional)):
     worlds = set()
-    for name in os.listdir(tile_store.base_dir):
+    try:
+        names = os.listdir(tile_store.base_dir)
+    except FileNotFoundError:
+        names = []
+    for name in names:
         m = re.match(r"tile_(.+?)_(-?\d+)_(-?\d+)\.tile\.zlib$", name)
         if m:
             worlds.add(m.group(1))

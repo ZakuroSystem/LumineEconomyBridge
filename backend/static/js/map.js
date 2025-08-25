@@ -109,11 +109,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       try{ pResp = await fetch(url, {headers:{'X-LE-Token': token}}); } catch{ pResp=null; }
       if(pResp && pResp.ok) break;
     }
-    if(!pResp || !pResp.ok) throw new Error('palette fetch failed');
-    try{
-      const data = await pResp.json();
-      palette = data.palette;
-    } catch { throw new Error('palette parse failed'); }
+    if(!pResp || !pResp.ok){
+      palette = Array.from({length:64}, (_,i)=>[i*4,i*4,i*4]);
+    }else{
+      try{
+        const data = await pResp.json();
+        palette = data.palette;
+      } catch {
+        palette = Array.from({length:64}, (_,i)=>[i*4,i*4,i*4]);
+      }
+    }
     for(let tx=-4;tx<4;tx++) for(let tz=-4;tz<4;tz++) loadTile(tx,tz);
     const wsHost = apiUrl ? apiUrl.host : location.host;
     const wsScheme = (apiUrl ? apiUrl.protocol : location.protocol) === 'https:' ? 'wss' : 'ws';
