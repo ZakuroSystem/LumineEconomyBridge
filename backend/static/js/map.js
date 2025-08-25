@@ -45,7 +45,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   function loadTile(tx, tz){
     const key = `${tx},${tz}`;
     fetch(`${tileBase}/${tx}/${tz}`, {headers: token? {'X-LE-Token': token} : {}})
-      .then(r => r.arrayBuffer())
+      .then(r => {
+        if(!r.ok) throw new Error();
+        return r.arrayBuffer();
+      })
       .then(buf => {
         if(buf.byteLength < 24) return;
         const payload = new Uint8Array(buf,24);
@@ -63,7 +66,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         tileCache[key]=img;
         drawTile(tx,tz);
-      });
+      })
+      .catch(()=>{});
   }
 
   function drawTile(tx,tz){
@@ -74,18 +78,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function updateCharts(){
     const metricsUrl = apiBase ? `${apiBase}/metrics` : '/metrics';
-    fetch(metricsUrl,{headers:{'X-LE-Token': token}}).then(r=>r.text()).then(t=>{
-      const m=parseMetrics(t);
-      const labels=Object.keys(m), vals=Object.values(m);
-      if(metricsChart){metricsChart.data.labels=labels;metricsChart.data.datasets[0].data=vals;metricsChart.update();}
-      else metricsChart=new Chart(document.getElementById('metricsChart'),{type:'bar',data:{labels:labels,datasets:[{label:'value',data:vals}]}});
-    });
+    fetch(metricsUrl,{headers:{'X-LE-Token': token}})
+      .then(r=>{if(!r.ok) throw new Error(); return r.text();})
+      .then(t=>{
+        const m=parseMetrics(t);
+        const labels=Object.keys(m), vals=Object.values(m);
+        if(metricsChart){metricsChart.data.labels=labels;metricsChart.data.datasets[0].data=vals;metricsChart.update();}
+        else metricsChart=new Chart(document.getElementById('metricsChart'),{type:'bar',data:{labels:labels,datasets:[{label:'value',data:vals}]}});
+      })
+      .catch(()=>{});
     const logsUrl = apiBase ? `${apiBase}/logs/summary` : '/logs/summary';
-    fetch(logsUrl,{headers:{'X-LE-Token': token}}).then(r=>r.json()).then(sum=>{
-      const labels=Object.keys(sum); const counts=labels.map(k=>sum[k].count);
-      if(logChart){logChart.data.labels=labels;logChart.data.datasets[0].data=counts;logChart.update();}
-      else logChart=new Chart(document.getElementById('logChart'),{type:'bar',data:{labels:labels,datasets:[{label:'count',data:counts}]}});
-    });
+    fetch(logsUrl,{headers:{'X-LE-Token': token}})
+      .then(r=>{if(!r.ok) throw new Error(); return r.json();})
+      .then(sum=>{
+        const labels=Object.keys(sum); const counts=labels.map(k=>sum[k].count);
+        if(logChart){logChart.data.labels=labels;logChart.data.datasets[0].data=counts;logChart.update();}
+        else logChart=new Chart(document.getElementById('logChart'),{type:'bar',data:{labels:labels,datasets:[{label:'count',data:counts}]}});
+      })
+      .catch(()=>{});
   }
 
   function parseMetrics(text){
