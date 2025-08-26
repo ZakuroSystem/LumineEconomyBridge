@@ -11,12 +11,20 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import com.grapelemon.lumineeconomybridge.shop.ShopListener;
+import com.grapelemon.lumineeconomybridge.cash.PaperCurrencyService;
+import com.grapelemon.lumineeconomybridge.cash.PaperNoteListener;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -26,28 +34,30 @@ public class LumineEconomyBridge extends JavaPlugin {
     private static LumineEconomyBridge instance;
     private OkHttpClient httpClient;
     private ScoreboardSyncService syncService;
-    private BukkitTask syncTask;
+    private BukkitTask settleTask;
     private BukkitTask retryTask;
     private LeCommandExecutor executor;
 
     private String baseUrl;
     private int timeout = 2000;
-    private long syncInterval = 10L;
 
     private MapColorService mapColorService;
     private SnapshotService snapshotService;
     private TileDebounceManager tileDebounceManager;
 
     private final Map<String, Long> grantTokens = new ConcurrentHashMap<>();
+    private Map<String, Boolean> commandPermissions = new HashMap<>();
+    private PaperCurrencyService cashService;
 
     @Override
     public void onEnable() {
         instance = this;
         saveDefaultConfig();
         Lang.load(this);
+        saveResource("permission_confg.txt", false);
+        loadPermissions();
         baseUrl = getConfig().getString("api.base_url", "http://127.0.0.1:8000");
         timeout = getConfig().getInt("api.timeout", timeout);
-        syncInterval = getConfig().getLong("sync.interval", syncInterval);
 
         executor = new LeCommandExecutor(this);
         getCommand("le").setExecutor(executor);
@@ -88,7 +98,6 @@ public class LumineEconomyBridge extends JavaPlugin {
             String body = res.body() != null ? res.body().string() : "{}";
             JsonObject cfg = JsonParser.parseString(body).getAsJsonObject();
             timeout = cfg.has("timeout") ? cfg.get("timeout").getAsInt() : timeout;
-            syncInterval = cfg.has("sync_interval") ? cfg.get("sync_interval").getAsLong() : syncInterval;
 
             httpClient = new OkHttpClient.Builder()
                     .connectTimeout(timeout, TimeUnit.MILLISECONDS)
@@ -96,13 +105,21 @@ public class LumineEconomyBridge extends JavaPlugin {
                     .writeTimeout(timeout, TimeUnit.MILLISECONDS)
                     .build();
             syncService = new ScoreboardSyncService(httpClient, baseUrl, this);
+            cashService = new PaperCurrencyService(this, httpClient, baseUrl);
+            getServer().getPluginManager().registerEvents(new PaperNoteListener(cashService), this);
 
             for (Player p : Bukkit.getOnlinePlayers()) {
                 syncService.seed(p);
             }
-            long period = syncInterval * 20L;
-            syncTask = Bukkit.getScheduler().runTaskTimerAsynchronously(this, () -> syncService.tickAll(), period, period);
-            Bukkit.getScheduler().runTaskAsynchronously(this, () -> syncService.rewriteAll());
+            long settlePeriod = 20L * 20L;
+            settleTask = Bukkit.getScheduler().runTaskTimer(this, () -> {
+                syncService.flushAll();
+                cashService.flushAll();
+            }, settlePeriod, settlePeriod);
+            Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+                syncService.rewriteAll();
+                cashService.flushAll();
+            });
 
             getLogger().info("LumineEconomyBridge started. Endpoint = " + baseUrl);
             return true;
@@ -114,7 +131,7 @@ public class LumineEconomyBridge extends JavaPlugin {
 
     public void stopBridge() {
         if (retryTask != null) { retryTask.cancel(); retryTask = null; }
-        if (syncTask != null) { syncTask.cancel(); syncTask = null; }
+        if (settleTask != null) { settleTask.cancel(); settleTask = null; }
         syncService = null;
         httpClient = null;
         getLogger().info("LumineEconomyBridge stopped.");
@@ -157,8 +174,8 @@ public class LumineEconomyBridge extends JavaPlugin {
         reloadConfig();
         baseUrl = getConfig().getString("api.base_url", baseUrl);
         timeout = getConfig().getInt("api.timeout", timeout);
-        syncInterval = getConfig().getLong("sync.interval", syncInterval);
         Lang.load(this);
+        loadPermissions();
         stopBridge();
         startBridge();
     }
@@ -168,6 +185,8 @@ public class LumineEconomyBridge extends JavaPlugin {
     public OkHttpClient getHttpClient() { return httpClient; }
 
     public ScoreboardSyncService getSyncService() { return syncService; }
+
+    public PaperCurrencyService getCashService() { return cashService; }
 
     public String getBaseUrl() { return baseUrl; }
 
@@ -179,5 +198,27 @@ public class LumineEconomyBridge extends JavaPlugin {
         if (grantTokens.containsKey(token)) return false;
         grantTokens.put(token, now + 30000);
         return true;
+    }
+
+    public void loadPermissions() {
+        File file = new File(getDataFolder(), "permission_confg.txt");
+        commandPermissions.clear();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty() || line.startsWith("#")) continue;
+                String[] parts = line.split("=", 2);
+                if (parts.length == 2) {
+                    commandPermissions.put(parts[0].toLowerCase(), parts[1].equalsIgnoreCase("admin"));
+                }
+            }
+        } catch (IOException e) {
+            getLogger().warning("Failed to load permission config: " + e.getMessage());
+        }
+    }
+
+    public boolean requiresAdmin(String cmd) {
+        return commandPermissions.getOrDefault(cmd.toLowerCase(), true);
     }
 }

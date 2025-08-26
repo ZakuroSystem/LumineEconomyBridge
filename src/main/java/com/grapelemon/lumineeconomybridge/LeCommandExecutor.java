@@ -2,6 +2,7 @@ package com.grapelemon.lumineeconomybridge;
 
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import okhttp3.*;
@@ -32,12 +33,15 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.math.BigDecimal;
+import java.text.DecimalFormat;
 
 public class LeCommandExecutor implements CommandExecutor {
 
     private final LumineEconomyBridge plugin;
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-    private final Gson gson = new Gson();
+    private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     public LeCommandExecutor(LumineEconomyBridge plugin) {
         this.plugin = plugin;
@@ -47,6 +51,13 @@ public class LeCommandExecutor implements CommandExecutor {
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         if (!(sender instanceof Player p)) {
             sender.sendMessage(Lang.get("player-only"));
+            return true;
+        }
+
+        String sub = args.length > 0 ? args[0].toLowerCase() : "";
+        if (plugin.requiresAdmin(sub) && !p.hasPermission("lumineeconomy.admin")
+                && !sub.equalsIgnoreCase("money") && !sub.equalsIgnoreCase("currency")) {
+            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
             return true;
         }
 
@@ -76,12 +87,144 @@ public class LeCommandExecutor implements CommandExecutor {
                     p.sendMessage(Lang.get("bridge-reloaded"));
                     return true;
                 }
+                case "admin" -> {
+                    if (!plugin.isActive() || plugin.getHttpClient() == null) {
+                        p.sendMessage(Lang.get("error-unavailable"));
+                        return true;
+                    }
+                    if (args.length >= 3 && args[1].equalsIgnoreCase("add")) {
+                        String target = args[2];
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("name", target);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/admin/add")
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Add admin failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (response.isSuccessful()) {
+                                            p.sendMessage(ChatColor.GREEN + "Admin added" + ChatColor.RESET);
+                                        } else {
+                                            p.sendMessage(ChatColor.RED + "Failed" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else {
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le admin add <player>" + ChatColor.RESET);
+                    }
+                    return true;
+                }
+                case "search" -> {
+                    if (!plugin.isActive() || plugin.getHttpClient() == null) {
+                        p.sendMessage(Lang.get("error-unavailable"));
+                        return true;
+                    }
+                    if (args.length >= 2) {
+                        String item = args[1];
+                        HttpUrl.Builder url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shops/search").newBuilder();
+                        url.addQueryParameter("item", item);
+                        if (args.length >= 3) url.addQueryParameter("currency", args[2]);
+                        if (args.length >= 4) url.addQueryParameter("min_price", args[3]);
+                        if (args.length >= 5) url.addQueryParameter("max_price", args[4]);
+                        Request req = new Request.Builder().url(url.build()).get().build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Search failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "[]";
+                                    var arr = JsonParser.parseString(body).getAsJsonArray();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (arr.size() == 0) {
+                                            p.sendMessage(ChatColor.YELLOW + "No results / 該当なし" + ChatColor.RESET);
+                                        } else {
+                                            int limit = Math.min(10, arr.size());
+                                            for (int i = 0; i < limit; i++) {
+                                                JsonObject r = arr.get(i).getAsJsonObject();
+                                                int price = r.get("price").getAsInt();
+                                                String msg = ChatColor.GREEN + r.get("item").getAsString() + ChatColor.WHITE +
+                                                        " @ " + ChatColor.YELLOW + formatAmount(price) + " " +
+                                                        r.get("currency").getAsString() + ChatColor.WHITE + " - " +
+                                                        ChatColor.AQUA + r.get("shop_id").getAsString() + ChatColor.WHITE +
+                                                        " (" + r.get("world").getAsString() + " " + r.get("x").getAsInt() +
+                                                        "," + r.get("y").getAsInt() + "," + r.get("z").getAsInt() + ")";
+                                                p.sendMessage(msg);
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else {
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le search <item> [currency] [min] [max]" + ChatColor.RESET);
+                    }
+                    return true;
+                }
+                case "cash" -> {
+                    if (!plugin.isActive() || plugin.getCashService() == null) {
+                        p.sendMessage(Lang.get("error-unavailable"));
+                        return true;
+                    }
+                    if (args.length >= 3 && args[1].equalsIgnoreCase("issue")) {
+                        int amt;
+                        try {
+                            amt = parseAmount(args[2]);
+                        } catch (NumberFormatException ex) {
+                            p.sendMessage(ChatColor.RED + "Invalid amount" + ChatColor.RESET);
+                            return true;
+                        }
+                        String currency = args.length >= 4 ? args[3] : "thy";
+                        ItemStack note = plugin.getCashService().issue(p, currency, amt);
+                        p.getInventory().addItem(note);
+                        p.sendMessage(ChatColor.GREEN + "Issued note" + ChatColor.RESET);
+                    } else {
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le cash issue <amount> [currency]" + ChatColor.RESET);
+                    }
+                    return true;
+                }
                 case "shop" -> {
                     if (!plugin.isActive() || plugin.getHttpClient() == null) {
                         p.sendMessage(Lang.get("error-unavailable"));
                         return true;
                     }
-                    if (args.length >= 2 && args[1].equalsIgnoreCase("help")) {
+                    if (args.length == 1) {
+                        String shopId = p.getName().toLowerCase() + "_" + Long.toHexString(System.currentTimeMillis());
+                        ItemStack barrel = new ItemStack(Material.BARREL);
+                        ItemMeta meta = barrel.getItemMeta();
+                        PersistentDataContainer c = meta.getPersistentDataContainer();
+                        NamespacedKey keyShop = new NamespacedKey(plugin, "le_shop");
+                        NamespacedKey keyId = new NamespacedKey(plugin, "shop_id");
+                        NamespacedKey keyOwner = new NamespacedKey(plugin, "owner_uuid");
+                        c.set(keyShop, PersistentDataType.BYTE, (byte)1);
+                        c.set(keyId, PersistentDataType.STRING, shopId);
+                        c.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
+                        if (meta instanceof BlockStateMeta bsm) {
+                            BlockState state = bsm.getBlockState();
+                            if (state instanceof TileState tile) {
+                                PersistentDataContainer tc = tile.getPersistentDataContainer();
+                                tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
+                                tc.set(keyId, PersistentDataType.STRING, shopId);
+                                tc.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
+                                tile.update(true);
+                                bsm.setBlockState(tile);
+                            }
+                        }
+                        barrel.setItemMeta(meta);
+                        p.getInventory().addItem(barrel);
+                        args = new String[]{"shop", "quick", shopId};
+                    } else if (args.length >= 2 && args[1].equalsIgnoreCase("help")) {
                         p.sendMessage(ChatColor.GREEN + "/le shop create " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Create a shop barrel / ショップ樽を作成");
                         p.sendMessage(ChatColor.GREEN + "/le shop add " + ChatColor.YELLOW + "<id> <qty> <price> <name> " + ChatColor.GRAY + "- Deposit item / 在庫追加");
                         p.sendMessage(ChatColor.GREEN + "/le shop take " + ChatColor.YELLOW + "<id> <item> <qty> " + ChatColor.GRAY + "- Withdraw stock / 在庫回収");
@@ -91,6 +234,9 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop reopen " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Reopen suspended shop / 再開");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner add " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Add co-owner / 共同オーナー追加");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner remove " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Remove co-owner / 共同オーナー削除");
+                        p.sendMessage(ChatColor.GREEN + "/le shop publish " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- List shop / 掲載");
+                        p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
+                        p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
                         String shopId = args[2];
                         ItemStack barrel = new ItemStack(Material.BARREL);
@@ -98,27 +244,30 @@ public class LeCommandExecutor implements CommandExecutor {
                         PersistentDataContainer c = meta.getPersistentDataContainer();
                         NamespacedKey keyShop = new NamespacedKey(plugin, "le_shop");
                         NamespacedKey keyId = new NamespacedKey(plugin, "shop_id");
+                        NamespacedKey keyOwner = new NamespacedKey(plugin, "owner_uuid");
                         c.set(keyShop, PersistentDataType.BYTE, (byte)1);
                         c.set(keyId, PersistentDataType.STRING, shopId);
+                        c.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
                         if (meta instanceof BlockStateMeta bsm) {
                             BlockState state = bsm.getBlockState();
                             if (state instanceof TileState tile) {
                                 PersistentDataContainer tc = tile.getPersistentDataContainer();
                                 tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
                                 tc.set(keyId, PersistentDataType.STRING, shopId);
+                                tc.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
                                 tile.update(true);
                                 bsm.setBlockState(tile);
                             }
                         }
                         barrel.setItemMeta(meta);
                         p.getInventory().addItem(barrel);
-                        p.sendMessage(ChatColor.GREEN + "Shop barrel created: " + ChatColor.YELLOW + shopId + ChatColor.GREEN + " / ショップ樽を作成しました" + ChatColor.RESET);
+                        args = new String[]{"shop", "quick", shopId};
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
                         int qty;
                         int price;
                         try { qty = Integer.parseInt(args[3]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid quantity / 数量が不正です" + ChatColor.RESET); return true; }
-                        try { price = Integer.parseInt(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid price / 価格が不正です" + ChatColor.RESET); return true; }
+                        try { price = parseAmount(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid price / 価格が不正です" + ChatColor.RESET); return true; }
                         String saleName = String.join(" ", java.util.Arrays.copyOfRange(args,5,args.length));
                         ItemStack hand = p.getInventory().getItemInMainHand();
                         if (hand.getType() == Material.AIR) { p.sendMessage(ChatColor.RED + "Hold item in hand / 手にアイテムを持ってください" + ChatColor.RESET); return true; }
@@ -265,6 +414,97 @@ public class LeCommandExecutor implements CommandExecutor {
                                 }
                             }
                         });
+                    } else if (args.length >= 3 && args[1].equalsIgnoreCase("publish")) {
+                        String shopId = args[2];
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        payload.put("listed", true);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/listing")
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Listing failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equals(res.get("status").getAsString())) {
+                                            p.sendMessage(ChatColor.GREEN + "Shop listed / 掲載しました" + ChatColor.RESET);
+                                        } else {
+                                            p.sendMessage(ChatColor.RED + "Failed / 失敗しました" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else if (args.length >= 3 && args[1].equalsIgnoreCase("hide")) {
+                        String shopId = args[2];
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        payload.put("listed", false);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/listing")
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Listing failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equals(res.get("status").getAsString())) {
+                                            p.sendMessage(ChatColor.GREEN + "Shop hidden / 非掲載にしました" + ChatColor.RESET);
+                                        } else {
+                                            p.sendMessage(ChatColor.RED + "Failed / 失敗しました" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else if (args.length >= 3 && args[1].equalsIgnoreCase("search")) {
+                        String item = args[2];
+                        HttpUrl.Builder url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shops/search").newBuilder();
+                        url.addQueryParameter("item", item);
+                        if (args.length >= 4) url.addQueryParameter("currency", args[3]);
+                        if (args.length >= 5) url.addQueryParameter("min_price", args[4]);
+                        if (args.length >= 6) url.addQueryParameter("max_price", args[5]);
+                        Request req = new Request.Builder().url(url.build()).get().build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Search failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "[]";
+                                    var arr = JsonParser.parseString(body).getAsJsonArray();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (arr.size() == 0) {
+                                            p.sendMessage(ChatColor.YELLOW + "No results / 該当なし" + ChatColor.RESET);
+                                        } else {
+                                            int limit = Math.min(10, arr.size());
+                                            for (int i = 0; i < limit; i++) {
+                                                JsonObject r = arr.get(i).getAsJsonObject();
+                                                int price = r.get("price").getAsInt();
+                                                String msg = ChatColor.GREEN + r.get("item").getAsString() + ChatColor.WHITE + " @ " + ChatColor.YELLOW + formatAmount(price) + " " + r.get("currency").getAsString() + ChatColor.WHITE + " - " + ChatColor.AQUA + r.get("shop_id").getAsString() + ChatColor.WHITE + " (" + r.get("world").getAsString() + " " + r.get("x").getAsInt() + "," + r.get("y").getAsInt() + "," + r.get("z").getAsInt() + ")";
+                                                p.sendMessage(msg);
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        });
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("remove")) {
                         String shopId = args[2];
                         if (args.length >= 4 && !args[3].equalsIgnoreCase("refund")) {
@@ -372,7 +612,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         for (int i = 4; i < args.length; i += 2) {
                             String currency = args[i];
                             int amount;
-                            try { amount = Integer.parseInt(args[i + 1]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid amount / 無効な金額です" + ChatColor.RESET); return true; }
+                            try { amount = parseAmount(args[i + 1]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid amount / 無効な金額です" + ChatColor.RESET); return true; }
                             Map<String, Object> payload = new HashMap<>();
                             payload.put("owner_uuid", p.getUniqueId().toString());
                             payload.put("shop_id", shopId);
@@ -409,7 +649,7 @@ public class LeCommandExecutor implements CommandExecutor {
                                                                 lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + en.getValue().getSaleName());
                                                                 lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + en.getValue().getStock());
                                                                 for (Map.Entry<String, Integer> pp : en.getValue().getPrices().entrySet()) {
-                                                                    lore.add(ChatColor.GREEN + pp.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + pp.getValue());
+                                                                    lore.add(ChatColor.GREEN + pp.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + formatAmount(pp.getValue()));
                                                                 }
                                                                 meta.setLore(lore);
                                                                 stack.setItemMeta(meta);
@@ -447,7 +687,7 @@ public class LeCommandExecutor implements CommandExecutor {
         OkHttpClient http = plugin.getHttpClient();
         String baseUrl = plugin.getBaseUrl();
 
-        sync.seed(p); // 安全に初期化
+        sync.sendDelta(p); // avoid resetting scoreboard
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("player", p.getUniqueId().toString());
@@ -540,6 +780,16 @@ public class LeCommandExecutor implements CommandExecutor {
 
         p.sendActionBar(Lang.get("send-pending"));
         return true;
+    }
+
+    private int parseAmount(String s) throws NumberFormatException {
+        BigDecimal bd = new BigDecimal(s);
+        bd = bd.movePointRight(3);
+        return bd.intValueExact();
+    }
+
+    private String formatAmount(int amount) {
+        return AMT_FMT.format(amount / 1000.0);
     }
 
     private String computeItemKey(ItemStack item) {

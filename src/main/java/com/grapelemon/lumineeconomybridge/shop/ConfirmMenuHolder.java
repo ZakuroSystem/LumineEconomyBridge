@@ -8,12 +8,14 @@ public class ConfirmMenuHolder implements InventoryHolder {
     private final ShopItem item;
     private final ShopMenuHolder origin;
     private final int slot;
+    private final boolean selling;
 
-    public ConfirmMenuHolder(String shopId, ShopMenuHolder origin, int slot, ShopItem item) {
+    public ConfirmMenuHolder(String shopId, ShopMenuHolder origin, int slot, ShopItem item, boolean selling) {
         this.shopId = shopId;
         this.origin = origin;
         this.slot = slot;
         this.item = item;
+        this.selling = selling;
     }
 
     public String getShopId() {
@@ -30,6 +32,10 @@ public class ConfirmMenuHolder implements InventoryHolder {
 
     public int getSlot() {
         return slot;
+    }
+
+    public boolean isSelling() {
+        return selling;
     }
 
     @Override

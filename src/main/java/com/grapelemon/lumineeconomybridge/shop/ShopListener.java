@@ -4,6 +4,7 @@ import com.grapelemon.lumineeconomybridge.Lang;
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import okhttp3.*;
@@ -24,6 +25,7 @@ import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -43,15 +45,18 @@ import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.UUID;
+import java.math.BigDecimal;
+import java.text.DecimalFormat;
 
 public class ShopListener implements Listener {
     private final LumineEconomyBridge plugin;
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     private final NamespacedKey keyShop;
     private final NamespacedKey keyId;
     private final NamespacedKey keyOwner;
     private static final long CACHE_MS = 3000;
+    private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
     private final Map<String, CacheEntry> itemCache = new ConcurrentHashMap<>();
     private final Map<UUID, PendingSale> pendingSales = new ConcurrentHashMap<>();
 
@@ -116,20 +121,29 @@ public class ShopListener implements Listener {
         if (meta == null) return;
         PersistentDataContainer c = meta.getPersistentDataContainer();
         if (!c.has(keyShop, PersistentDataType.BYTE)) return;
+        String expected = c.get(keyOwner, PersistentDataType.STRING);
+        String placer = e.getPlayer().getUniqueId().toString();
+        if (expected != null && !placer.equals(expected)) {
+            e.setCancelled(true);
+            e.getPlayer().sendMessage(ChatColor.RED + "You are not the owner / あなたはオーナーではありません" + ChatColor.RESET);
+            return;
+        }
         String shopId = c.get(keyId, PersistentDataType.STRING);
+        String owner = expected != null ? expected : placer;
         BlockState state = e.getBlockPlaced().getState();
         if (state instanceof TileState tile) {
             PersistentDataContainer tc = tile.getPersistentDataContainer();
             tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
             if (shopId != null) tc.set(keyId, PersistentDataType.STRING, shopId);
-            tc.set(keyOwner, PersistentDataType.STRING, e.getPlayer().getUniqueId().toString());
+            tc.set(keyOwner, PersistentDataType.STRING, owner);
             tile.update(true);
         }
         OkHttpClient http = plugin.getHttpClient();
         if (http == null) return;
         Map<String, Object> payload = new HashMap<>();
         payload.put("shop_id", shopId);
-        payload.put("owner_uuid", e.getPlayer().getUniqueId().toString());
+        payload.put("owner_uuid", owner);
+        payload.put("placer_uuid", placer);
         Location loc = e.getBlockPlaced().getLocation();
         payload.put("world", loc.getWorld().getName());
         payload.put("x", loc.getBlockX());
@@ -138,6 +152,7 @@ public class ShopListener implements Listener {
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         Request req = new Request.Builder()
                 .url(plugin.getBaseUrl() + "/api/shop/place")
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
         http.newCall(req).enqueue(new Callback() {
@@ -196,7 +211,7 @@ public class ShopListener implements Listener {
                         long last = obj.has("last_activity_at") ? obj.get("last_activity_at").getAsLong() : 0L;
                         String date = Instant.ofEpochSecond(last).toString();
                         Bukkit.getScheduler().runTask(plugin, () -> {
-                            Inventory inv = Bukkit.createInventory(null, 9, "Shop " + shopId);
+                            Inventory inv = Bukkit.createInventory(new ClosedMenuHolder(), 9, "Shop " + shopId);
                             ItemStack barrier = new ItemStack(Material.BARRIER);
                             ItemMeta bm = barrier.getItemMeta();
                             bm.setDisplayName("Closed");
@@ -277,8 +292,9 @@ public class ShopListener implements Listener {
                 JsonObject prices = it.getAsJsonObject("prices");
                 Map<String, Integer> priceMap = new HashMap<>();
                 for (var en : prices.entrySet()) {
-                    lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + en.getValue().getAsInt());
-                    priceMap.put(en.getKey(), en.getValue().getAsInt());
+                    int val = en.getValue().getAsInt();
+                    lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + formatAmount(val));
+                    priceMap.put(en.getKey(), val);
                 }
                 meta.setLore(lore);
                 item.setItemMeta(meta);
@@ -298,7 +314,7 @@ public class ShopListener implements Listener {
         lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + si.getSaleName());
         lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + si.getStock());
         for (var en : si.getPrices().entrySet()) {
-            lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + en.getValue());
+            lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + formatAmount(en.getValue()));
         }
         meta.setLore(lore);
         stack.setItemMeta(meta);
@@ -306,17 +322,26 @@ public class ShopListener implements Listener {
 
     @EventHandler
     public void onClick(InventoryClickEvent e) {
-        if (e.getInventory().getHolder() instanceof ConfirmMenuHolder ch) {
+        var holderObj = e.getInventory().getHolder();
+        if (holderObj instanceof ConfirmMenuHolder ch) {
             e.setCancelled(true);
             Player p = (Player) e.getWhoClicked();
             if (e.getSlot() == 2) {
-                handlePurchase(p, ch);
+                if (ch.isSelling()) {
+                    handleSell(p, ch);
+                } else {
+                    handlePurchase(p, ch);
+                }
             } else if (e.getSlot() == 6) {
                 p.openInventory(ch.getOrigin().getInventory());
             }
             return;
         }
-        if (!(e.getInventory().getHolder() instanceof ShopMenuHolder holder)) return;
+        if (holderObj instanceof ClosedMenuHolder) {
+            e.setCancelled(true);
+            return;
+        }
+        if (!(holderObj instanceof ShopMenuHolder holder)) return;
         Player p = (Player) e.getWhoClicked();
         boolean isOwner = holder.isOwner(p.getUniqueId().toString());
         if (e.getClickedInventory() == p.getInventory() && e.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY) {
@@ -326,7 +351,7 @@ public class ShopListener implements Listener {
             if (isOwner) {
                 handleOwnerDeposit(p, holder, stack);
             } else {
-                p.sendMessage(ChatColor.RED + "This item cannot be sold here / このアイテムはここでは売れません" + ChatColor.RESET);
+                handlePlayerSell(p, holder, stack);
             }
             return;
         }
@@ -429,7 +454,7 @@ public class ShopListener implements Listener {
     }
 
     private void openConfirm(Player p, ShopMenuHolder holder, int slot, ShopItem si) {
-        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(holder.getShopId(), holder, slot, si), 9, "Confirm");
+        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(holder.getShopId(), holder, slot, si, false), 9, "Confirm");
         inv.setItem(4, si.getRawItem());
         ItemStack ok = new ItemStack(Material.GREEN_STAINED_GLASS_PANE);
         ItemMeta om = ok.getItemMeta();
@@ -442,6 +467,90 @@ public class ShopListener implements Listener {
         cancel.setItemMeta(cm);
         inv.setItem(6, cancel);
         p.openInventory(inv);
+    }
+
+    private void openSellConfirm(Player p, ShopMenuHolder holder, int slot, ShopItem si) {
+        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(holder.getShopId(), holder, slot, si, true), 9, "Confirm");
+        inv.setItem(4, si.getRawItem());
+        ItemStack ok = new ItemStack(Material.GREEN_STAINED_GLASS_PANE);
+        ItemMeta om = ok.getItemMeta();
+        om.setDisplayName(ChatColor.GREEN + "Sell");
+        ok.setItemMeta(om);
+        inv.setItem(2, ok);
+        ItemStack cancel = new ItemStack(Material.RED_STAINED_GLASS_PANE);
+        ItemMeta cm = cancel.getItemMeta();
+        cm.setDisplayName(ChatColor.RED + "Cancel");
+        cancel.setItemMeta(cm);
+        inv.setItem(6, cancel);
+        p.openInventory(inv);
+    }
+
+    private void handlePlayerSell(Player p, ShopMenuHolder holder, ItemStack stack) {
+        String blob = itemToBase64(stack);
+        String key = sha256(Base64.getDecoder().decode(blob));
+        for (var en : holder.getItems().entrySet()) {
+            if (en.getValue().getItemKey().equals(key)) {
+                openSellConfirm(p, holder, en.getKey(), en.getValue());
+                return;
+            }
+        }
+        p.sendMessage(ChatColor.RED + "This item cannot be sold here / このアイテムはここでは売れません" + ChatColor.RESET);
+    }
+
+    private void handleSell(Player p, ConfirmMenuHolder ch) {
+        ShopItem si = ch.getItem();
+        String currency = si.getPrices().keySet().stream().findFirst().orElse(null);
+        if (currency == null) return;
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("player_uuid", p.getUniqueId().toString());
+        payload.put("shop_id", ch.getShopId());
+        payload.put("item_key", si.getItemKey());
+        payload.put("qty", 1);
+        payload.put("currency", currency);
+        payload.put("timestamp", System.currentTimeMillis() / 1000);
+        payload.put("client_tx_id", UUID.randomUUID().toString());
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/sell")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        ItemStack remove = si.getRawItem().clone();
+        remove.setAmount(1);
+        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException ex) {
+                plugin.getLogger().warning("Sell failed: " + ex.getMessage());
+                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+            }
+
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    String body = response.body() != null ? response.body().string() : "{}";
+                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (res.has("messages")) {
+                            res.getAsJsonArray("messages").forEach(m -> {
+                                JsonObject msg = m.getAsJsonObject();
+                                String text = msg.has("text") ? ChatColor.translateAlternateColorCodes('&', msg.get("text").getAsString()) : "";
+                                Player recv = p;
+                                if (msg.has("player")) {
+                                    try {
+                                        UUID id = UUID.fromString(msg.get("player").getAsString());
+                                        Player other = Bukkit.getPlayer(id);
+                                        if (other != null) recv = other; else return;
+                                    } catch (IllegalArgumentException ignored) { return; }
+                                }
+                                recv.sendMessage(text);
+                            });
+                        }
+                        if ("success".equals(res.get("status").getAsString())) {
+                            p.getInventory().removeItem(remove);
+                            si.setStock(si.getStock() + 1);
+                            refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
+                            p.openInventory(ch.getOrigin().getInventory());
+                        }
+                    });
+                }
+            }
+        });
     }
 
 
@@ -484,10 +593,12 @@ public class ShopListener implements Listener {
                 @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
             });
         } else {
-            ItemStack refund = stack.clone();
-            int qty = stack.getAmount();
-            stack.setAmount(0);
-            PendingSale pending = new PendingSale(holder.getShopId(), blob, refund, qty, System.currentTimeMillis() + 20000, holder);
+            ItemStack single = stack.clone();
+            single.setAmount(1);
+            int qty = 1;
+            int remain = stack.getAmount() - 1;
+            stack.setAmount(Math.max(remain, 0));
+            PendingSale pending = new PendingSale(holder.getShopId(), blob, single, qty, System.currentTimeMillis() + 20000, holder);
             pendingSales.put(p.getUniqueId(), pending);
             p.sendMessage(ChatColor.YELLOW + "Enter sale name and price (e.g. apple 100) / 販売名と金額を入力してください (例: apple 100)" + ChatColor.RESET);
             Bukkit.getScheduler().runTaskLater(plugin, () -> {
@@ -498,6 +609,13 @@ public class ShopListener implements Listener {
                     p.getInventory().addItem(ps.item);
                 }
             }, 20 * 20);
+        }
+    }
+
+    @EventHandler
+    public void onDrag(InventoryDragEvent e) {
+        if (e.getInventory().getHolder() instanceof ClosedMenuHolder) {
+            e.setCancelled(true);
         }
     }
 
@@ -559,7 +677,7 @@ public class ShopListener implements Listener {
         }
         String saleName = parts[0];
         int price;
-        try { price = Integer.parseInt(parts[1]); } catch (NumberFormatException ex) {
+        try { price = parseAmount(parts[1]); } catch (NumberFormatException ex) {
             e.getPlayer().sendMessage(ChatColor.RED + "Cancelled / キャンセルされました" + ChatColor.RESET);
             Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
             return;
@@ -600,7 +718,7 @@ public class ShopListener implements Listener {
                 List<String> lore = new ArrayList<>();
                 lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + saleName);
                 lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + ps.qty);
-                lore.add(ChatColor.GREEN + "Price: " + ChatColor.YELLOW + price);
+                lore.add(ChatColor.GREEN + "Price: " + ChatColor.YELLOW + formatAmount(price));
                 meta.setLore(lore);
                 display.setItemMeta(meta);
                 inv.setItem(slot, display);
@@ -677,5 +795,15 @@ public class ShopListener implements Listener {
             @Override public void onFailure(Call call, IOException ex) { }
             @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
         });
+    }
+
+    private int parseAmount(String s) throws NumberFormatException {
+        BigDecimal bd = new BigDecimal(s);
+        bd = bd.movePointRight(3);
+        return bd.intValueExact();
+    }
+
+    private String formatAmount(int amount) {
+        return AMT_FMT.format(amount / 1000.0);
     }
 }

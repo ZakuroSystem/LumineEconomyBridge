@@ -14,12 +14,15 @@ import sqlite3
 import time
 import os
 import json
+import yaml
 import shutil
 import requests
-import secrets
+from urllib.parse import urlparse
 from datetime import datetime
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
+from typing import Callable, Dict, Iterable, Tuple, Optional, List
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 app = Flask(__name__)
 app.secret_key = "lumineeconomy"
@@ -33,12 +36,49 @@ LOG_PATH = "economy_commands.log"
 BACKUP_DIR = "backups"
 os.makedirs(BACKUP_DIR, exist_ok=True)
 API_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
+# Base URL of the FastAPI backend.  Leave empty to use the dashboard's
+# own origin; set LE_API_BASE when the API is hosted elsewhere.
+API_BASE = os.environ.get("LE_API_BASE", "").rstrip("/")
+_parsed = urlparse(API_BASE) if API_BASE else None
+API_ORIGIN = (
+    f"{_parsed.scheme}://{_parsed.netloc}" if _parsed and _parsed.scheme and _parsed.netloc else ""
+)
+
+with open("lang.yml", encoding="utf-8") as f:
+    LANG = yaml.safe_load(f)
+
+
+def wt(key: str) -> str:
+    lang = session.get("ui_lang", "en")
+    data = LANG.get(lang, {}).get("webui", {})
+    for part in key.split('.'):
+        if isinstance(data, dict):
+            data = data.get(part, {})
+        else:
+            return key
+    return data if isinstance(data, str) else key
 
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def parse_amount_field(value: str) -> int:
+    try:
+        dec = Decimal(value)
+    except (InvalidOperation, ValueError):
+        raise ValueError
+    return int((dec * 1000).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+def is_currency_manager(db: sqlite3.Connection, uuid: str, currency: str) -> bool:
+    row = db.execute(
+        "SELECT 1 FROM currency_managers WHERE currency=? AND uuid=?",
+        (currency, uuid),
+    ).fetchone()
+    return row is not None
 
 
 def init_db() -> None:
@@ -65,7 +105,14 @@ def init_db() -> None:
                 name TEXT PRIMARY KEY,
                 symbol TEXT,
                 description TEXT,
-                active INTEGER NOT NULL DEFAULT 1
+                active INTEGER NOT NULL DEFAULT 1,
+                treasury TEXT,
+                tax_rate INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS currency_managers (
+                currency TEXT NOT NULL,
+                uuid TEXT NOT NULL,
+                PRIMARY KEY(currency, uuid)
             );
             CREATE TABLE IF NOT EXISTS name_index (
                 name TEXT PRIMARY KEY,
@@ -73,7 +120,8 @@ def init_db() -> None:
             );
             CREATE TABLE IF NOT EXISTS players (
                 uuid TEXT PRIMARY KEY,
-                last_seen INTEGER NOT NULL
+                last_seen INTEGER NOT NULL,
+                lang_hint INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -93,6 +141,11 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS admin_users (
                 name TEXT PRIMARY KEY
             );
+            CREATE TABLE IF NOT EXISTS account_links (
+                user_uuid TEXT NOT NULL,
+                system_uuid TEXT NOT NULL,
+                PRIMARY KEY(user_uuid, system_uuid)
+            );
             """
         )
         try:
@@ -105,6 +158,21 @@ def init_db() -> None:
             pass
         try:
             db.execute("ALTER TABLE currencies ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("ALTER TABLE currencies ADD COLUMN treasury TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("ALTER TABLE currencies ADD COLUMN tax_rate INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS currency_managers (currency TEXT NOT NULL, uuid TEXT NOT NULL, PRIMARY KEY(currency, uuid))"
+        )
+        try:
+            db.execute("ALTER TABLE players ADD COLUMN lang_hint INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass
         try:
@@ -150,36 +218,34 @@ def load_user():
                     session.setdefault("admin_mode", True)
                 else:
                     session.pop("admin_mode", None)
+                with get_db() as db2:
+                    g.user["is_currency_manager"] = (
+                        db2.execute(
+                            "SELECT 1 FROM currency_managers WHERE uuid=? LIMIT 1",
+                            (row["uuid"],),
+                        ).fetchone()
+                        is not None
+                    )
             else:
                 g.user = None
     else:
         g.user = None
 
 
-def generate_csrf_token() -> str:
-    token = secrets.token_hex(16)
-    session["_csrf_token"] = token
-    return token
-
-
-app.jinja_env.globals["csrf_token"] = generate_csrf_token
-
-
-@app.before_request
-def csrf_protect():
-    if request.method == "POST":
-        token = session.pop("_csrf_token", None)
-        if not token or token != request.form.get("_csrf_token"):
-            abort(400)
 
 
 @app.after_request
 def add_security_headers(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
-    resp.headers[
-        "Content-Security-Policy"
-    ] = "default-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; script-src 'self' https://cdn.jsdelivr.net"
+    connect_src = "connect-src 'self'" if not API_ORIGIN else f"connect-src 'self' {API_ORIGIN}"
+    resp.headers["Content-Security-Policy"] = (
+        f"default-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com; "
+        f"style-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com 'unsafe-inline'; "
+        f"font-src 'self' https://cdn.jsdelivr.net https://fonts.gstatic.com; "
+        f"script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+        f"{connect_src}"
+    )
     return resp
 
 
@@ -206,7 +272,7 @@ def admin_required(view):
 
 @app.context_processor
 def inject_user():
-    return {"user": g.user, "admin_mode": session.get("admin_mode", False)}
+    return {"user": g.user, "admin_mode": session.get("admin_mode", False), "wt": wt, "ui_lang": session.get("ui_lang", "en")}
 
 
 def get_setting(key: str, default: int) -> int:
@@ -326,6 +392,13 @@ def toggle_mode():
     if not g.user["is_admin"]:
         return redirect(url_for("index"))
     session["admin_mode"] = not session.get("admin_mode", False)
+    return redirect(request.referrer or url_for("index"))
+
+
+@app.get("/ui/lang/<code>")
+def set_ui_lang(code: str):
+    if code in {"en", "jp"}:
+        session["ui_lang"] = code
     return redirect(request.referrer or url_for("index"))
 
 
@@ -519,7 +592,12 @@ def logstats():
 @app.route("/map")
 @login_required
 def map_view():
-    return render_template("map.html", token=API_TOKEN)
+    return render_template("map.html", token=API_TOKEN, api_base=API_BASE)
+
+
+@app.route("/guide")
+def guide_page():
+    return render_template("guide.html")
 
 
 @app.route("/backups", methods=["GET", "POST"])
@@ -593,9 +671,9 @@ def adjust():
         currency = request.form["currency"].strip()
         action = request.form.get("action", "grant")
         try:
-            amount = int(request.form.get("amount", 0))
+            amount = parse_amount_field(request.form.get("amount", "0"))
         except ValueError:
-            flash("Amount must be an integer")
+            flash("Amount must be a number")
             return redirect(url_for("adjust", uuid=uuid))
         reason = request.form.get("reason", "adjust")
         ts = int(time.time())
@@ -714,6 +792,81 @@ def currencies():
     return render_template("currencies.html", currencies=rows)
 
 
+@app.route("/currency/manage", methods=["GET", "POST"])
+@login_required
+def currency_manage():
+    with get_db() as db:
+        if request.method == "POST":
+            op = request.form.get("op", "")
+            cname = request.form.get("currency", "").strip()
+            if op in {"add_manager", "remove_manager"}:
+                if not g.user["is_admin"] or not session.get("admin_mode", False):
+                    abort(403)
+                name = request.form.get("manager", "").strip().lower()
+                row = db.execute("SELECT uuid FROM name_index WHERE name=?", (name,)).fetchone()
+                if row:
+                    if op == "add_manager":
+                        db.execute(
+                            "INSERT OR IGNORE INTO currency_managers(currency, uuid) VALUES(?,?)",
+                            (cname, row["uuid"]),
+                        )
+                    else:
+                        db.execute(
+                            "DELETE FROM currency_managers WHERE currency=? AND uuid=?",
+                            (cname, row["uuid"]),
+                        )
+                    db.commit()
+                return redirect(url_for("currency_manage"))
+            elif op == "set":
+                if not (
+                    g.user["is_admin"]
+                    and session.get("admin_mode", False)
+                    or is_currency_manager(db, g.user["uuid"], cname)
+                ):
+                    abort(403)
+                try:
+                    tax = Decimal(request.form.get("tax", "0"))
+                except InvalidOperation:
+                    tax = Decimal(0)
+                tax_int = int((tax * 10).to_integral_value(rounding=ROUND_HALF_UP))
+                tre_name = request.form.get("treasury", "").strip().lower()
+                tre_uuid = None
+                if tre_name:
+                    row = db.execute("SELECT uuid FROM name_index WHERE name=?", (tre_name,)).fetchone()
+                    if row:
+                        tre_uuid = row["uuid"]
+                db.execute(
+                    "UPDATE currencies SET tax_rate=?, treasury=? WHERE name=?",
+                    (tax_int, tre_uuid, cname),
+                )
+                db.commit()
+                return redirect(url_for("currency_manage"))
+        if g.user["is_admin"] and session.get("admin_mode", False):
+            rows = db.execute(
+                "SELECT c.name, c.tax_rate, n.name AS treasury_name FROM currencies c LEFT JOIN name_index n ON n.uuid=c.treasury"
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT c.name, c.tax_rate, n.name AS treasury_name FROM currencies c JOIN currency_managers m ON m.currency=c.name AND m.uuid=? LEFT JOIN name_index n ON n.uuid=c.treasury",
+                (g.user["uuid"],),
+            ).fetchall()
+        currencies = []
+        for r in rows:
+            mgrs = db.execute(
+                "SELECT n.name FROM currency_managers m LEFT JOIN name_index n ON n.uuid=m.uuid WHERE m.currency=?",
+                (r["name"],),
+            ).fetchall()
+            currencies.append(
+                {
+                    "name": r["name"],
+                    "tax_rate": r["tax_rate"],
+                    "treasury_name": r["treasury_name"],
+                    "managers": [m["name"] for m in mgrs],
+                }
+            )
+    return render_template("currency_manage.html", currencies=currencies)
+
+
 @app.route("/systems", methods=["GET", "POST"])
 @admin_required
 def systems():
@@ -746,7 +899,7 @@ def systems():
 @admin_required
 def shops():
     with get_db() as db:
-        rows = db.execute("SELECT s.shop_id, GROUP_CONCAT(o.owner_uuid) AS owners, s.status, s.last_activity_at FROM shops s LEFT JOIN shop_owners o ON s.shop_id=o.shop_id GROUP BY s.shop_id").fetchall()
+        rows = db.execute("SELECT s.shop_id, GROUP_CONCAT(o.owner_uuid) AS owners, s.status, s.listed, s.last_activity_at FROM shops s LEFT JOIN shop_owners o ON s.shop_id=o.shop_id GROUP BY s.shop_id").fetchall()
         stats_rows = db.execute(
             """
             SELECT shop_id, COUNT(*) AS cnt, COALESCE(SUM(total_price),0) AS total
@@ -791,7 +944,7 @@ def shop_detail(shop_id: str):
                 item_key = request.form["item_key"]
                 currency = request.form["currency"].strip()
                 try:
-                    price = int(request.form["price"])
+                    price = parse_amount_field(request.form["price"])
                 except ValueError:
                     price = 0
                 cur.execute(
@@ -831,7 +984,7 @@ def shop_detail(shop_id: str):
                     "material": r["material"],
                     "display_name": r["display_name"],
                     "stock": r["stock"],
-                    "prices": {p["currency"]: p["price"] for p in price_rows},
+                    "prices": {p["currency"]: p["price"] / 1000 for p in price_rows},
                 }
             )
         sales = db.execute(
@@ -842,7 +995,10 @@ def shop_detail(shop_id: str):
             """,
             (shop_id,),
         ).fetchall()
-    return render_template("shop_detail.html", shop=shop, items=items, sales=sales)
+    sales_fmt = [
+        {**dict(r), "total_price": r["total_price"] / 1000} for r in sales
+    ]
+    return render_template("shop_detail.html", shop=shop, items=items, sales=sales_fmt)
 
 
 @app.route("/portal")
@@ -853,7 +1009,7 @@ def portal_index():
         return redirect(url_for("index"))
     with get_db() as db:
         rows = db.execute(
-            "SELECT shop_id, status, last_activity_at FROM shops WHERE shop_id IN (SELECT shop_id FROM shop_owners WHERE owner_uuid=?)",
+            "SELECT shop_id, status, last_activity_at, listed FROM shops WHERE shop_id IN (SELECT shop_id FROM shop_owners WHERE owner_uuid=?)",
             (g.user["uuid"],),
         ).fetchall()
         stats_rows = db.execute(
@@ -866,6 +1022,21 @@ def portal_index():
             """,
             (g.user["uuid"],),
         ).fetchall()
+        sys_rows = db.execute(
+            """
+            SELECT l.system_uuid AS uuid, COALESCE(n.name, l.system_uuid) AS name
+            FROM account_links l LEFT JOIN name_index n ON n.uuid=l.system_uuid
+            WHERE l.user_uuid=?
+            """,
+            (g.user["uuid"],),
+        ).fetchall()
+        systems = []
+        for r in sys_rows:
+            bals = db.execute(
+                "SELECT currency, balance FROM accounts WHERE uuid=?",
+                (r["uuid"],),
+            ).fetchall()
+            systems.append({"uuid": r["uuid"], "name": r["name"], "balances": bals})
     stats = {r["shop_id"]: r for r in stats_rows}
     shops = []
     for r in rows:
@@ -874,7 +1045,44 @@ def portal_index():
         info["sales"] = s["cnt"]
         info["revenue"] = s["total"]
         shops.append(info)
-    return render_template("my_shops.html", shops=shops)
+    return render_template("my_shops.html", shops=shops, systems=systems, user=g.user)
+
+
+@app.route("/portal/pay", methods=["POST"])
+@login_required
+def portal_pay():
+    if not g.user["uuid"]:
+        flash("Link your account first")
+        return redirect(url_for("portal_index"))
+    src = request.form.get("src", g.user["uuid"]).strip()
+    dst = request.form.get("dst", "").strip().lower()
+    amount = request.form.get("amount", "").strip()
+    currency = request.form.get("currency", "").strip()
+    if not dst or not amount:
+        flash("Missing fields")
+        return redirect(url_for("portal_index"))
+    with get_db() as db:
+        if src != g.user["uuid"]:
+            row = db.execute(
+                "SELECT 1 FROM account_links WHERE user_uuid=? AND system_uuid=?",
+                (g.user["uuid"], src),
+            ).fetchone()
+            if row is None:
+                flash("Access denied")
+                return redirect(url_for("portal_index"))
+    cmd = f"pay {src} {dst} {currency} {amount}" if src != g.user["uuid"] else f"pay {dst} {amount} {currency}".strip()
+    payload = {
+        "player": g.user["uuid"],
+        "executor": g.user["username"],
+        "command": cmd.strip(),
+        "timestamp": int(time.time()),
+        "location": {"world": "world", "x": 0, "y": 0, "z": 0},
+    }
+    try:
+        requests.post("http://127.0.0.1:5100/api/message", json=payload, timeout=5)
+    except Exception as e:
+        flash(str(e))
+    return redirect(url_for("portal_index"))
 
 
 @app.route("/portal/<shop_id>", methods=["GET", "POST"])
@@ -885,7 +1093,7 @@ def portal_shop(shop_id: str):
         return redirect(url_for("portal_index"))
     with get_db() as db:
         shop = db.execute(
-            "SELECT shop_id, status, last_activity_at FROM shops WHERE shop_id=?",
+            "SELECT shop_id, status, last_activity_at, listed FROM shops WHERE shop_id=?",
             (shop_id,),
         ).fetchone()
         owner_check = db.execute(
@@ -918,7 +1126,7 @@ def portal_shop(shop_id: str):
                 item_key = request.form["item_key"]
                 currency = request.form["currency"].strip()
                 try:
-                    price = int(request.form["price"])
+                    price = parse_amount_field(request.form["price"])
                 except ValueError:
                     price = 0
                 cur.execute(
@@ -930,6 +1138,9 @@ def portal_shop(shop_id: str):
                     """,
                     (shop_id, item_key, currency, price),
                 )
+            elif action == "set_listing":
+                listed = 1 if request.form.get("listed") == "1" else 0
+                cur.execute("UPDATE shops SET listed=? WHERE shop_id=?", (listed, shop_id))
             db.commit()
             flash("Updated")
             return redirect(url_for("portal_shop", shop_id=shop_id))
@@ -953,7 +1164,7 @@ def portal_shop(shop_id: str):
                     "material": r["material"],
                     "display_name": r["display_name"],
                     "stock": r["stock"],
-                    "prices": {p["currency"]: p["price"] for p in price_rows},
+                    "prices": {p["currency"]: p["price"] / 1000 for p in price_rows},
                 }
             )
         sales = db.execute(
@@ -964,6 +1175,7 @@ def portal_shop(shop_id: str):
             """,
             (shop_id,),
         ).fetchall()
+        sales = [{**dict(r), "total_price": r["total_price"] / 1000} for r in sales]
         series = db.execute(
             """
             SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch') AS day, SUM(total_price) total
@@ -973,7 +1185,7 @@ def portal_shop(shop_id: str):
             (shop_id,),
         ).fetchall()
     labels = [r["day"] for r in series]
-    data = [r["total"] for r in series]
+    data = [r["total"] / 1000 for r in series]
     return render_template(
         "my_shop_detail.html",
         shop=shop,
@@ -982,6 +1194,44 @@ def portal_shop(shop_id: str):
         chart_labels=json.dumps(labels),
         chart_data=json.dumps(data),
     )
+
+
+@app.route("/shopsearch")
+@login_required
+def shop_search():
+    item = request.args.get("item")
+    currency = request.args.get("currency")
+    min_price = request.args.get("min_price", type=int)
+    max_price = request.args.get("max_price", type=int)
+    results: List[sqlite3.Row] = []
+    if item or currency or min_price is not None or max_price is not None:
+        q = [
+            "SELECT s.shop_id, si.display_name, ss.sale_name, sp.currency, sp.price, sl.world, sl.x, sl.y, sl.z",
+            "FROM shop_prices sp",
+            "JOIN shop_stock ss ON sp.shop_id=ss.shop_id AND sp.item_key=ss.item_key",
+            "JOIN shop_items si ON sp.item_key=si.item_key",
+            "JOIN shops s ON sp.shop_id=s.shop_id",
+            "JOIN shop_locations sl ON s.shop_id=sl.shop_id",
+            "WHERE s.listed=1",
+        ]
+        params: List[object] = []
+        if currency:
+            q.append("AND sp.currency=?")
+            params.append(currency)
+        if min_price is not None:
+            q.append("AND sp.price>=?")
+            params.append(min_price)
+        if max_price is not None:
+            q.append("AND sp.price<=?")
+            params.append(max_price)
+        if item:
+            q.append("AND (si.display_name LIKE ? OR ss.sale_name LIKE ?)")
+            like = f"%{item}%"
+            params.extend([like, like])
+        q.append("ORDER BY sp.price ASC")
+        with get_db() as db:
+            results = db.execute(" ".join(q), params).fetchall()
+    return render_template("shop_search.html", results=results)
 
 
 @app.route("/shopstats")
@@ -1051,12 +1301,10 @@ def command():
                     "http://127.0.0.1:5100/api/message",
                     json={
                         "player": "Server",
+                        "executor": g.user["username"],
                         "command": cmd,
                         "timestamp": int(time.time()),
-                        "world": "world",
-                        "x": 0,
-                        "y": 0,
-                        "z": 0,
+                        "location": {"world": "world", "x": 0, "y": 0, "z": 0},
                     },
                     timeout=5,
                 )
@@ -1147,6 +1395,108 @@ def analytics():
         heat=heat,
         max_heat=max_heat,
     )
+
+
+class PaletteClient:
+    """HTTP client for the Java mapcolor plugin."""
+
+    def __init__(self, base_url: str, token: str) -> None:
+        self._session = requests.Session()
+        self._session.headers.update({"X-LE-Token": token})
+        self.base_url = base_url.rstrip("/")
+
+    def palette(self) -> Dict:
+        resp = self._session.get(f"{self.base_url}/plugin/mapcolor/palette", timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
+    def resolve(self, blocks: Iterable[str]) -> Iterable[int]:
+        resp = self._session.post(
+            f"{self.base_url}/plugin/mapcolor/resolve",
+            json={"blocks": list(blocks)},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json().get("indices", [])
+
+
+def _chunk_exists(region, cx: int, cz: int) -> bool:
+    """Check whether a chunk exists in ``region`` across anvil versions."""
+
+    if hasattr(region, "chunk_data_exists"):
+        return region.chunk_data_exists(cx, cz)  # type: ignore[attr-defined]
+    off, _ = region.chunk_location(cx, cz)
+    return off != 0
+
+
+def generate_world_tiles(
+    world: str,
+    region_dir: str,
+    client: PaletteClient,
+    store: "TileStore",
+    log_fn: Callable[[Dict], None] | None = None,
+) -> None:
+    """Process all region files under ``region_dir`` and output tiles."""
+
+    from collections import defaultdict
+
+    import anvil
+    from tile_format import PIXEL_COUNT, TILE_SIZE
+
+    client.palette()  # ensure palette sync
+    cache: Dict[str, int] = {}
+    tiles: Dict[Tuple[int, int], list[int]] = defaultdict(lambda: [0] * PIXEL_COUNT)
+
+    for fname in os.listdir(region_dir):
+        if not fname.endswith(".mca"):
+            continue
+        r = anvil.Region.from_file(os.path.join(region_dir, fname))
+        for cx in range(32):
+            for cz in range(32):
+                if not _chunk_exists(r, cx, cz):
+                    continue
+                try:
+                    chunk = r.get_chunk(cx, cz)
+                except Exception:
+                    continue
+                global_cx = r.x * 32 + cx
+                global_cz = r.z * 32 + cz
+                tx, tz = global_cx // 4, global_cz // 4
+                tile = tiles[tx, tz]
+                for lx in range(16):
+                    for lz in range(16):
+                        def resolve(name: str) -> int:
+                            if name not in cache:
+                                cache[name] = next(iter(client.resolve([name]) or [0]))
+                            return cache[name]
+
+                        idx = _top_index(chunk, lx, lz, resolve)
+                        px = (global_cx % 4) * 16 + lx
+                        pz = (global_cz % 4) * 16 + lz
+                        tile[pz * TILE_SIZE + px] = idx
+
+    for (tx, tz), indices in tiles.items():
+        store.save_tile(world, tx, tz, indices)
+        if log_fn:
+            log_fn(
+                {
+                    "type": "tile_generation",
+                    "world": world,
+                    "tx": tx,
+                    "tz": tz,
+                }
+            )
+
+
+def _top_index(chunk: "anvil.Chunk", x: int, z: int, resolver: Callable[[str], int]) -> int:
+    """Return the colour index for the column at (x,z)."""
+
+    for y in range(250, -64, -1):
+        block = chunk.get_block(x, y, z)
+        name = getattr(block, "id", "minecraft:air")
+        if name != "minecraft:air":
+            return resolver(name)
+    return 0
 
 
 if __name__ == "__main__":

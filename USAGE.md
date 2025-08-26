@@ -6,10 +6,12 @@ LumineEconomyBridge bridges a Minecraft server's scoreboard economy with a Pytho
 Use `/le` followed by a subcommand. Common commands:
 
  - `/le balance [currency] [player]` – Show your or another player's balance.
+ - `/le wallet` – Display your own balances (creates an account automatically if needed).
 - `/le money give <player> <currency> <amount>` – Mint funds for a player.
 - `/le money take <player> <currency> <amount>` – Remove funds from a player.
- - `/le money pay [src] <dst> [currency] <amount>` – Pay from one player to another. Omitting `src` uses the executor; omitting `currency` uses the default.
- - `/le money top [currency] [page]` – List top balances, 10 players per page.
+- `/le money pay [src] <dst> [currency] <amount>` – Pay from one player to another. Omitting `src` uses the executor; omitting `currency` uses the default.
+- `/le pay <player> <amount> [currency]` – Pay another player using your own funds and optional currency.
+- `/le money top [currency] [page]` – List top balances, 10 players per page.
 - `/le deposit <src> <dst> <currency> <amount>` – Move funds from src to dst (labelled deposit).
 - `/le withdraw <src> <dst> <currency> <amount>` – Move funds from src to dst (labelled withdraw).
 - `/le transfer <src> <dst> <currency> <amount>` – Transfer funds between players.
@@ -18,15 +20,23 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le currency create <id> [symbol]` – Create a new currency.
 - `/le currency supply [id]` – Show total supply for all currencies or a specific one.
 - `/le currency default <id>` – Set the default currency used when a command omits one.
+- `/le currency manager add <id> <player>` – Grant manager privileges for a currency.
+- `/le currency manager remove <id> <player>` – Revoke a currency manager.
+- `/le currency tax <id> <rate%>` – Set a currency's tax rate (0.1% steps).
+- `/le currency treasury <id> <account>` – Choose the treasury account to receive tax.
 - `/le account create <id>` – Create a system account.
+- `/le account connect <user> <system>` – Link a user to a system account they can control.
 - `/le backup` / `/le restore <file>` – Backup or restore the database.
 - `/le undo` / `/le redo` – Undo or redo recent operations.
- - `/le help` – Show in‑game help.
- - `/le weblink` – Generate a token to link your account with the web dashboard.
+- `/le help` – Show in‑game help.
+- `/le weblink` – Generate a token to link your account with the web dashboard.
+- `/le search <item> [currency] [min] [max]` – Search public shops for an item.
+- `/le admin add <player>` – Grant a player access to the admin dashboard.
 
 ## Notes
 - All command validation and economy processing happen on the Python backend.
 - Unknown or invalid commands return an error followed by a suggestion to use `/le help`.
+- Player accounts are created automatically when checking your wallet or handling funds.
 - Scoreboards for `currency1` and `currency2` are synchronized with the backend every 10 seconds.
 - The web dashboard (run `python backend/dashboard.py`) summarizes total accounts, per-currency supply, recent transaction stats, and active players. It also provides account search/editing, currency management tools, and a filterable transaction history page for auditing.
   Additional tools include a command log viewer with filters and download button, and a backup manager to create, restore, and schedule automatic backups.

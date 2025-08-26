@@ -16,7 +16,6 @@
 </table>
 {% endblock %}
 {% block scripts %}
-<script>
-new Chart(document.getElementById('logChart'),{type:'bar',data:{{ chart_json|safe }}});
-</script>
+<script id="log-data" type="application/json">{{ chart_json }}</script>
+<script src="{{ url_for('static', filename='js/logstats.js') }}"></script>
 {% endblock %}

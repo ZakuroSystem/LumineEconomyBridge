@@ -2,6 +2,7 @@ package com.grapelemon.lumineeconomybridge.sync;
 
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import okhttp3.*;
@@ -9,6 +10,8 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import net.md_5.bungee.api.ChatMessageType;
 import net.md_5.bungee.api.chat.TextComponent;
+import org.bukkit.scoreboard.Objective;
+import org.bukkit.scoreboard.Scoreboard;
 
 import java.io.IOException;
 import java.util.*;
@@ -18,12 +21,10 @@ public class ScoreboardSyncService {
     private final OkHttpClient http;
     private final String baseUrl;
     private final LumineEconomyBridge plugin;
-    private final Gson gson = new Gson();
+    private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
-    // 同期用の状態
-    private final Map<UUID, Map<String, Integer>> lastSentAbs = new ConcurrentHashMap<>();
-    private final Map<UUID, Map<String, Integer>> appliedFromPython = new ConcurrentHashMap<>();
+    // 経済はDB主体。scoreboardは表示用で、"*_cash"は加減算要求として扱う。
 
     public ScoreboardSyncService(OkHttpClient http, String baseUrl, LumineEconomyBridge plugin) {
         this.http = http;
@@ -32,17 +33,10 @@ public class ScoreboardSyncService {
     }
 
     public void seed(Player p) {
-        // 初期観測: メインスレッドで読み取り
-        Map<String, Integer> current = callSync(() -> ScoreboardUtil.readAllSync(p));
-        lastSentAbs.putIfAbsent(p.getUniqueId(), current);
-        appliedFromPython.putIfAbsent(p.getUniqueId(), new ConcurrentHashMap<>());
         sendAbsolute(p);
     }
 
-    public void cleanup(UUID id) {
-        lastSentAbs.remove(id);
-        appliedFromPython.remove(id);
-    }
+    public void cleanup(UUID id) {}
 
     private <T> T callSync(Callable<T> task) {
         try {
@@ -56,58 +50,21 @@ public class ScoreboardSyncService {
         }
     }
 
-    // Pythonからの絶対値適用（将来使用）
+    // Pythonからの絶対値適用
     public void applyFromPython(Player p, Map<String, Integer> abs) {
-        Bukkit.getScheduler().runTask(plugin, () -> {
-            Map<String, Integer> before = ScoreboardUtil.readAllSync(p);
-            ScoreboardUtil.applyAbsoluteSync(p, abs);
-            Map<String, Integer> after = ScoreboardUtil.readAllSync(p);
-
-            Map<String, Integer> buf = appliedFromPython.computeIfAbsent(p.getUniqueId(), k -> new ConcurrentHashMap<>());
-            for (Map.Entry<String, Integer> e : after.entrySet()) {
-                int d = e.getValue() - before.getOrDefault(e.getKey(), 0);
-                if (d != 0) {
-                    buf.merge(e.getKey(), d, Integer::sum);
-                }
-            }
-
-            lastSentAbs.put(p.getUniqueId(), after);
-        });
+        Bukkit.getScheduler().runTask(plugin, () -> ScoreboardUtil.applyAbsoluteSync(p, abs));
     }
 
-    public void sendDelta(Player p) {
-        UUID id = p.getUniqueId();
-
-        // メインスレッドで現在値を取得
-        Map<String, Integer> current = callSync(() -> ScoreboardUtil.readAllSync(p));
-        Map<String, Integer> last = lastSentAbs.computeIfAbsent(id, k -> new ConcurrentHashMap<>());
-
-        Map<String, Integer> applied = appliedFromPython.computeIfAbsent(id, k -> new ConcurrentHashMap<>());
-        Map<String, Integer> delta = new HashMap<>();
-
-        Set<String> keys = new HashSet<>();
-        keys.addAll(current.keySet());
-        keys.addAll(last.keySet());
-
-        for (String k : keys) {
-            int d = current.getOrDefault(k, 0) - last.getOrDefault(k, 0);
-            d -= applied.getOrDefault(k, 0);
-            if (d != 0) {
-                delta.put(k, d);
-            }
-        }
-        applied.clear();
-
-        // 送る差分がゼロならスキップ
+    private void sendDelta(Player p, Map<String, Integer> delta) {
         if (delta.isEmpty()) return;
-
         Map<String, Object> payload = new HashMap<>();
-        payload.put("player", id.toString());
+        payload.put("player", p.getUniqueId().toString());
         payload.put("delta", delta);
         payload.put("timestamp", System.currentTimeMillis() / 1000);
 
         Request req = new Request.Builder()
                 .url(baseUrl + "/api/sync")
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
 
@@ -116,33 +73,43 @@ public class ScoreboardSyncService {
                 plugin.getLogger().warning("Failed to sync scoreboard for " + p.getName() + ": " + e.getMessage());
             }
             @Override public void onResponse(Call call, Response response) throws IOException {
-                try (response) {
-                    String body = response.body() != null ? response.body().string() : "{}";
-                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
-                    // ACKが返ってきたら lastSent を current に更新
-                    if (res.has("status") && res.get("status").getAsString().equalsIgnoreCase("success")) {
-                        lastSentAbs.put(id, current);
-                        plugin.getLogger().fine("Synced scoreboard for " + p.getName());
-                    } else {
-                        plugin.getLogger().warning("Failed to sync scoreboard for " + p.getName());
-                    }
-                }
+                if (response.body() != null) response.body().close();
             }
         });
     }
 
-    public void tickAll() {
+    private void flushPlayer(Player p) {
+        Map<String, Integer> delta = callSync(() -> {
+            Map<String, Integer> out = new HashMap<>();
+            Scoreboard sb = p.getScoreboard() != null ? p.getScoreboard() : Bukkit.getScoreboardManager().getMainScoreboard();
+            String entry = p.getName();
+            for (Objective obj : sb.getObjectives()) {
+                String name = obj.getName();
+                if (name.startsWith("currency") && name.endsWith("_cash")) {
+                    int d = obj.getScore(entry).getScore();
+                    if (d != 0) {
+                        String baseName = name.substring(0, name.length() - 5);
+                        int cur = ScoreboardUtil.readCurrency(sb, baseName, entry);
+                        ScoreboardUtil.writeCurrency(sb, baseName, baseName, entry, cur + d);
+                        obj.getScore(entry).setScore(0);
+                        out.put(baseName, d);
+                    }
+                }
+            }
+            return out;
+        });
+        sendDelta(p, delta);
+    }
+
+    public void flushAll() {
         for (Player p : Bukkit.getOnlinePlayers()) {
-            try {
-                sendDelta(p);
-            } catch (Exception ignored) {}
+            try { flushPlayer(p); } catch (Exception ignored) {}
         }
     }
 
     public void sendAbsolute(Player p) {
         UUID id = p.getUniqueId();
         Map<String, Integer> current = callSync(() -> ScoreboardUtil.readAllSync(p));
-        lastSentAbs.put(id, current);
         Map<String, Object> payload = new HashMap<>();
         payload.put("player", id.toString());
         payload.put("scoreboard", current);
@@ -150,6 +117,7 @@ public class ScoreboardSyncService {
 
         Request req = new Request.Builder()
                 .url(baseUrl + "/api/rewrite")
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
 

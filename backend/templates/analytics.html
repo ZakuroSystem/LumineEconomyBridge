@@ -25,9 +25,6 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script>
-new Chart(document.getElementById('supplyChart'),{type:'line',data:{{ supply_json|safe }}});
-new Chart(document.getElementById('txChart'),{type:'bar',data:{{ tx_json|safe }}});
-new Chart(document.getElementById('topChart'),{type:'bar',data:{{ top_json|safe }}});
-</script>
+<script id="analytics-data" type="application/json">{{ {'supply': supply_json, 'tx': tx_json, 'top': top_json}|tojson }}</script>
+<script src="{{ url_for('static', filename='js/analytics.js') }}"></script>
 {% endblock %}

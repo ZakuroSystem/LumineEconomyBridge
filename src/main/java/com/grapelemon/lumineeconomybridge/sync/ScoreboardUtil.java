@@ -41,7 +41,7 @@ public final class ScoreboardUtil {
         Map<String, Integer> result = new HashMap<>();
         for (Objective obj : sb.getObjectives()) {
             String name = obj.getName();
-            if (name.startsWith("currency")) {
+            if (name.startsWith("currency") && !name.endsWith("_cash")) {
                 String cur = name.startsWith("currency_") ? name.substring(9) : name;
                 result.put(cur, obj.getScore(entry).getScore());
             }

@@ -28,13 +28,6 @@
 </table>
 {% endblock %}
 {% block scripts %}
-  <script>
-  const totals = {{ totals|tojson }};
-  const labels = totals.map(t => t.currency);
-  const data = totals.map(t => t.total);
-  new Chart(document.getElementById('supplyChart'), {
-    type: 'doughnut',
-    data: { labels: labels, datasets: [{ data: data }] },
-  });
-  </script>
+<script id="issuance-data" type="application/json">{{ totals|tojson }}</script>
+<script src="{{ url_for('static', filename='js/issuance.js') }}"></script>
 {% endblock %}
