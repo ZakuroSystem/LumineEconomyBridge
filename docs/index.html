@@ -22,6 +22,7 @@
     <li><a href="#shop">ショップ機能</a></li>
     <li><a href="#dashboard">Web ダッシュボード</a></li>
     <li><a href="#admin">管理者向け機能</a></li>
+    <li><a href="#api">REST API 連携</a></li>
     <li><a href="#advanced">応用例</a></li>
     <li><a href="#trouble">トラブルシューティング</a></li>
   </ol>
@@ -85,20 +86,39 @@
     <li><code>/le undo</code> / <code>/le redo</code> : 最近の操作を取り消し/やり直し。</li>
   </ul>
 
-  <h2 id="advanced">7. 応用例</h2>
+  <h2 id="api">7. REST API 連携</h2>
+  <p>バックエンドは FastAPI を用いた REST API を提供しており、外部ツールからサーバーの経済データを取得・操作できます。</p>
+  <ol>
+    <li>環境変数 <code>LE_TOKEN</code> を利用し、HTTP ヘッダー <code>Authorization: Bearer &lt;token&gt;</code> を付与してリクエストします。</li>
+    <li><code>GET /wallet/&lt;player&gt;</code> で任意プレイヤーの残高を JSON 形式で取得できます。</li>
+    <li><code>POST /transfer</code> に JSON で送金内容を送るとサーバー外から自動送金が可能です。</li>
+  </ol>
+  <p>例: Python から残高を取得する簡単なスクリプト</p>
+<pre><code>import requests
+resp = requests.get(
+    "http://localhost:8000/wallet/Steve",
+    headers={"Authorization": "Bearer YOUR_TOKEN"},
+)
+print(resp.json())
+</code></pre>
+
+  <h2 id="advanced">8. 応用例</h2>
   <p>以下は複数の機能を組み合わせた応用例です。</p>
   <ul>
     <li><strong>複数通貨の運用:</strong> <code>/le currency create</code> で通貨を追加し、<code>manager add</code> で管理者を指定すると独自の経済圏を構築できます。</li>
     <li><strong>税収システム:</strong> <code>tax</code> と <code>treasury</code> を設定すると取引ごとに自動で税が徴収され、指定アカウントへ入金されます。</li>
     <li><strong>ショップ網の構築:</strong> ショップ樽を複数設置し <code>partner add</code> で共同運営者を追加すると大規模なマーケットが作れます。</li>
     <li><strong>Web ダッシュボードによる監査:</strong> 管理者はダッシュボードで取引履歴を絞り込み、異常な送金や税収の推移を確認できます。バックアップ管理を定期的に行うことで万一のトラブルにも備えられます。</li>
+    <li><strong>自動給与支払い:</strong> REST API を利用してログイン時に自動で残高を更新するスクリプトを組むことで、労働報酬の自動化が可能です。</li>
+    <li><strong>外部データベース連携:</strong> 取得した JSON データを外部の BI ツールやデータベースに保存し、経済状況を可視化できます。</li>
   </ul>
 
-  <h2 id="trouble">8. トラブルシューティング</h2>
+  <h2 id="trouble">9. トラブルシューティング</h2>
   <ul>
     <li><strong>バックエンドに接続できない:</strong> トークン設定と <code>LE_API_BASE</code> を確認し、サーバーのポートが開いているか確かめてください。</li>
     <li><strong>ダッシュボードにログインできない:</strong> ユーザー登録時のトークンが正しいか、ブラウザの Cookie を削除して再試行してください。</li>
     <li><strong>ショップが動作しない:</strong> 樽が保護されていないか、価格と在庫が正しく設定されているかを確認してください。</li>
+    <li><strong>API が 401 を返す:</strong> Authorization ヘッダーとトークンの有効期限を確認し、必要なら新しいトークンを発行してください。</li>
   </ul>
 
   <p>より詳細なコマンド一覧は <code>USAGE.md</code>、ショップ運営の詳細は <code>SHOP_HELP.md</code> を参照してください。</p>
