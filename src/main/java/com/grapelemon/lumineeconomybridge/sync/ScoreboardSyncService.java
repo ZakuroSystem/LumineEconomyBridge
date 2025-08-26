@@ -112,6 +112,15 @@ public class ScoreboardSyncService {
         flushPlayer(p);
     }
 
+    /**
+     * @deprecated Scoreboard の差分送信は {@link #flush(Player)} に統一されました。
+     * 旧バージョンとの互換性のために残されています。
+     */
+    @Deprecated
+    public void sendDelta(Player p) {
+        flush(p);
+    }
+
     public void sendAbsolute(Player p) {
         UUID id = p.getUniqueId();
         Map<String, Integer> current = callSync(() -> ScoreboardUtil.readAllSync(p));

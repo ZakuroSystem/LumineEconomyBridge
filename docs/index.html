@@ -130,16 +130,41 @@ print(resp.json())
 </code></pre>
 
   <h2 id="advanced">9. 応用例</h2>
-  <p>以下は複数の機能を組み合わせた応用例です。</p>
-  <ul>
-    <li><strong>複数通貨の運用:</strong> <code>/le currency create</code> で通貨を追加し、<code>manager add</code> で管理者を指定すると独自の経済圏を構築できます。</li>
-    <li><strong>税収システム:</strong> <code>tax</code> と <code>treasury</code> を設定すると取引ごとに自動で税が徴収され、指定アカウントへ入金されます。</li>
-    <li><strong>ショップ網の構築:</strong> 複数のショップ樽を設置し <code>partner add</code> で共同運営者を追加すると大規模なマーケットが作れます。</li>
-    <li><strong>Web ダッシュボードによる監査:</strong> 管理者は取引履歴を絞り込み、異常な送金や税収の推移を確認できます。バックアップを定期的に作成し安全に運用しましょう。</li>
-    <li><strong>自動給与支払い:</strong> REST API を利用してログイン時に残高を更新するスクリプトを組むことで、労働報酬の自動化が可能です。</li>
-    <li><strong>外部データベース連携:</strong> 取得した JSON データを外部の BI ツールやデータベースに保存し、経済状況を可視化できます。</li>
-    <li><strong>サーバー間通貨共有:</strong> 別サーバーのバックエンドを同一データベースに接続すると、マルチサーバーで通貨を共有できます。</li>
-  </ul>
+  <p>以下では代表的な応用シナリオを章立てで紹介します。</p>
+
+  <h3>9.1 複数通貨と経済圏の分離</h3>
+  <p><code>/le currency create</code> で新通貨を作成し、<code>manager add</code> で管理者を委任すると、ワールドや派閥ごとに独立した経済圏を運営できます。デフォルト通貨と交換レートを決めることで相互の貿易も可能です。</p>
+
+  <h3>9.2 税収システムの導入</h3>
+  <p><code>tax</code> と <code>treasury</code> を設定すると、取引時に自動で税が徴収され国庫アカウントへ送金されます。徴税率を 0 に戻すまで有効で、<code>/le history</code> で税収の推移を確認できます。</p>
+
+  <h3>9.3 ショップ網の構築と共同運営</h3>
+  <p>複数のショップ樽を設置し <code>partner add</code> で仲間を追加すると、在庫や利益を共有する大規模なマーケットを形成できます。<code>price</code> コマンドで複数通貨の価格を同時に変更し、<code>search</code> で市場調査も行えます。</p>
+
+  <h3>9.4 ダッシュボードによる監査とバックアップ</h3>
+  <p>Web ダッシュボードでは取引履歴のフィルタリングや CSV エクスポート、定期バックアップのスケジュール設定が可能です。大規模な経済運営では不正検知や履歴管理に活用してください。</p>
+
+  <h3>9.5 Python スクリプトで自動給与支払い</h3>
+<pre><code>import requests
+
+def pay_salary(player, amount, token):
+    payload = {"src": "treasury", "dst": player,
+               "currency": "credit", "amount": amount}
+    requests.post(
+        "http://localhost:8000/transfer",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+# 例: プレイヤーのログインフックから呼び出す
+pay_salary("Steve", 100, "YOUR_TOKEN")
+</code></pre>
+
+  <h3>9.6 外部データベース連携による可視化</h3>
+  <p>API から取得した JSON を外部の BI ツールやデータベースに保存すると、取引量や通貨供給量の時系列グラフを作成できます。サーバーの経済状況を分析してバランス調整に役立てましょう。</p>
+
+  <h3>9.7 サーバー間通貨共有</h3>
+  <p>複数の Spigot サーバーが同じバックエンドデータベースに接続すると、プレイヤーは別ワールドでも共通の残高を利用できます。サーバーごとに <code>LE_API_BASE</code> を分ければ負荷分散も可能です。</p>
 
   <h2 id="trouble">10. トラブルシューティング</h2>
   <ul>
