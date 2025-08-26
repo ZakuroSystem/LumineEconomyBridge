@@ -12,29 +12,61 @@
 </head>
 <body>
   <h1>LumineEconomyBridge 機能ガイド</h1>
-  <p>LumineEconomyBridge は Minecraft のスコアボード経済を Python バックエンドと Web ダッシュボードに橋渡しするプラグインです。本ページでは基本的な使い方から応用操作まで懇切丁寧に解説します。</p>
+  <p>LumineEconomyBridge は Minecraft のスコアボード経済を Python バックエンドと Web ダッシュボードに橋渡しするプラグインです。本ページではインストールから高度な応用例まで懇切丁寧に解説します。</p>
 
-  <h2>1. 初期設定</h2>
+  <h2>目次</h2>
   <ol>
-    <li>サーバーに <code>LumineEconomyBridge.jar</code> を導入して再起動します。</li>
-    <li><code>backend/</code> ディレクトリで <code>python main.py</code> を実行し FastAPI サーバーを起動します。</li>
-    <li><code>plugins/LumineEconomyBridge/config.yml</code> の <code>api.token</code> とバックエンド環境変数 <code>LE_TOKEN</code> を同じ値に設定します。</li>
-    <li>必要に応じて <code>LE_API_BASE</code> や <code>MAPCOLOR_URL</code> を環境変数で指定します。</li>
+    <li><a href="#install">環境とインストール</a></li>
+    <li><a href="#setup">初期設定</a></li>
+    <li><a href="#player">プレイヤー向けコマンド</a></li>
+    <li><a href="#shop">ショップ機能</a></li>
+    <li><a href="#dashboard">Web ダッシュボード</a></li>
+    <li><a href="#admin">管理者向け機能</a></li>
+    <li><a href="#advanced">応用例</a></li>
+    <li><a href="#trouble">トラブルシューティング</a></li>
   </ol>
 
-  <h2>2. プレイヤー向けコマンド</h2>
+  <h2 id="install">1. 環境とインストール</h2>
+  <ol>
+    <li>Java 17 以上と Python 3.10 以上を用意し、<code>pip install -r backend/requirements.txt</code> で必要ライブラリを導入します。</li>
+    <li>リリースから <code>LumineEconomyBridge.jar</code> をダウンロードしサーバーの <code>plugins/</code> に配置します。</li>
+    <li>サーバーを起動し、<code>backend/</code> ディレクトリで <code>python main.py</code> を実行して FastAPI バックエンドを起動します。</li>
+  </ol>
+
+  <h2 id="setup">2. 初期設定</h2>
+  <ol>
+    <li>生成された <code>plugins/LumineEconomyBridge/config.yml</code> の <code>api.token</code> と環境変数 <code>LE_TOKEN</code> を同じ値に設定します。</li>
+    <li>必要に応じて <code>LE_API_BASE</code> や <code>MAPCOLOR_URL</code> を環境変数で指定し、バックエンドを再起動します。</li>
+    <li>スコアボードに「cash」オブジェクティブが存在しない場合は自動で作成されます。</li>
+  </ol>
+
+  <h2 id="player">3. プレイヤー向けコマンド</h2>
+  <p>プレイヤーは以下のコマンドで自分の口座や取引を操作できます。</p>
   <ul>
     <li><code>/le wallet</code> : 自分の口座残高を表示。口座が無い場合は自動作成されます。</li>
     <li><code>/le pay &lt;player&gt; &lt;amount&gt; [currency]</code> : 他プレイヤーへ送金。</li>
     <li><code>/le balance [currency] [player]</code> : 指定した通貨やプレイヤーの残高確認。</li>
     <li><code>/le money top [currency] [page]</code> : 残高上位一覧を表示 (10 人/ページ)。</li>
+    <li><code>/le deposit &lt;src&gt; &lt;dst&gt; &lt;currency&gt; &lt;amount&gt;</code> / <code>/le withdraw ...</code> : システムアカウント間で資金移動。</li>
     <li><code>/le history &lt;player&gt; [limit]</code> : 最近の取引履歴を表示。</li>
     <li><code>/le shop</code> : ショップ樽を受け取り設置すると自動でショップが作成されます。シフトクリックで売却も可能。</li>
     <li><code>/le search &lt;item&gt; [currency] [min] [max]</code> : 公開ショップを検索。</li>
     <li><code>/le lang &lt;code&gt;</code> : 表示言語を切り替え (例: <code>/le lang ja</code>)。</li>
   </ul>
 
-  <h2>3. Web ダッシュボードの利用</h2>
+  <h2 id="shop">4. ショップ機能</h2>
+  <p>ショップ樽を使ってアイテムを売買できます。コマンドの主な流れは以下の通りです。</p>
+  <ul>
+    <li><code>/le shop create &lt;id&gt;</code> : 任意の ID でショップ樽を作成。</li>
+    <li><code>/le shop add &lt;id&gt; &lt;qty&gt; &lt;price&gt; &lt;name&gt;</code> : 在庫を追加。</li>
+    <li><code>/le shop take &lt;id&gt; &lt;item&gt; &lt;qty&gt;</code> : 在庫を回収。</li>
+    <li><code>/le shop price &lt;id&gt; &lt;name&gt; &lt;currency&gt; &lt;amount&gt; [more...]</code> : 価格を設定。</li>
+    <li><code>/le shop partner add &lt;id&gt; &lt;player&gt;</code> : 共同オーナーを追加し共同運営。</li>
+    <li><code>/le search &lt;item&gt; [currency] [min] [max]</code> : 公開ショップを検索し最安値を探す。</li>
+    <li>プレイヤーは在庫のあるショップにアイテムをシフトクリックすることで売却できます。</li>
+  </ul>
+
+  <h2 id="dashboard">5. Web ダッシュボード</h2>
   <ol>
     <li>ゲーム内で <code>/le weblink</code> を実行してワンタイムトークンを取得します。</li>
     <li>ブラウザで <code>/register</code> にアクセスし、ユーザー名・パスワード・トークンを入力して登録します。</li>
@@ -42,39 +74,31 @@
   </ol>
   <p>ダッシュボードではアカウント検索・編集、通貨供給量の確認、取引履歴のフィルタリング、バックアップ管理、コマンドログ閲覧などの高度なツールも提供しています。</p>
 
-  <h2>4. ショップ機能</h2>
+  <h2 id="admin">6. 管理者向け機能</h2>
   <ul>
-    <li><code>/le shop create &lt;id&gt;</code> : 任意の ID でショップ樽を作成。</li>
-    <li><code>/le shop add &lt;id&gt; &lt;qty&gt; &lt;price&gt; &lt;name&gt;</code> : 在庫を追加。</li>
-    <li><code>/le shop take &lt;id&gt; &lt;item&gt; &lt;qty&gt;</code> : 在庫を回収。</li>
-    <li><code>/le shop price &lt;id&gt; &lt;name&gt; &lt;currency&gt; &lt;amount&gt; [more...]</code> : 価格を設定。</li>
-    <li><code>/le shop partner add &lt;id&gt; &lt;player&gt;</code> : 共同オーナーを追加。</li>
-    <li><code>/le search &lt;item&gt; [currency] [min] [max]</code> : ショップを検索。</li>
-    <li>プレイヤーは在庫のあるショップにアイテムをシフトクリックすることで売却できます。</li>
-  </ul>
-
-  <h2>5. 管理者向け機能</h2>
-  <ul>
-    <li><code>/le money give &lt;player&gt; &lt;currency&gt; &lt;amount&gt;</code> : プレイヤーへ資金を発行。</li>
-    <li><code>/le money take &lt;player&gt; &lt;currency&gt; &lt;amount&gt;</code> : 資金を没収。</li>
-    <li><code>/le currency create &lt;id&gt; [symbol]</code> : 新しい通貨を作成。</li>
-    <li><code>/le currency manager add &lt;id&gt; &lt;player&gt;</code> : 通貨管理者を追加。</li>
-    <li><code>/le currency tax &lt;id&gt; &lt;rate%&gt;</code> : 税率を 0.1% 単位で設定。</li>
-    <li><code>/le currency treasury &lt;id&gt; &lt;account&gt;</code> : 税の納付先アカウントを指定。</li>
-    <li><code>/le account create &lt;id&gt;</code> : システムアカウントを作成。</li>
-    <li><code>/le account connect &lt;user&gt; &lt;system&gt;</code> : ユーザーにシステムアカウントを紐付け。</li>
+    <li><code>/le money give &lt;player&gt; &lt;currency&gt; &lt;amount&gt;</code> / <code>take</code> : プレイヤーの資金を発行・没収。</li>
+    <li><code>/le currency create &lt;id&gt; [symbol]</code> : 新しい通貨を作成し、<code>manager add</code> で管理者を追加。</li>
+    <li><code>/le currency tax &lt;id&gt; &lt;rate%&gt;</code> と <code>treasury</code> : 税率と納付先アカウントを設定。</li>
+    <li><code>/le account create &lt;id&gt;</code> や <code>connect</code> : システムアカウントの作成・紐付け。</li>
     <li><code>/le admin add &lt;player&gt;</code> : ダッシュボード管理者に追加。</li>
     <li><code>/le backup</code> / <code>/le restore &lt;file&gt;</code> : データベースのバックアップ・復元。</li>
     <li><code>/le undo</code> / <code>/le redo</code> : 最近の操作を取り消し/やり直し。</li>
   </ul>
 
-  <h2>6. 応用例</h2>
+  <h2 id="advanced">7. 応用例</h2>
   <p>以下は複数の機能を組み合わせた応用例です。</p>
   <ul>
-    <li><strong>複数通貨の運用:</strong> <code>/le currency create</code> で通貨を追加し、<code>/le currency manager add</code> で管理者を指定するとゲーム内で独自の経済圏を構築できます。</li>
-    <li><strong>税収システム:</strong> <code>/le currency tax</code> と <code>/le currency treasury</code> を設定すると取引ごとに自動で税が徴収され、指定アカウントへ入金されます。</li>
-    <li><strong>ショップ網の構築:</strong> ショップ樽を複数設置し <code>/le shop partner add</code> で共同運営者を追加すると大規模なマーケットが作れます。</li>
+    <li><strong>複数通貨の運用:</strong> <code>/le currency create</code> で通貨を追加し、<code>manager add</code> で管理者を指定すると独自の経済圏を構築できます。</li>
+    <li><strong>税収システム:</strong> <code>tax</code> と <code>treasury</code> を設定すると取引ごとに自動で税が徴収され、指定アカウントへ入金されます。</li>
+    <li><strong>ショップ網の構築:</strong> ショップ樽を複数設置し <code>partner add</code> で共同運営者を追加すると大規模なマーケットが作れます。</li>
     <li><strong>Web ダッシュボードによる監査:</strong> 管理者はダッシュボードで取引履歴を絞り込み、異常な送金や税収の推移を確認できます。バックアップ管理を定期的に行うことで万一のトラブルにも備えられます。</li>
+  </ul>
+
+  <h2 id="trouble">8. トラブルシューティング</h2>
+  <ul>
+    <li><strong>バックエンドに接続できない:</strong> トークン設定と <code>LE_API_BASE</code> を確認し、サーバーのポートが開いているか確かめてください。</li>
+    <li><strong>ダッシュボードにログインできない:</strong> ユーザー登録時のトークンが正しいか、ブラウザの Cookie を削除して再試行してください。</li>
+    <li><strong>ショップが動作しない:</strong> 樽が保護されていないか、価格と在庫が正しく設定されているかを確認してください。</li>
   </ul>
 
   <p>より詳細なコマンド一覧は <code>USAGE.md</code>、ショップ運営の詳細は <code>SHOP_HELP.md</code> を参照してください。</p>
