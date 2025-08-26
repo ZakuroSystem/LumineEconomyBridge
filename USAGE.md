@@ -20,6 +20,10 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le currency create <id> [symbol]` – Create a new currency.
 - `/le currency supply [id]` – Show total supply for all currencies or a specific one.
 - `/le currency default <id>` – Set the default currency used when a command omits one.
+- `/le currency manager add <id> <player>` – Grant manager privileges for a currency.
+- `/le currency manager remove <id> <player>` – Revoke a currency manager.
+- `/le currency tax <id> <rate%>` – Set a currency's tax rate (0.1% steps).
+- `/le currency treasury <id> <account>` – Choose the treasury account to receive tax.
 - `/le account create <id>` – Create a system account.
 - `/le account connect <user> <system>` – Link a user to a system account they can control.
 - `/le backup` / `/le restore <file>` – Backup or restore the database.
