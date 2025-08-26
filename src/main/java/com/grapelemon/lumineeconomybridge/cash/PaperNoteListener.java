@@ -27,7 +27,7 @@ public class PaperNoteListener implements Listener {
         ItemStack stack = e.getItemDrop().getItemStack();
         if (!service.isNote(stack)) return;
         Player p = e.getPlayer();
-        service.sendEvent(service.getId(stack), p.getUniqueId().toString(), "drop", service.getCurrency(stack), service.getAmount(stack), loc(p.getLocation()));
+        service.sendEvent(p.getUniqueId().toString(), "drop", stack, p.getLocation());
     }
 
     @EventHandler
@@ -35,7 +35,7 @@ public class PaperNoteListener implements Listener {
         ItemStack stack = e.getItem().getItemStack();
         if (!service.isNote(stack)) return;
         Player p = e.getPlayer();
-        service.sendEvent(service.getId(stack), p.getUniqueId().toString(), "pickup", service.getCurrency(stack), service.getAmount(stack), loc(p.getLocation()));
+        service.sendEvent(p.getUniqueId().toString(), "pickup", stack, p.getLocation());
     }
 
     @EventHandler
@@ -45,13 +45,13 @@ public class PaperNoteListener implements Listener {
         if (stack == null || !service.isNote(stack)) return;
         Player p = (Player) e.getWhoClicked();
         String action = e.getInventory().getType() == InventoryType.CHEST ? "store" : "retrieve";
-        service.sendEvent(service.getId(stack), p.getUniqueId().toString(), action, service.getCurrency(stack), service.getAmount(stack), loc(p.getLocation()));
+        service.sendEvent(p.getUniqueId().toString(), action, stack, p.getLocation());
     }
 
     @EventHandler
     public void onDespawn(ItemDespawnEvent e) {
         ItemStack stack = e.getEntity().getItemStack();
         if (!service.isNote(stack)) return;
-        service.sendEvent(service.getId(stack), "", "destroy", service.getCurrency(stack), service.getAmount(stack), loc(e.getLocation()));
+        service.sendEvent("", "destroy", stack, e.getLocation());
     }
 }

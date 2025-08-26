@@ -354,10 +354,11 @@ with cash_conn:
     cash_conn.execute(
         """
         CREATE TABLE IF NOT EXISTS notes (
-            note_id TEXT PRIMARY KEY,
+            owner_uuid TEXT NOT NULL,
             currency TEXT NOT NULL,
             amount INTEGER NOT NULL,
-            owner_uuid TEXT NOT NULL
+            quantity INTEGER NOT NULL,
+            PRIMARY KEY(owner_uuid, currency, amount)
         )
         """
     )
@@ -365,11 +366,11 @@ with cash_conn:
         """
         CREATE TABLE IF NOT EXISTS cash_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            note_id TEXT NOT NULL,
             player_uuid TEXT NOT NULL,
             action TEXT NOT NULL,
             currency TEXT NOT NULL,
             amount INTEGER NOT NULL,
+            quantity INTEGER NOT NULL,
             location TEXT,
             ts INTEGER NOT NULL
         )
@@ -578,11 +579,11 @@ class ShopReopenPayload(BaseModel):
 
 
 class CashEvent(BaseModel):
-    note_id: str
     player_uuid: str
     action: str
     currency: str
     amount: int
+    quantity: int = 1
     location: Optional[str] = None
 
 
@@ -3106,31 +3107,59 @@ def cash_event(ev: CashEvent, token: None = Depends(verify_token)):
     ts = int(time.time() * 1000)
     with cash_conn:
         cash_conn.execute(
-            "INSERT INTO cash_events(note_id, player_uuid, action, currency, amount, location, ts) VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO cash_events(player_uuid, action, currency, amount, quantity, location, ts) VALUES(?,?,?,?,?,?,?)",
             (
-                ev.note_id,
                 ev.player_uuid,
                 ev.action,
                 ev.currency,
                 ev.amount,
+                ev.quantity,
                 ev.location,
                 ts,
             ),
         )
-        if ev.action in ("issue", "transfer", "pickup", "store", "retrieve"):
+        if ev.player_uuid:
+            delta = 0
+            if ev.action in ("issue", "pickup", "retrieve"):
+                delta = ev.quantity
+            elif ev.action in ("drop", "store"):
+                delta = -ev.quantity
+            if delta:
+                cash_conn.execute(
+                    "INSERT INTO notes(owner_uuid, currency, amount, quantity) VALUES(?,?,?,?) "
+                    "ON CONFLICT(owner_uuid, currency, amount) DO UPDATE SET quantity = quantity + ?",
+                    (ev.player_uuid, ev.currency, ev.amount, delta, delta),
+                )
+    return {"status": "ok"}
+
+
+class CashNote(BaseModel):
+    currency: str
+    amount: int
+    quantity: int
+
+
+class CashRewrite(BaseModel):
+    player_uuid: str
+    notes: List[CashNote]
+
+
+@app.post("/api/cash/rewrite")
+def cash_rewrite(payload: CashRewrite, token: None = Depends(verify_token)):
+    with cash_conn:
+        cash_conn.execute("DELETE FROM notes WHERE owner_uuid=?", (payload.player_uuid,))
+        for n in payload.notes:
             cash_conn.execute(
-                "INSERT OR REPLACE INTO notes(note_id, currency, amount, owner_uuid) VALUES(?,?,?,?)",
-                (ev.note_id, ev.currency, ev.amount, ev.player_uuid),
+                "INSERT INTO notes(owner_uuid, currency, amount, quantity) VALUES(?,?,?,?)",
+                (payload.player_uuid, n.currency, n.amount, n.quantity),
             )
-        elif ev.action == "destroy":
-            cash_conn.execute("DELETE FROM notes WHERE note_id=?", (ev.note_id,))
     return {"status": "ok"}
 
 
 @app.get("/api/cash/holdings/{player_uuid}")
 def cash_holdings(player_uuid: str, token: None = Depends(verify_token)):
     cur = cash_conn.execute(
-        "SELECT currency, SUM(amount) AS total FROM notes WHERE owner_uuid=? GROUP BY currency",
+        "SELECT currency, SUM(amount * quantity) AS total FROM notes WHERE owner_uuid=? GROUP BY currency",
         (player_uuid,),
     )
     return {"holdings": [dict(r) for r in cur.fetchall()]}
