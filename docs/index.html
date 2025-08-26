@@ -31,7 +31,7 @@
   <h2 id="overview">1. 仕組みと構成</h2>
   <p>LumineEconomyBridge は次の 3 コンポーネントで構成されます。</p>
   <ul>
-    <li><strong>Spigot プラグイン:</strong> ゲーム内コマンドを受け取り、スコアボードを更新します。</li>
+    <li><strong>Spigot プラグイン:</strong> ゲーム内コマンドを受け取り、スコアボードを更新します。各コマンド実行時に保留中の差分をバックエンドへフラッシュし、表示とデータベースの整合性を保ちます。</li>
     <li><strong>Python バックエンド:</strong> FastAPI で経済ロジックを処理し、データベースへ保存します。</li>
     <li><strong>Web ダッシュボード:</strong> ブラウザから残高やショップを管理する管理画面を提供します。</li>
   </ul>
