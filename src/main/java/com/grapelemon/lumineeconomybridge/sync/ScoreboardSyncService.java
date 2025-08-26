@@ -112,6 +112,16 @@ public class ScoreboardSyncService {
         flushPlayer(p);
     }
 
+    /**
+     * Legacy method kept for backward compatibility.
+     * Internally just delegates to {@link #flush(Player)}.
+     * @deprecated use {@link #flush(Player)} instead
+     */
+    @Deprecated
+    public void sendDelta(Player p) {
+        flushPlayer(p);
+    }
+
     public void sendAbsolute(Player p) {
         UUID id = p.getUniqueId();
         Map<String, Integer> current = callSync(() -> ScoreboardUtil.readAllSync(p));
