@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>LumineEconomyBridge 機能ガイド</title>
+  <style>
+    body { font-family: sans-serif; line-height: 1.6; margin: 2em; }
+    h1, h2, h3 { color: #2c3e50; }
+    code { background: #f3f3f3; padding: 2px 4px; }
+    ul { margin-bottom: 1em; }
+  </style>
+</head>
+<body>
+  <h1>LumineEconomyBridge 機能ガイド</h1>
+  <p>LumineEconomyBridge は Minecraft のスコアボード経済を Python バックエンドと Web ダッシュボードに橋渡しするプラグインです。本ページではインストールから高度な応用例まで懇切丁寧に解説します。</p>
+
+  <h2>目次</h2>
+  <ol>
+    <li><a href="#overview">仕組みと構成</a></li>
+    <li><a href="#install">環境とインストール</a></li>
+    <li><a href="#setup">初期設定</a></li>
+    <li><a href="#player">プレイヤー向けコマンド</a></li>
+    <li><a href="#shop">ショップ機能</a></li>
+    <li><a href="#dashboard">Web ダッシュボード</a></li>
+    <li><a href="#admin">管理者向け機能</a></li>
+    <li><a href="#api">REST API 連携</a></li>
+    <li><a href="#advanced">応用例</a></li>
+    <li><a href="#trouble">トラブルシューティング</a></li>
+  </ol>
+
+  <h2 id="overview">1. 仕組みと構成</h2>
+  <p>LumineEconomyBridge は次の 3 コンポーネントで構成されます。</p>
+  <ul>
+    <li><strong>Spigot プラグイン:</strong> ゲーム内コマンドを受け取り、スコアボードを更新します。各コマンド実行時に保留中の差分をバックエンドへフラッシュし、表示とデータベースの整合性を保ちます。</li>
+    <li><strong>Python バックエンド:</strong> FastAPI で経済ロジックを処理し、データベースへ保存します。</li>
+    <li><strong>Web ダッシュボード:</strong> ブラウザから残高やショップを管理する管理画面を提供します。</li>
+  </ul>
+  <p>プレイヤーがコマンドを実行するとプラグインが HTTP 経由でバックエンドへ送信し、処理結果がスコアボードとチャットに反映されます。ダッシュボードや外部ツールも同じ API を利用できるため、柔軟な拡張が可能です。</p>
+
+  <h2 id="install">2. 環境とインストール</h2>
+  <ol>
+    <li>Java 17 以上と Python 3.10 以上を用意し、<code>pip install -r backend/requirements.txt</code> で必要ライブラリを導入します。</li>
+    <li>リリースから <code>LumineEconomyBridge.jar</code> をダウンロードしサーバーの <code>plugins/</code> に配置します。</li>
+    <li>サーバーを起動し、<code>backend/</code> ディレクトリで <code>python main.py</code> を実行して FastAPI バックエンドを起動します。</li>
+  </ol>
+
+  <h2 id="setup">3. 初期設定</h2>
+  <ol>
+    <li>生成された <code>plugins/LumineEconomyBridge/config.yml</code> の <code>api.token</code> と環境変数 <code>LE_TOKEN</code> を同じ値に設定します。</li>
+    <li>必要に応じて <code>LE_API_BASE</code> (バックエンドの URL) や <code>MAPCOLOR_URL</code> を環境変数で指定し、バックエンドを再起動します。</li>
+    <li>スコアボードに「cash」オブジェクティブが存在しない場合は自動で作成されます。</li>
+  </ol>
+
+  <h2 id="player">4. プレイヤー向けコマンド</h2>
+  <p>プレイヤーは以下のコマンドで自分の口座や取引を操作できます。</p>
+  <ul>
+    <li><code>/le wallet</code> : 自分の残高を一覧表示。初回実行時は口座が自動作成されます。</li>
+    <li><code>/le balance [currency] [player]</code> : 任意プレイヤーの残高を確認。</li>
+    <li><code>/le pay &lt;player&gt; &lt;amount&gt; [currency]</code> : 自分の資金から送金。</li>
+    <li><code>/le transfer &lt;src&gt; &lt;dst&gt; &lt;currency&gt; &lt;amount&gt;</code> : 指定アカウント間で資金を移動。</li>
+    <li><code>/le deposit</code> / <code>/le withdraw</code> : システムアカウント同士での入出金を記録。</li>
+    <li><code>/le money top [currency] [page]</code> : 残高上位一覧を表示 (10 人/ページ)。</li>
+    <li><code>/le history &lt;player&gt; [limit]</code> : 最近の取引履歴を確認。</li>
+    <li><code>/le shop</code> : ショップ樽を受け取り設置すると自動でショップが作成されます。シフトクリックで売却も可能。</li>
+    <li><code>/le search &lt;item&gt; [currency] [min] [max]</code> : 公開ショップを検索して価格比較。</li>
+    <li><code>/le lang &lt;code&gt;</code> : 表示言語を切り替え (例: <code>/le lang ja</code>)。</li>
+    <li><code>/le weblink</code> : ダッシュボードとの連携用トークンを発行。</li>
+  </ul>
+
+  <h2 id="shop">5. ショップ機能</h2>
+  <p>ショップ樽を使ってアイテムを売買できます。基本的な流れは以下の通りです。</p>
+  <ul>
+    <li><code>/le shop create &lt;id&gt;</code> : 任意の ID でショップ樽を作成。</li>
+    <li><code>/le shop add &lt;id&gt; &lt;qty&gt; &lt;price&gt; &lt;name&gt;</code> : 在庫を追加し価格を設定。</li>
+    <li><code>/le shop price &lt;id&gt; &lt;name&gt; &lt;currency&gt; &lt;amount&gt; [more...]</code> : 価格を複数通貨で変更。</li>
+    <li><code>/le shop take &lt;id&gt; &lt;item&gt; &lt;qty&gt;</code> / <code>remove</code> : 在庫回収や商品削除。</li>
+    <li><code>/le shop partner add &lt;id&gt; &lt;player&gt;</code> : 共同オーナーを追加し共同運営。</li>
+    <li><code>/le shop partner remove &lt;id&gt; &lt;player&gt;</code> : 共同オーナーを削除。</li>
+    <li><code>/le shop account &lt;id&gt; &lt;deposit|withdraw&gt; &lt;player&gt;</code> : ショップの入金・出金先アカウントを設定。</li>
+    <li><code>/le shop reopen &lt;id&gt;</code> : 一時停止したショップを再開。</li>
+    <li><code>/le search &lt;item&gt; [currency] [min] [max]</code> : 公開ショップを検索し最安値を探す。</li>
+    <li>プレイヤーは在庫のあるショップにアイテムをシフトクリックすると売却確認メニューが表示されます。</li>
+  </ul>
+  <p>紙幣アイテムは ID が異なっていても同じ額と通貨であれば同一の商品として扱われます。</p>
+
+  <h2 id="dashboard">6. Web ダッシュボード</h2>
+  <ol>
+    <li>ゲーム内で <code>/le weblink</code> を実行してワンタイムトークンを取得します。</li>
+    <li>ブラウザで <code>/register</code> にアクセスし、ユーザー名・パスワード・トークンを入力して登録します。</li>
+    <li><code>/login</code> からログインすると、残高確認やショップ管理、ショップ検索などが利用できます。</li>
+  </ol>
+  <p>ダッシュボードでは以下の管理ツールを提供します。</p>
+  <ul>
+    <li>アカウント検索・編集、通貨供給量のグラフ表示。</li>
+    <li>取引履歴のフィルタリングと CSV エクスポート。</li>
+    <li>ショップ一覧と価格変更、掲載/非掲載の切り替え。</li>
+    <li>コマンドログビューアやメトリクスグラフ。</li>
+    <li>バックアップの作成・復元・スケジュール管理。</li>
+  </ul>
+
+  <h2 id="admin">7. 管理者向け機能</h2>
+  <ul>
+    <li><code>/le money give &lt;player&gt; &lt;currency&gt; &lt;amount&gt;</code> / <code>take</code> : プレイヤーの資金を発行・没収。</li>
+    <li><code>/le currency create &lt;id&gt; [symbol]</code> : 新しい通貨を作成。</li>
+    <li><code>/le currency supply [id]</code> : 通貨の総供給量を表示。</li>
+    <li><code>/le currency default &lt;id&gt;</code> : デフォルト通貨を変更。</li>
+    <li><code>/le currency manager add/remove &lt;id&gt; &lt;player&gt;</code> : 通貨管理者の追加・削除。</li>
+    <li><code>/le currency tax &lt;id&gt; &lt;rate%&gt;</code> と <code>treasury</code> : 税率と納付先アカウントを設定。</li>
+    <li><code>/le account create &lt;id&gt;</code> や <code>connect &lt;user&gt; &lt;system&gt;</code> : システムアカウントの作成・紐付け。</li>
+    <li><code>/le setbalance &lt;player&gt; &lt;currency&gt; &lt;amount&gt;</code> : 任意の残高へ直接設定。</li>
+    <li><code>/le admin add &lt;player&gt;</code> : ダッシュボード管理者に追加。</li>
+    <li><code>/le backup</code> / <code>/le restore &lt;file&gt;</code> : データベースのバックアップ・復元。</li>
+    <li><code>/le undo</code> / <code>/le redo</code> : 最近の操作を取り消し/やり直し。</li>
+  </ul>
+
+  <h2 id="api">8. REST API 連携</h2>
+  <p>バックエンドは FastAPI を用いた REST API を提供しており、外部ツールからサーバーの経済データを取得・操作できます。</p>
+  <ol>
+    <li>環境変数 <code>LE_TOKEN</code> を利用し、HTTP ヘッダー <code>Authorization: Bearer &lt;token&gt;</code> を付与してリクエストします。</li>
+    <li><code>GET /wallet/&lt;player&gt;</code> : 任意プレイヤーの残高を取得。</li>
+    <li><code>GET /currency</code> : 登録通貨の一覧と供給量を取得。</li>
+    <li><code>POST /transfer</code> : JSON で送金内容を送り、サーバー外から自動送金。</li>
+    <li><code>GET /shops/search</code> : アイテム名で公開ショップを検索。</li>
+  </ol>
+  <p>例: Python から残高を取得する簡単なスクリプト</p>
+<pre><code>import requests
+resp = requests.get(
+    "http://localhost:8000/wallet/Steve",
+    headers={"Authorization": "Bearer YOUR_TOKEN"},
+)
+print(resp.json())
+</code></pre>
+
+  <h2 id="advanced">9. 応用例</h2>
+  <p>以下では代表的な応用シナリオを章立てで紹介します。</p>
+
+  <h3>9.1 複数通貨と経済圏の分離</h3>
+  <p><code>/le currency create</code> で新通貨を作成し、<code>manager add</code> で管理者を委任すると、ワールドや派閥ごとに独立した経済圏を運営できます。デフォルト通貨と交換レートを決めることで相互の貿易も可能です。</p>
+
+  <h3>9.2 税収システムの導入</h3>
+  <p><code>tax</code> と <code>treasury</code> を設定すると、取引時に自動で税が徴収され国庫アカウントへ送金されます。徴税率を 0 に戻すまで有効で、<code>/le history</code> で税収の推移を確認できます。</p>
+
+  <h3>9.3 ショップ網の構築と共同運営</h3>
+  <p>複数のショップ樽を設置し <code>partner add</code> で仲間を追加すると、在庫や利益を共有する大規模なマーケットを形成できます。<code>price</code> コマンドで複数通貨の価格を同時に変更し、<code>search</code> で市場調査も行えます。</p>
+
+  <h3>9.4 ダッシュボードによる監査とバックアップ</h3>
+  <p>Web ダッシュボードでは取引履歴のフィルタリングや CSV エクスポート、定期バックアップのスケジュール設定が可能です。大規模な経済運営では不正検知や履歴管理に活用してください。</p>
+
+  <h3>9.5 Python スクリプトで自動給与支払い</h3>
+<pre><code>import requests
+
+def pay_salary(player, amount, token):
+    payload = {"src": "treasury", "dst": player,
+               "currency": "credit", "amount": amount}
+    requests.post(
+        "http://localhost:8000/transfer",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+# 例: プレイヤーのログインフックから呼び出す
+pay_salary("Steve", 100, "YOUR_TOKEN")
+</code></pre>
+
+  <h3>9.6 外部データベース連携による可視化</h3>
+  <p>API から取得した JSON を外部の BI ツールやデータベースに保存すると、取引量や通貨供給量の時系列グラフを作成できます。サーバーの経済状況を分析してバランス調整に役立てましょう。</p>
+
+  <h3>9.7 サーバー間通貨共有</h3>
+  <p>複数の Spigot サーバーが同じバックエンドデータベースに接続すると、プレイヤーは別ワールドでも共通の残高を利用できます。サーバーごとに <code>LE_API_BASE</code> を分ければ負荷分散も可能です。</p>
+
+  <h2 id="trouble">10. トラブルシューティング</h2>
+  <ul>
+    <li><strong>バックエンドに接続できない:</strong> トークン設定と <code>LE_API_BASE</code> を確認し、サーバーのポートが開いているか確かめてください。</li>
+    <li><strong>ダッシュボードにログインできない:</strong> ユーザー登録時のトークンが正しいか、ブラウザの Cookie を削除して再試行してください。</li>
+    <li><strong>ショップが動作しない:</strong> 樽が保護されていないか、価格と在庫が正しく設定されているかを確認してください。</li>
+    <li><strong>スコアボードが更新されない:</strong> プラグインとバックエンドが起動しているか、<code>LE_API_BASE</code> の URL が正しいか確認します。</li>
+    <li><strong>API が 401 を返す:</strong> Authorization ヘッダーとトークンの有効期限を確認し、必要なら新しいトークンを発行してください。</li>
+  </ul>
+
+  <p>より詳細コマンド一覧は <code>USAGE.md</code>、ショップ運営の詳細は <code>SHOP_HELP.md</code> を参照してください。</p>
+</body>
+</html>
