@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>LumineEconomyBridge 機能ガイド</title>
+  <style>
+    body { font-family: sans-serif; line-height: 1.6; margin: 2em; }
+    h1, h2, h3 { color: #2c3e50; }
+    code { background: #f3f3f3; padding: 2px 4px; }
+    ul { margin-bottom: 1em; }
+  </style>
+</head>
+<body>
+  <h1>LumineEconomyBridge 機能ガイド</h1>
+  <p>LumineEconomyBridge は Minecraft のスコアボード経済を Python バックエンドと Web ダッシュボードに橋渡しするプラグインです。本ページでは基本的な使い方から応用操作まで懇切丁寧に解説します。</p>
+
+  <h2>1. 初期設定</h2>
+  <ol>
+    <li>サーバーに <code>LumineEconomyBridge.jar</code> を導入して再起動します。</li>
+    <li><code>backend/</code> ディレクトリで <code>python main.py</code> を実行し FastAPI サーバーを起動します。</li>
+    <li><code>plugins/LumineEconomyBridge/config.yml</code> の <code>api.token</code> とバックエンド環境変数 <code>LE_TOKEN</code> を同じ値に設定します。</li>
+    <li>必要に応じて <code>LE_API_BASE</code> や <code>MAPCOLOR_URL</code> を環境変数で指定します。</li>
+  </ol>
+
+  <h2>2. プレイヤー向けコマンド</h2>
+  <ul>
+    <li><code>/le wallet</code> : 自分の口座残高を表示。口座が無い場合は自動作成されます。</li>
+    <li><code>/le pay &lt;player&gt; &lt;amount&gt; [currency]</code> : 他プレイヤーへ送金。</li>
+    <li><code>/le balance [currency] [player]</code> : 指定した通貨やプレイヤーの残高確認。</li>
+    <li><code>/le money top [currency] [page]</code> : 残高上位一覧を表示 (10 人/ページ)。</li>
+    <li><code>/le history &lt;player&gt; [limit]</code> : 最近の取引履歴を表示。</li>
+    <li><code>/le shop</code> : ショップ樽を受け取り設置すると自動でショップが作成されます。シフトクリックで売却も可能。</li>
+    <li><code>/le search &lt;item&gt; [currency] [min] [max]</code> : 公開ショップを検索。</li>
+    <li><code>/le lang &lt;code&gt;</code> : 表示言語を切り替え (例: <code>/le lang ja</code>)。</li>
+  </ul>
+
+  <h2>3. Web ダッシュボードの利用</h2>
+  <ol>
+    <li>ゲーム内で <code>/le weblink</code> を実行してワンタイムトークンを取得します。</li>
+    <li>ブラウザで <code>/register</code> にアクセスし、ユーザー名・パスワード・トークンを入力して登録します。</li>
+    <li><code>/login</code> からログインすると、残高確認やショップ管理、ショップ検索などが利用できます。</li>
+  </ol>
+  <p>ダッシュボードではアカウント検索・編集、通貨供給量の確認、取引履歴のフィルタリング、バックアップ管理、コマンドログ閲覧などの高度なツールも提供しています。</p>
+
+  <h2>4. ショップ機能</h2>
+  <ul>
+    <li><code>/le shop create &lt;id&gt;</code> : 任意の ID でショップ樽を作成。</li>
+    <li><code>/le shop add &lt;id&gt; &lt;qty&gt; &lt;price&gt; &lt;name&gt;</code> : 在庫を追加。</li>
+    <li><code>/le shop take &lt;id&gt; &lt;item&gt; &lt;qty&gt;</code> : 在庫を回収。</li>
+    <li><code>/le shop price &lt;id&gt; &lt;name&gt; &lt;currency&gt; &lt;amount&gt; [more...]</code> : 価格を設定。</li>
+    <li><code>/le shop partner add &lt;id&gt; &lt;player&gt;</code> : 共同オーナーを追加。</li>
+    <li><code>/le search &lt;item&gt; [currency] [min] [max]</code> : ショップを検索。</li>
+    <li>プレイヤーは在庫のあるショップにアイテムをシフトクリックすることで売却できます。</li>
+  </ul>
+
+  <h2>5. 管理者向け機能</h2>
+  <ul>
+    <li><code>/le money give &lt;player&gt; &lt;currency&gt; &lt;amount&gt;</code> : プレイヤーへ資金を発行。</li>
+    <li><code>/le money take &lt;player&gt; &lt;currency&gt; &lt;amount&gt;</code> : 資金を没収。</li>
+    <li><code>/le currency create &lt;id&gt; [symbol]</code> : 新しい通貨を作成。</li>
+    <li><code>/le currency manager add &lt;id&gt; &lt;player&gt;</code> : 通貨管理者を追加。</li>
+    <li><code>/le currency tax &lt;id&gt; &lt;rate%&gt;</code> : 税率を 0.1% 単位で設定。</li>
+    <li><code>/le currency treasury &lt;id&gt; &lt;account&gt;</code> : 税の納付先アカウントを指定。</li>
+    <li><code>/le account create &lt;id&gt;</code> : システムアカウントを作成。</li>
+    <li><code>/le account connect &lt;user&gt; &lt;system&gt;</code> : ユーザーにシステムアカウントを紐付け。</li>
+    <li><code>/le admin add &lt;player&gt;</code> : ダッシュボード管理者に追加。</li>
+    <li><code>/le backup</code> / <code>/le restore &lt;file&gt;</code> : データベースのバックアップ・復元。</li>
+    <li><code>/le undo</code> / <code>/le redo</code> : 最近の操作を取り消し/やり直し。</li>
+  </ul>
+
+  <h2>6. 応用例</h2>
+  <p>以下は複数の機能を組み合わせた応用例です。</p>
+  <ul>
+    <li><strong>複数通貨の運用:</strong> <code>/le currency create</code> で通貨を追加し、<code>/le currency manager add</code> で管理者を指定するとゲーム内で独自の経済圏を構築できます。</li>
+    <li><strong>税収システム:</strong> <code>/le currency tax</code> と <code>/le currency treasury</code> を設定すると取引ごとに自動で税が徴収され、指定アカウントへ入金されます。</li>
+    <li><strong>ショップ網の構築:</strong> ショップ樽を複数設置し <code>/le shop partner add</code> で共同運営者を追加すると大規模なマーケットが作れます。</li>
+    <li><strong>Web ダッシュボードによる監査:</strong> 管理者はダッシュボードで取引履歴を絞り込み、異常な送金や税収の推移を確認できます。バックアップ管理を定期的に行うことで万一のトラブルにも備えられます。</li>
+  </ul>
+
+  <p>より詳細なコマンド一覧は <code>USAGE.md</code>、ショップ運営の詳細は <code>SHOP_HELP.md</code> を参照してください。</p>
+</body>
+</html>
