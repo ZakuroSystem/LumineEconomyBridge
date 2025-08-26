@@ -107,6 +107,11 @@ public class ScoreboardSyncService {
         }
     }
 
+    // Expose flushing for a single player
+    public void flush(Player p) {
+        flushPlayer(p);
+    }
+
     public void sendAbsolute(Player p) {
         UUID id = p.getUniqueId();
         Map<String, Integer> current = callSync(() -> ScoreboardUtil.readAllSync(p));
