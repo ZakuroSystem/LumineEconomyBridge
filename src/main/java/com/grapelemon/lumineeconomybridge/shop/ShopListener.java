@@ -55,6 +55,7 @@ public class ShopListener implements Listener {
     private final NamespacedKey keyShop;
     private final NamespacedKey keyId;
     private final NamespacedKey keyOwner;
+    private final NamespacedKey noteKey;
     private static final long CACHE_MS = 3000;
     private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
     private final Map<String, CacheEntry> itemCache = new ConcurrentHashMap<>();
@@ -82,6 +83,7 @@ public class ShopListener implements Listener {
         this.keyShop = new NamespacedKey(plugin, "le_shop");
         this.keyId = new NamespacedKey(plugin, "shop_id");
         this.keyOwner = new NamespacedKey(plugin, "owner_uuid");
+        this.noteKey = new NamespacedKey(plugin, "note_id");
     }
 
     private static class CacheEntry {
@@ -98,6 +100,12 @@ public class ShopListener implements Listener {
     private String itemToBase64(ItemStack item) {
         ItemStack clone = item.clone();
         clone.setAmount(1);
+        ItemMeta meta = clone.getItemMeta();
+        if (meta != null) {
+            PersistentDataContainer c = meta.getPersistentDataContainer();
+            c.remove(noteKey);
+            clone.setItemMeta(meta);
+        }
         return Base64.getEncoder().encodeToString(clone.serializeAsBytes());
     }
 

@@ -234,6 +234,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop reopen " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Reopen suspended shop / 再開");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner add " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Add co-owner / 共同オーナー追加");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner remove " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Remove co-owner / 共同オーナー削除");
+                        p.sendMessage(ChatColor.GREEN + "/le shop account " + ChatColor.YELLOW + "<id> <deposit|withdraw> <player> " + ChatColor.GRAY + "- Set shop accounts / 入出金先設定");
                         p.sendMessage(ChatColor.GREEN + "/le shop publish " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- List shop / 掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
@@ -369,6 +370,46 @@ public class LeCommandExecutor implements CommandExecutor {
                         plugin.getHttpClient().newCall(req).enqueue(new Callback() {
                             @Override public void onFailure(Call call, IOException ex) {
                                 plugin.getLogger().warning("Partner failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equals(res.get("status").getAsString())) {
+                                            p.sendMessage(ChatColor.GREEN + "Done / 完了しました" + ChatColor.RESET);
+                                        } else {
+                                            p.sendMessage(ChatColor.RED + "Failed / 失敗しました" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else if (args.length >= 5 && args[1].equalsIgnoreCase("account")) {
+                        String shopId = args[2];
+                        String kind = args[3];
+                        String target = args[4];
+                        java.util.UUID uuid = Bukkit.getOfflinePlayer(target).getUniqueId();
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        if (kind.equalsIgnoreCase("deposit")) {
+                            payload.put("deposit_uuid", uuid.toString());
+                        } else if (kind.equalsIgnoreCase("withdraw")) {
+                            payload.put("withdraw_uuid", uuid.toString());
+                        } else {
+                            p.sendMessage(ChatColor.RED + "Specify deposit or withdraw / 入金か出金を指定してください" + ChatColor.RESET);
+                            return true;
+                        }
+                        if (p.hasPermission("le.admin")) payload.put("force", true);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/set_account")
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Set account failed: " + ex.getMessage());
                                 Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
                             }
                             @Override public void onResponse(Call call, Response response) throws IOException {
@@ -811,6 +852,12 @@ public class LeCommandExecutor implements CommandExecutor {
     private String itemToBase64(ItemStack item) {
         ItemStack clone = item.clone();
         clone.setAmount(1);
+        ItemMeta meta = clone.getItemMeta();
+        if (meta != null) {
+            PersistentDataContainer c = meta.getPersistentDataContainer();
+            c.remove(new NamespacedKey(plugin, "note_id"));
+            clone.setItemMeta(meta);
+        }
         return Base64.getEncoder().encodeToString(clone.serializeAsBytes());
     }
 

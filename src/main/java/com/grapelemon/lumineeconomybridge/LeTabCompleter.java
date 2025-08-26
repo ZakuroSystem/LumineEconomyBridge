@@ -233,6 +233,11 @@ public class LeTabCompleter implements TabCompleter {
                         .filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase()))
                         .collect(Collectors.toList());
             }
+            if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("account")) {
+                return Stream.of("deposit", "withdraw")
+                        .filter(s -> s.startsWith(args[3].toLowerCase()))
+                        .collect(Collectors.toList());
+            }
             if (args[0].equalsIgnoreCase("shop") && (args[1].equalsIgnoreCase("price") || args[1].equalsIgnoreCase("remove"))) {
                 String shopId = args[2];
                 ItemCache cache = itemCache.get(shopId);
@@ -249,6 +254,12 @@ public class LeTabCompleter implements TabCompleter {
         }
         if (args.length == 5) {
             if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("partner")) {
+                return Bukkit.getOnlinePlayers().stream()
+                        .map(Player::getName)
+                        .filter(n -> n.toLowerCase().startsWith(args[4].toLowerCase()))
+                        .collect(Collectors.toList());
+            }
+            if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("account")) {
                 return Bukkit.getOnlinePlayers().stream()
                         .map(Player::getName)
                         .filter(n -> n.toLowerCase().startsWith(args[4].toLowerCase()))
