@@ -58,6 +58,10 @@ public class PaperCurrencyService {
         processQueue();
     }
 
+    public LumineEconomyBridge getPlugin() {
+        return plugin;
+    }
+
     public ItemStack issue(Player p, String currency, int amount) {
         ItemStack note = new ItemStack(Material.PAPER, 1);
         ItemMeta meta = note.getItemMeta();

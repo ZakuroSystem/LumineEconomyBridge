@@ -1,5 +1,6 @@
 package com.grapelemon.lumineeconomybridge.cash;
 
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.ItemFrame;
 import org.bukkit.event.EventHandler;
@@ -21,12 +22,15 @@ import org.bukkit.block.BlockState;
 import org.bukkit.block.Chest;
 import org.bukkit.block.DoubleChest;
 import org.bukkit.block.ShulkerBox;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.Location;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.BlockStateMeta;
 import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.UUID;
 
@@ -34,10 +38,31 @@ public class PaperNoteListener implements Listener {
     private final PaperCurrencyService service;
     private final int moveThrottleSq;
     private final Map<UUID, Location> lastMove = new HashMap<>();
+    private final Map<UUID, List<ItemStack>> noteCache = new HashMap<>();
 
     public PaperNoteListener(PaperCurrencyService service, int moveThrottle) {
         this.service = service;
         this.moveThrottleSq = moveThrottle * moveThrottle;
+    }
+
+    private void rescan(Player p) {
+        UUID id = p.getUniqueId();
+        List<ItemStack> notes = new ArrayList<>();
+        for (ItemStack s : p.getInventory().getContents()) {
+            if (containsNote(s)) {
+                notes.add(s);
+            }
+        }
+        if (notes.isEmpty()) {
+            noteCache.remove(id);
+            lastMove.remove(id);
+        } else {
+            noteCache.put(id, notes);
+        }
+    }
+
+    private void scheduleRescan(Player p) {
+        Bukkit.getScheduler().runTask(service.getPlugin(), () -> rescan(p));
     }
 
     private Location holderLocation(InventoryHolder holder) {
@@ -75,6 +100,7 @@ public class PaperNoteListener implements Listener {
         if (loc != null) {
             service.trackItem(stack, p.getUniqueId().toString(), "drop", loc);
         }
+        scheduleRescan(p);
     }
 
     @EventHandler
@@ -85,6 +111,7 @@ public class PaperNoteListener implements Listener {
         if (loc != null) {
             service.trackItem(stack, p.getUniqueId().toString(), "pickup", loc);
         }
+        scheduleRescan(p);
     }
 
     @EventHandler
@@ -98,6 +125,8 @@ public class PaperNoteListener implements Listener {
                 service.trackItem(s, actor, "drop", loc);
             }
         }
+        noteCache.remove(victim.getUniqueId());
+        lastMove.remove(victim.getUniqueId());
     }
 
     @EventHandler
@@ -108,18 +137,16 @@ public class PaperNoteListener implements Listener {
         UUID id = p.getUniqueId();
         Location last = lastMove.get(id);
         if (last != null && last.getWorld().equals(to.getWorld()) && last.distanceSquared(to) < moveThrottleSq) return;
-        boolean has = false;
-        for (ItemStack s : p.getInventory().getContents()) {
-            if (containsNote(s)) {
-                has = true;
-                service.trackItem(s, id.toString(), "move", to);
-            }
+        List<ItemStack> notes = noteCache.get(id);
+        if (notes == null) {
+            rescan(p);
+            notes = noteCache.get(id);
+            if (notes == null) return;
         }
-        if (has) {
-            lastMove.put(id, to.clone());
-        } else {
-            lastMove.remove(id);
+        for (ItemStack s : notes) {
+            service.trackItem(s, id.toString(), "move", to);
         }
+        lastMove.put(id, to.clone());
     }
 
     @EventHandler
@@ -142,6 +169,7 @@ public class PaperNoteListener implements Listener {
                 service.trackItem(stack, p.getUniqueId().toString(), action, loc);
             }
         }
+        scheduleRescan(p);
     }
 
     @EventHandler
@@ -174,6 +202,9 @@ public class PaperNoteListener implements Listener {
         Location loc = frame.getLocation();
         if (loc != null) {
             service.trackItem(stack, actor, "store", loc);
+        }
+        if (e.getPlayer() != null) {
+            scheduleRescan(e.getPlayer());
         }
     }
 
