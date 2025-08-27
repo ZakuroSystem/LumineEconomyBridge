@@ -15,8 +15,8 @@ import org.bukkit.Bukkit;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.Queue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 public class PaperCurrencyService {
     private final LumineEconomyBridge plugin;
@@ -26,7 +26,7 @@ public class PaperCurrencyService {
     private final String baseUrl;
     private final Gson gson = new Gson();
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-    private final Queue<CashEventPayload> eventQueue = new ConcurrentLinkedQueue<>();
+    private final BlockingQueue<CashEventPayload> eventQueue;
 
     public PaperCurrencyService(LumineEconomyBridge plugin, OkHttpClient http, String baseUrl) {
         this.plugin = plugin;
@@ -34,6 +34,8 @@ public class PaperCurrencyService {
         this.baseUrl = baseUrl;
         this.currencyKey = new NamespacedKey(plugin, "note_currency");
         this.amountKey = new NamespacedKey(plugin, "note_amount");
+        int capacity = plugin.getConfig().getInt("cash.queue_capacity", 1000);
+        this.eventQueue = new LinkedBlockingQueue<>(capacity);
         long period = 20L * 5L;
         Bukkit.getScheduler().runTaskTimerAsynchronously(plugin, this::flushEvents, period, period);
     }
@@ -76,7 +78,9 @@ public class PaperCurrencyService {
                 stack.getAmount(),
                 locString(loc)
         );
-        eventQueue.add(payload);
+        if (!eventQueue.offer(payload)) {
+            plugin.getLogger().warning("cash event dropped: queue full");
+        }
     }
 
     private void flushEvents() {
