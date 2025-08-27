@@ -10,6 +10,7 @@ from fastapi import (
 )
 from pydantic import BaseModel
 from typing import Dict, Optional, List, Union, Tuple, Any
+from enum import Enum
 from tile_store import TileStore
 import sqlite3
 import json
@@ -595,10 +596,21 @@ class ShopReopenPayload(BaseModel):
     timestamp: int
 
 
+class CashEventAction(str, Enum):
+    ISSUE = "issue"
+    TRANSFER = "transfer"
+    PICKUP = "pickup"
+    STORE = "store"
+    RETRIEVE = "retrieve"
+    DROP = "drop"
+    MOVE = "move"
+    DESTROY = "destroy"
+
+
 class CashEvent(BaseModel):
     note_id: str
     player_uuid: str
-    action: str
+    action: CashEventAction
     currency: str
     amount: int
     location: Optional[str] = None
@@ -3187,7 +3199,7 @@ def cash_event(ev: CashEvent, token: None = Depends(verify_token)):
             (
                 ev.note_id,
                 ev.player_uuid,
-                ev.action,
+                ev.action.value,
                 ev.currency,
                 ev.amount,
                 ev.location,
@@ -3195,13 +3207,13 @@ def cash_event(ev: CashEvent, token: None = Depends(verify_token)):
             ),
         )
         if ev.action in (
-            "issue",
-            "transfer",
-            "pickup",
-            "store",
-            "retrieve",
-            "drop",
-            "move",
+            CashEventAction.ISSUE,
+            CashEventAction.TRANSFER,
+            CashEventAction.PICKUP,
+            CashEventAction.STORE,
+            CashEventAction.RETRIEVE,
+            CashEventAction.DROP,
+            CashEventAction.MOVE,
         ):
             world = x = y = z = None
             if ev.location:
@@ -3223,7 +3235,7 @@ def cash_event(ev: CashEvent, token: None = Depends(verify_token)):
                     z,
                 ),
             )
-        elif ev.action == "destroy":
+        elif ev.action == CashEventAction.DESTROY:
             cash_conn.execute("DELETE FROM notes WHERE note_id=?", (ev.note_id,))
     return {"status": "ok"}
 
