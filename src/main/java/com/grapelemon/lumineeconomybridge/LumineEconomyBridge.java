@@ -106,7 +106,8 @@ public class LumineEconomyBridge extends JavaPlugin {
                     .build();
             syncService = new ScoreboardSyncService(httpClient, baseUrl, this);
             cashService = new PaperCurrencyService(this, httpClient, baseUrl);
-            getServer().getPluginManager().registerEvents(new PaperNoteListener(cashService), this);
+            int moveDist = getConfig().getInt("cash.move_track_distance", 5);
+            getServer().getPluginManager().registerEvents(new PaperNoteListener(cashService, moveDist), this);
 
             for (Player p : Bukkit.getOnlinePlayers()) {
                 syncService.seed(p);

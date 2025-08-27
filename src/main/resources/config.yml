@@ -7,3 +7,5 @@ sync:
 mapcolor:
   port: 8765
   debounce_ms: 1000
+cash:
+  move_track_distance: 5

@@ -10,19 +10,29 @@ import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerPickupItemEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Chest;
 import org.bukkit.block.DoubleChest;
+import org.bukkit.block.ShulkerBox;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.Location;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.BlockStateMeta;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.UUID;
 
 public class PaperNoteListener implements Listener {
     private final PaperCurrencyService service;
+    private final int moveThrottleSq;
+    private final Map<UUID, Location> lastMove = new HashMap<>();
 
-    public PaperNoteListener(PaperCurrencyService service) {
+    public PaperNoteListener(PaperCurrencyService service, int moveThrottle) {
         this.service = service;
+        this.moveThrottleSq = moveThrottle * moveThrottle;
     }
 
     private Location holderLocation(InventoryHolder holder) {
@@ -33,6 +43,23 @@ public class PaperNoteListener implements Listener {
             return dc.getLocation();
         }
         return null;
+    }
+
+    private boolean containsNote(ItemStack stack) {
+        if (stack == null) return false;
+        if (service.isNote(stack)) return true;
+        if (stack.getType().name().endsWith("SHULKER_BOX")) {
+            ItemMeta meta = stack.getItemMeta();
+            if (meta instanceof BlockStateMeta bsm) {
+                BlockState st = bsm.getBlockState();
+                if (st instanceof ShulkerBox box) {
+                    for (ItemStack s : box.getInventory().getContents()) {
+                        if (containsNote(s)) return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     @EventHandler
@@ -47,6 +74,28 @@ public class PaperNoteListener implements Listener {
         ItemStack stack = e.getItem().getItemStack();
         Player p = e.getPlayer();
         service.trackItem(stack, p.getUniqueId().toString(), "pickup", p.getLocation());
+    }
+
+    @EventHandler
+    public void onMove(PlayerMoveEvent e) {
+        Player p = e.getPlayer();
+        Location to = e.getTo();
+        if (to == null) return;
+        UUID id = p.getUniqueId();
+        Location last = lastMove.get(id);
+        if (last != null && last.getWorld().equals(to.getWorld()) && last.distanceSquared(to) < moveThrottleSq) return;
+        boolean has = false;
+        for (ItemStack s : p.getInventory().getContents()) {
+            if (containsNote(s)) {
+                has = true;
+                service.trackItem(s, id.toString(), "move", to);
+            }
+        }
+        if (has) {
+            lastMove.put(id, to.clone());
+        } else {
+            lastMove.remove(id);
+        }
     }
 
     @EventHandler
