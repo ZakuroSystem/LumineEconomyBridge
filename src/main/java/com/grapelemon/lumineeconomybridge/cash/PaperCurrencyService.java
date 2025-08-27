@@ -28,6 +28,9 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.Writer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
 import java.util.Queue;
 import java.util.UUID;
@@ -195,16 +198,23 @@ public class PaperCurrencyService {
     }
 
     private synchronized void saveQueue() {
+        plugin.getDataFolder().mkdirs();
+        if (queue.isEmpty()) {
+            if (queueFile.exists()) queueFile.delete();
+            return;
+        }
+        Path path = queueFile.toPath();
+        Path tmp = null;
         try {
-            plugin.getDataFolder().mkdirs();
-            if (queue.isEmpty()) {
-                if (queueFile.exists()) queueFile.delete();
-                return;
-            }
-            try (Writer w = new FileWriter(queueFile)) {
+            tmp = Files.createTempFile(path.getParent(), "cash_events", ".tmp");
+            try (Writer w = Files.newBufferedWriter(tmp)) {
                 gson.toJson(queue.toArray(new CashEventPayload[0]), w);
             }
+            Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
+            if (tmp != null) {
+                try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+            }
             plugin.getLogger().warning("failed to persist cash queue: " + e.getMessage());
         }
     }
