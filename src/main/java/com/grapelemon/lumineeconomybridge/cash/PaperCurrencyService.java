@@ -23,6 +23,8 @@ import org.bukkit.Location;
 
 import java.io.IOException;
 import java.util.UUID;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class PaperCurrencyService {
     private final LumineEconomyBridge plugin;
@@ -33,6 +35,8 @@ public class PaperCurrencyService {
     private final String baseUrl;
     private final Gson gson = new Gson();
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+    private final Queue<CashEventPayload> queue = new ConcurrentLinkedQueue<>();
+    private volatile boolean sending = false;
 
     public PaperCurrencyService(LumineEconomyBridge plugin, OkHttpClient http, String baseUrl) {
         this.plugin = plugin;
@@ -41,6 +45,7 @@ public class PaperCurrencyService {
         this.noteKey = new NamespacedKey(plugin, "note_id");
         this.currencyKey = new NamespacedKey(plugin, "note_currency");
         this.amountKey = new NamespacedKey(plugin, "note_amount");
+        Bukkit.getScheduler().runTaskTimerAsynchronously(plugin, this::processQueue, 20L, 20L);
     }
 
     public ItemStack issue(Player p, String currency, int amount) {
@@ -120,7 +125,19 @@ public class PaperCurrencyService {
     }
 
     public void sendEvent(String id, String player, String action, String currency, int amount, String loc) {
-        CashEventPayload payload = new CashEventPayload(id, player, action, currency, amount, loc);
+        queue.offer(new CashEventPayload(id, player, action, currency, amount, loc));
+        processQueue();
+    }
+
+    private String locString(Location l) {
+        return l.getWorld().getName() + "," + l.getBlockX() + "," + l.getBlockY() + "," + l.getBlockZ();
+    }
+
+    private void processQueue() {
+        if (sending) return;
+        CashEventPayload payload = queue.peek();
+        if (payload == null) return;
+        sending = true;
         Request req = new Request.Builder()
                 .url(baseUrl + "/api/cash/event")
                 .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
@@ -129,13 +146,15 @@ public class PaperCurrencyService {
         http.newCall(req).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException e) {
                 plugin.getLogger().warning("cash event failed: " + e.getMessage());
+                sending = false;
             }
-            @Override public void onResponse(Call call, Response response) { response.close(); }
+            @Override public void onResponse(Call call, Response response) {
+                response.close();
+                queue.poll();
+                sending = false;
+                processQueue();
+            }
         });
-    }
-
-    private String locString(Location l) {
-        return l.getWorld().getName() + "," + l.getBlockX() + "," + l.getBlockY() + "," + l.getBlockZ();
     }
 
     public record CashEventPayload(String note_id, String player_uuid, String action, String currency, int amount, String location) {}
