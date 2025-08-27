@@ -76,8 +76,7 @@ public class PaperCurrencyService {
                 player,
                 action,
                 getCurrency(stack),
-                getAmount(stack),
-                stack.getAmount(),
+                getAmount(stack) * stack.getAmount(),
                 locString(loc)
         );
         if (!eventQueue.offer(new RetryableCashEvent(payload, 0))) {
@@ -125,25 +124,23 @@ public class PaperCurrencyService {
 
     public void flushAll() {
         for (Player p : Bukkit.getOnlinePlayers()) {
-            Map<String, Map<Integer, Integer>> map = new HashMap<>();
+            Map<String, Integer> totals = new HashMap<>();
             for (ItemStack stack : p.getInventory().getContents()) {
                 if (isNote(stack)) {
                     String cur = getCurrency(stack);
-                    int amt = getAmount(stack);
-                    map.computeIfAbsent(cur, k -> new HashMap<>()).merge(amt, stack.getAmount(), Integer::sum);
+                    int value = getAmount(stack) * stack.getAmount();
+                    totals.merge(cur, value, Integer::sum);
                 }
             }
-            List<NotePayload> notes = new ArrayList<>();
-            for (Map.Entry<String, Map<Integer, Integer>> ce : map.entrySet()) {
-                for (Map.Entry<Integer, Integer> ae : ce.getValue().entrySet()) {
-                    notes.add(new NotePayload(ce.getKey(), ae.getKey(), ae.getValue()));
-                }
+            List<CashBalancePayload> notes = new ArrayList<>();
+            for (Map.Entry<String, Integer> e : totals.entrySet()) {
+                notes.add(new CashBalancePayload(e.getKey(), e.getValue()));
             }
             sendRewrite(p.getUniqueId().toString(), notes);
         }
     }
 
-    private void sendRewrite(String player, List<NotePayload> notes) {
+    private void sendRewrite(String player, List<CashBalancePayload> notes) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("player_uuid", player);
         payload.put("notes", notes);
@@ -160,7 +157,7 @@ public class PaperCurrencyService {
 
     private record RetryableCashEvent(CashEventPayload payload, int attempt) {}
 
-    public record CashEventPayload(String player_uuid, String action, String currency, int amount, int quantity, String location) {}
+    public record CashEventPayload(String player_uuid, String action, String currency, int amount, String location) {}
 
-    public record NotePayload(String currency, int amount, int quantity) {}
+    public record CashBalancePayload(String currency, int amount) {}
 }

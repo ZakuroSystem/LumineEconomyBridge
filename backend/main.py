@@ -357,11 +357,14 @@ with cash_conn:
             owner_uuid TEXT NOT NULL,
             currency TEXT NOT NULL,
             amount INTEGER NOT NULL,
-            quantity INTEGER NOT NULL,
-            PRIMARY KEY(owner_uuid, currency, amount)
+            PRIMARY KEY(owner_uuid, currency)
         )
         """
     )
+    try:
+        cash_conn.execute("ALTER TABLE notes DROP COLUMN quantity")
+    except sqlite3.OperationalError:
+        pass
     cash_conn.execute(
         """
         CREATE TABLE IF NOT EXISTS cash_events (
@@ -3133,15 +3136,14 @@ def cash_event(ev: CashEvent, token: None = Depends(verify_token)):
     return {"status": "ok"}
 
 
-class CashNote(BaseModel):
+class CashHolding(BaseModel):
     currency: str
     amount: int
-    quantity: int
 
 
 class CashRewrite(BaseModel):
     player_uuid: str
-    notes: List[CashNote]
+    notes: List[CashHolding]
 
 
 @app.post("/api/cash/rewrite")
@@ -3150,8 +3152,8 @@ def cash_rewrite(payload: CashRewrite, token: None = Depends(verify_token)):
         cash_conn.execute("DELETE FROM notes WHERE owner_uuid=?", (payload.player_uuid,))
         for n in payload.notes:
             cash_conn.execute(
-                "INSERT INTO notes(owner_uuid, currency, amount, quantity) VALUES(?,?,?,?)",
-                (payload.player_uuid, n.currency, n.amount, n.quantity),
+                "INSERT INTO notes(owner_uuid, currency, amount) VALUES(?,?,?)",
+                (payload.player_uuid, n.currency, n.amount),
             )
     return {"status": "ok"}
 
@@ -3159,7 +3161,7 @@ def cash_rewrite(payload: CashRewrite, token: None = Depends(verify_token)):
 @app.get("/api/cash/holdings/{player_uuid}")
 def cash_holdings(player_uuid: str, token: None = Depends(verify_token)):
     cur = cash_conn.execute(
-        "SELECT currency, SUM(amount * quantity) AS total FROM notes WHERE owner_uuid=? GROUP BY currency",
+        "SELECT currency, amount FROM notes WHERE owner_uuid=?",
         (player_uuid,),
     )
     return {"holdings": [dict(r) for r in cur.fetchall()]}
