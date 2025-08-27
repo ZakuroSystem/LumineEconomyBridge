@@ -123,7 +123,7 @@ public class ShopListener implements Listener {
         if (!c.has(keyShop, PersistentDataType.BYTE)) return;
         String expected = c.get(keyOwner, PersistentDataType.STRING);
         String placer = e.getPlayer().getUniqueId().toString();
-        if (expected != null && !placer.equals(expected)) {
+        if (expected != null && !placer.equals(expected) && !e.getPlayer().isOp()) {
             e.setCancelled(true);
             e.getPlayer().sendMessage(ChatColor.RED + "You are not the owner / あなたはオーナーではありません" + ChatColor.RESET);
             return;

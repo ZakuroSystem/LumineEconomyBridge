@@ -239,6 +239,21 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
                         String shopId = args[2];
+                        Player target = p;
+                        String ownerUuid = p.getUniqueId().toString();
+                        if (args.length >= 4) {
+                            Player other = Bukkit.getPlayer(args[3]);
+                            if (other == null) {
+                                p.sendMessage(ChatColor.RED + "Player not found / プレイヤーが見つかりません" + ChatColor.RESET);
+                                return true;
+                            }
+                            if (!p.isOp()) {
+                                p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                                return true;
+                            }
+                            target = other;
+                            ownerUuid = other.getUniqueId().toString();
+                        }
                         ItemStack barrel = new ItemStack(Material.BARREL);
                         ItemMeta meta = barrel.getItemMeta();
                         PersistentDataContainer c = meta.getPersistentDataContainer();
@@ -247,20 +262,23 @@ public class LeCommandExecutor implements CommandExecutor {
                         NamespacedKey keyOwner = new NamespacedKey(plugin, "owner_uuid");
                         c.set(keyShop, PersistentDataType.BYTE, (byte)1);
                         c.set(keyId, PersistentDataType.STRING, shopId);
-                        c.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
+                        c.set(keyOwner, PersistentDataType.STRING, ownerUuid);
                         if (meta instanceof BlockStateMeta bsm) {
                             BlockState state = bsm.getBlockState();
                             if (state instanceof TileState tile) {
                                 PersistentDataContainer tc = tile.getPersistentDataContainer();
                                 tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
                                 tc.set(keyId, PersistentDataType.STRING, shopId);
-                                tc.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
+                                tc.set(keyOwner, PersistentDataType.STRING, ownerUuid);
                                 tile.update(true);
                                 bsm.setBlockState(tile);
                             }
                         }
                         barrel.setItemMeta(meta);
-                        p.getInventory().addItem(barrel);
+                        target.getInventory().addItem(barrel);
+                        if (target != p) {
+                            p.sendMessage(ChatColor.GREEN + "Shop barrel created for " + target.getName() + ChatColor.RESET);
+                        }
                         args = new String[]{"shop", "quick", shopId};
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
