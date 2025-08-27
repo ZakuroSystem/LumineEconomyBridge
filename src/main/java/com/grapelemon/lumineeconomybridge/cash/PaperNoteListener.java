@@ -1,6 +1,5 @@
 package com.grapelemon.lumineeconomybridge.cash;
 
-import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -9,6 +8,10 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerPickupItemEvent;
+import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.block.BlockState;
+import org.bukkit.block.Chest;
+import org.bukkit.block.ShulkerBox;
 import org.bukkit.inventory.ItemStack;
 
 public class PaperNoteListener implements Listener {
@@ -18,40 +21,48 @@ public class PaperNoteListener implements Listener {
         this.service = service;
     }
 
-    private String loc(Location l) {
-        return l.getWorld().getName()+","+l.getBlockX()+","+l.getBlockY()+","+l.getBlockZ();
-    }
-
     @EventHandler
     public void onDrop(PlayerDropItemEvent e) {
         ItemStack stack = e.getItemDrop().getItemStack();
-        if (!service.isNote(stack)) return;
         Player p = e.getPlayer();
-        service.sendEvent(service.getId(stack), p.getUniqueId().toString(), "drop", service.getCurrency(stack), service.getAmount(stack), loc(p.getLocation()));
+        service.trackItem(stack, p.getUniqueId().toString(), "drop", p.getLocation());
     }
 
     @EventHandler
     public void onPickup(PlayerPickupItemEvent e) {
         ItemStack stack = e.getItem().getItemStack();
-        if (!service.isNote(stack)) return;
         Player p = e.getPlayer();
-        service.sendEvent(service.getId(stack), p.getUniqueId().toString(), "pickup", service.getCurrency(stack), service.getAmount(stack), loc(p.getLocation()));
+        service.trackItem(stack, p.getUniqueId().toString(), "pickup", p.getLocation());
     }
 
     @EventHandler
     public void onChestMove(InventoryClickEvent e) {
         if (!(e.getWhoClicked() instanceof Player)) return;
         ItemStack stack = e.getCurrentItem();
-        if (stack == null || !service.isNote(stack)) return;
+        if (stack == null) return;
         Player p = (Player) e.getWhoClicked();
         String action = e.getInventory().getType() == InventoryType.CHEST ? "store" : "retrieve";
-        service.sendEvent(service.getId(stack), p.getUniqueId().toString(), action, service.getCurrency(stack), service.getAmount(stack), loc(p.getLocation()));
+        service.trackItem(stack, p.getUniqueId().toString(), action, p.getLocation());
     }
 
     @EventHandler
     public void onDespawn(ItemDespawnEvent e) {
         ItemStack stack = e.getEntity().getItemStack();
-        if (!service.isNote(stack)) return;
-        service.sendEvent(service.getId(stack), "", "destroy", service.getCurrency(stack), service.getAmount(stack), loc(e.getLocation()));
+        service.trackItem(stack, "", "destroy", e.getLocation());
+    }
+
+    @EventHandler
+    public void onChunkLoad(ChunkLoadEvent e) {
+        for (BlockState st : e.getChunk().getTileEntities()) {
+            if (st instanceof Chest chest) {
+                for (ItemStack s : chest.getBlockInventory().getContents()) {
+                    service.trackItem(s, "", "store", chest.getLocation());
+                }
+            } else if (st instanceof ShulkerBox box) {
+                for (ItemStack s : box.getInventory().getContents()) {
+                    service.trackItem(s, "", "store", box.getLocation());
+                }
+            }
+        }
     }
 }
