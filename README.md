@@ -2,6 +2,9 @@
 
 LumineEconomyBridge は Minecraft のスコアボード経済を Python バックエンドと WebUI に橋渡しするプラグインです。ここではプレイヤーと管理者が使う主な機能をまとめます。
 
+より網羅的な解説は <code>docs/index.html</code> の Web ガイドを参照してください。
+発行済みの紙幣はチェストやシュルカーボックス内に置かれていてもバックエンドで常に追跡されます。
+
 ## 1. 初期設定
 1. サーバーに `LumineEconomyBridge.jar` を導入し再起動します。
 2. `backend/` ディレクトリで `python main.py` を実行して FastAPI サーバーを起動します。

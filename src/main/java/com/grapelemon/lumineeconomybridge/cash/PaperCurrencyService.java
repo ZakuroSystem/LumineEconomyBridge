@@ -3,9 +3,18 @@ package com.grapelemon.lumineeconomybridge.cash;
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.google.gson.Gson;
 import okhttp3.*;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.World;
+import org.bukkit.Chunk;
+import org.bukkit.block.BlockState;
+import org.bukkit.block.Chest;
+import org.bukkit.block.ShulkerBox;
+import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
@@ -68,6 +77,46 @@ public class PaperCurrencyService {
         ItemMeta meta = stack.getItemMeta();
         Integer v = meta.getPersistentDataContainer().get(amountKey, PersistentDataType.INTEGER);
         return v != null ? v : 0;
+    }
+
+    public void trackItem(ItemStack stack, String player, String action, Location loc) {
+        if (stack == null) return;
+        if (isNote(stack)) {
+            sendEvent(getId(stack), player, action, getCurrency(stack), getAmount(stack), locString(loc));
+        } else if (stack.getType().name().endsWith("SHULKER_BOX")) {
+            ItemMeta meta = stack.getItemMeta();
+            if (meta instanceof BlockStateMeta bsm) {
+                BlockState state = bsm.getBlockState();
+                if (state instanceof ShulkerBox box) {
+                    for (ItemStack s : box.getInventory().getContents()) {
+                        trackItem(s, player, action, loc);
+                    }
+                }
+            }
+        }
+    }
+
+    private void scanInventory(Inventory inv, String player, Location loc, String action) {
+        for (ItemStack s : inv.getContents()) {
+            trackItem(s, player, action, loc);
+        }
+    }
+
+    public void scanAll() {
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            scanInventory(p.getInventory(), p.getUniqueId().toString(), p.getLocation(), "pickup");
+        }
+        for (World w : Bukkit.getWorlds()) {
+            for (Chunk c : w.getLoadedChunks()) {
+                for (BlockState st : c.getTileEntities()) {
+                    if (st instanceof Chest chest) {
+                        scanInventory(chest.getBlockInventory(), "", chest.getLocation(), "store");
+                    } else if (st instanceof InventoryHolder holder) {
+                        scanInventory(holder.getInventory(), "", st.getLocation(), "store");
+                    }
+                }
+            }
+        }
     }
 
     public void sendEvent(String id, String player, String action, String currency, int amount, String loc) {
