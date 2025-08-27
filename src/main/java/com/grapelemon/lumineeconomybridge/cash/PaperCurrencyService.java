@@ -74,7 +74,7 @@ public class PaperCurrencyService {
         c.set(currencyKey, PersistentDataType.STRING, currency);
         c.set(amountKey, PersistentDataType.INTEGER, amount);
         note.setItemMeta(meta);
-        sendEvent(id, p.getUniqueId().toString(), "issue", currency, amount, locString(p.getLocation()));
+        sendEvent(id, p.getUniqueId().toString(), CashEventAction.ISSUE, currency, amount, locString(p.getLocation()));
         return note;
     }
 
@@ -100,7 +100,7 @@ public class PaperCurrencyService {
         return v != null ? v : 0;
     }
 
-    public void trackItem(ItemStack stack, String player, String action, Location loc) {
+    public void trackItem(ItemStack stack, String player, CashEventAction action, Location loc) {
         if (stack == null || loc == null) return;
         if (isNote(stack)) {
             sendEvent(getId(stack), player, action, getCurrency(stack), getAmount(stack), locString(loc));
@@ -117,7 +117,7 @@ public class PaperCurrencyService {
         }
     }
 
-    private void scanInventory(Inventory inv, String player, Location loc, String action) {
+    private void scanInventory(Inventory inv, String player, Location loc, CashEventAction action) {
         for (ItemStack s : inv.getContents()) {
             trackItem(s, player, action, loc);
         }
@@ -125,7 +125,7 @@ public class PaperCurrencyService {
 
     public void scanAll() {
         for (Player p : Bukkit.getOnlinePlayers()) {
-            scanInventory(p.getInventory(), p.getUniqueId().toString(), p.getLocation(), "pickup");
+            scanInventory(p.getInventory(), p.getUniqueId().toString(), p.getLocation(), CashEventAction.PICKUP);
         }
         Queue<Chunk> chunks = new ArrayDeque<>();
         for (World w : Bukkit.getWorlds()) {
@@ -145,14 +145,14 @@ public class PaperCurrencyService {
     private void scanChunk(Chunk c) {
         for (BlockState st : c.getTileEntities()) {
             if (st instanceof Chest chest) {
-                scanInventory(chest.getBlockInventory(), "", chest.getLocation(), "store");
+                scanInventory(chest.getBlockInventory(), "", chest.getLocation(), CashEventAction.STORE);
             } else if (st instanceof InventoryHolder holder) {
-                scanInventory(holder.getInventory(), "", st.getLocation(), "store");
+                scanInventory(holder.getInventory(), "", st.getLocation(), CashEventAction.STORE);
             }
         }
     }
 
-    public void sendEvent(String id, String player, String action, String currency, int amount, String loc) {
+    public void sendEvent(String id, String player, CashEventAction action, String currency, int amount, String loc) {
         queue.offer(new CashEventPayload(id, player, action, currency, amount, loc));
         saveQueue();
         processQueue();
@@ -219,5 +219,5 @@ public class PaperCurrencyService {
         }
     }
 
-    public record CashEventPayload(String note_id, String player_uuid, String action, String currency, int amount, String location) {}
+    public record CashEventPayload(String note_id, String player_uuid, CashEventAction action, String currency, int amount, String location) {}
 }
