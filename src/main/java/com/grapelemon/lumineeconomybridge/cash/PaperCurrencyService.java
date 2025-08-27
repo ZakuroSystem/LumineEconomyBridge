@@ -95,7 +95,7 @@ public class PaperCurrencyService {
     }
 
     public void trackItem(ItemStack stack, String player, String action, Location loc) {
-        if (stack == null) return;
+        if (stack == null || loc == null) return;
         if (isNote(stack)) {
             sendEvent(getId(stack), player, action, getCurrency(stack), getAmount(stack), locString(loc));
         } else if (stack.getType().name().endsWith("SHULKER_BOX")) {
@@ -141,6 +141,7 @@ public class PaperCurrencyService {
     }
 
     private String locString(Location l) {
+        if (l == null || l.getWorld() == null) return null;
         return l.getWorld().getName() + "," + l.getBlockX() + "," + l.getBlockY() + "," + l.getBlockZ();
     }
 

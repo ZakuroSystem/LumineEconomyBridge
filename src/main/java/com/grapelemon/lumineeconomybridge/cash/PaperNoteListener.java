@@ -71,14 +71,20 @@ public class PaperNoteListener implements Listener {
     public void onDrop(PlayerDropItemEvent e) {
         ItemStack stack = e.getItemDrop().getItemStack();
         Player p = e.getPlayer();
-        service.trackItem(stack, p.getUniqueId().toString(), "drop", p.getLocation());
+        Location loc = p.getLocation();
+        if (loc != null) {
+            service.trackItem(stack, p.getUniqueId().toString(), "drop", loc);
+        }
     }
 
     @EventHandler
     public void onPickup(PlayerPickupItemEvent e) {
         ItemStack stack = e.getItem().getItemStack();
         Player p = e.getPlayer();
-        service.trackItem(stack, p.getUniqueId().toString(), "pickup", p.getLocation());
+        Location loc = p.getLocation();
+        if (loc != null) {
+            service.trackItem(stack, p.getUniqueId().toString(), "pickup", loc);
+        }
     }
 
     @EventHandler
@@ -87,8 +93,10 @@ public class PaperNoteListener implements Listener {
         Player killer = victim.getKiller();
         String actor = killer != null ? killer.getUniqueId().toString() : "";
         Location loc = victim.getLocation();
-        for (ItemStack s : e.getDrops()) {
-            service.trackItem(s, actor, "drop", loc);
+        if (loc != null) {
+            for (ItemStack s : e.getDrops()) {
+                service.trackItem(s, actor, "drop", loc);
+            }
         }
     }
 
@@ -134,13 +142,19 @@ public class PaperNoteListener implements Listener {
             default:
                 action = "retrieve";
         }
-        service.trackItem(stack, p.getUniqueId().toString(), action, p.getLocation());
+        Location loc = p.getLocation();
+        if (loc != null) {
+            service.trackItem(stack, p.getUniqueId().toString(), action, loc);
+        }
     }
 
     @EventHandler
     public void onDespawn(ItemDespawnEvent e) {
         ItemStack stack = e.getEntity().getItemStack();
-        service.trackItem(stack, "", "destroy", e.getLocation());
+        Location loc = e.getLocation();
+        if (loc != null) {
+            service.trackItem(stack, "", "destroy", loc);
+        }
     }
 
     @EventHandler
@@ -148,8 +162,12 @@ public class PaperNoteListener implements Listener {
         ItemStack stack = e.getItem();
         Location from = holderLocation(e.getSource().getHolder());
         Location to = holderLocation(e.getDestination().getHolder());
-        service.trackItem(stack, "", "retrieve", from);
-        service.trackItem(stack, "", "store", to);
+        if (from != null) {
+            service.trackItem(stack, "", "retrieve", from);
+        }
+        if (to != null) {
+            service.trackItem(stack, "", "store", to);
+        }
     }
 
     @EventHandler
@@ -157,7 +175,10 @@ public class PaperNoteListener implements Listener {
         if (!(e.getEntity() instanceof ItemFrame frame)) return;
         ItemStack stack = frame.getItem();
         String actor = e.getPlayer() != null ? e.getPlayer().getUniqueId().toString() : "";
-        service.trackItem(stack, actor, "store", frame.getLocation());
+        Location loc = frame.getLocation();
+        if (loc != null) {
+            service.trackItem(stack, actor, "store", loc);
+        }
     }
 
     @EventHandler
@@ -168,7 +189,10 @@ public class PaperNoteListener implements Listener {
             actor = p.getUniqueId().toString();
         }
         ItemStack stack = frame.getItem();
-        service.trackItem(stack, actor, "retrieve", frame.getLocation());
+        Location loc = frame.getLocation();
+        if (loc != null) {
+            service.trackItem(stack, actor, "retrieve", loc);
+        }
     }
 
     @EventHandler
@@ -176,8 +200,10 @@ public class PaperNoteListener implements Listener {
         BlockState st = e.getBlock().getState();
         if (!(st instanceof InventoryHolder holder)) return;
         Player p = e.getPlayer();
+        Location loc = e.getBlock().getLocation();
+        if (loc == null) return;
         for (ItemStack s : holder.getInventory().getContents()) {
-            service.trackItem(s, p.getUniqueId().toString(), "retrieve", e.getBlock().getLocation());
+            service.trackItem(s, p.getUniqueId().toString(), "retrieve", loc);
         }
     }
 
@@ -185,12 +211,18 @@ public class PaperNoteListener implements Listener {
     public void onChunkLoad(ChunkLoadEvent e) {
         for (BlockState st : e.getChunk().getTileEntities()) {
             if (st instanceof Chest chest) {
-                for (ItemStack s : chest.getBlockInventory().getContents()) {
-                    service.trackItem(s, "", "store", chest.getLocation());
+                Location loc = chest.getLocation();
+                if (loc != null) {
+                    for (ItemStack s : chest.getBlockInventory().getContents()) {
+                        service.trackItem(s, "", "store", loc);
+                    }
                 }
             } else if (st instanceof InventoryHolder holder) {
-                for (ItemStack s : holder.getInventory().getContents()) {
-                    service.trackItem(s, "", "store", st.getLocation());
+                Location loc = st.getLocation();
+                if (loc != null) {
+                    for (ItemStack s : holder.getInventory().getContents()) {
+                        service.trackItem(s, "", "store", loc);
+                    }
                 }
             }
         }
