@@ -2136,10 +2136,16 @@ async def shop_place(payload: ShopPlacePayload, token: None = Depends(verify_tok
 
 
 @app.get("/api/shop/ids")
-async def shop_ids():
+async def shop_ids(owner_uuid: Optional[str] = None):
     start = time.time()
     with transaction() as cur:
-        rows = cur.execute("SELECT shop_id FROM shops").fetchall()
+        if owner_uuid:
+            rows = cur.execute(
+                "SELECT shop_id FROM shop_owners WHERE owner_uuid=?",
+                (owner_uuid,),
+            ).fetchall()
+        else:
+            rows = cur.execute("SELECT shop_id FROM shops").fetchall()
     ids = [r["shop_id"] for r in rows]
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {

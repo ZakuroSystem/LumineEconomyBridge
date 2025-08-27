@@ -5,6 +5,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonElement;
 import okhttp3.*;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -282,6 +283,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         args = new String[]{"shop", "quick", shopId};
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         int qty;
                         int price;
                         try { qty = Integer.parseInt(args[3]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid quantity / 数量が不正です" + ChatColor.RESET); return true; }
@@ -328,6 +333,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         });
                     } else if (args.length >= 5 && args[1].equalsIgnoreCase("take")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         String itemKey = args[3];
                         int qty;
                         try { qty = Integer.parseInt(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid quantity / 数量が不正です" + ChatColor.RESET); return true; }
@@ -373,6 +382,10 @@ public class LeCommandExecutor implements CommandExecutor {
                     } else if (args.length >= 5 && args[1].equalsIgnoreCase("partner")) {
                         String action = args[2];
                         String shopId = args[3];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         String target = args[4];
                         java.util.UUID uuid = Bukkit.getOfflinePlayer(target).getUniqueId();
                         Map<String, Object> payload = new HashMap<>();
@@ -405,6 +418,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         });
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("reopen")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("owner_uuid", p.getUniqueId().toString());
                         payload.put("shop_id", shopId);
@@ -434,6 +451,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         });
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("publish")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("owner_uuid", p.getUniqueId().toString());
                         payload.put("shop_id", shopId);
@@ -463,6 +484,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         });
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("hide")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("owner_uuid", p.getUniqueId().toString());
                         payload.put("shop_id", shopId);
@@ -525,6 +550,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         });
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("remove")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         if (args.length >= 4 && !args[3].equalsIgnoreCase("refund")) {
                             String saleName = args[3];
                             boolean refund = args.length >= 5 && args[4].equalsIgnoreCase("refund");
@@ -622,6 +651,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         }
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("price")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         String saleName = args[3];
                         if ((args.length - 4) % 2 != 0) {
                             p.sendMessage(ChatColor.RED + "Usage: /le shop price <id> <name> <currency> <amount> [<currency> <amount>...] / 使い方: /le shop price <id> <name> <currency> <amount> [<currency> <amount>...]" + ChatColor.RESET);
@@ -798,6 +831,31 @@ public class LeCommandExecutor implements CommandExecutor {
 
         p.sendActionBar(Lang.get("send-pending"));
         return true;
+    }
+
+    private boolean hasShopPermission(Player p, String shopId) {
+        if (p.isOp()) return true;
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) return false;
+        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
+                .addQueryParameter("shop_id", shopId)
+                .build();
+        Request req = new Request.Builder().url(url).build();
+        try (Response res = http.newCall(req).execute()) {
+            if (!res.isSuccessful()) return false;
+            String body = res.body() != null ? res.body().string() : "{}";
+            JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
+            if (obj.has("owners")) {
+                for (JsonElement el : obj.getAsJsonArray("owners")) {
+                    if (p.getUniqueId().toString().equalsIgnoreCase(el.getAsString())) {
+                        return true;
+                    }
+                }
+            }
+        } catch (IOException ex) {
+            plugin.getLogger().warning("Shop permission check failed: " + ex.getMessage());
+        }
+        return false;
     }
 
     private int parseAmount(String s) throws NumberFormatException {
