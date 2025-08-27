@@ -15,6 +15,8 @@ import org.bukkit.Bukkit;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.Queue;
 
 public class PaperCurrencyService {
     private final LumineEconomyBridge plugin;
@@ -24,6 +26,7 @@ public class PaperCurrencyService {
     private final String baseUrl;
     private final Gson gson = new Gson();
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+    private final Queue<CashEventPayload> eventQueue = new ConcurrentLinkedQueue<>();
 
     public PaperCurrencyService(LumineEconomyBridge plugin, OkHttpClient http, String baseUrl) {
         this.plugin = plugin;
@@ -31,6 +34,8 @@ public class PaperCurrencyService {
         this.baseUrl = baseUrl;
         this.currencyKey = new NamespacedKey(plugin, "note_currency");
         this.amountKey = new NamespacedKey(plugin, "note_amount");
+        long period = 20L * 5L;
+        Bukkit.getScheduler().runTaskTimerAsynchronously(plugin, this::flushEvents, period, period);
     }
 
     public ItemStack issue(Player p, String currency, int amount) {
@@ -71,17 +76,27 @@ public class PaperCurrencyService {
                 stack.getAmount(),
                 locString(loc)
         );
+        eventQueue.add(payload);
+    }
+
+    private void flushEvents() {
+        CashEventPayload payload;
+        while ((payload = eventQueue.poll()) != null) {
+            sendPayload(payload);
+        }
+    }
+
+    private void sendPayload(CashEventPayload payload) {
         Request req = new Request.Builder()
                 .url(baseUrl + "/api/cash/event")
                 .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
-        http.newCall(req).enqueue(new Callback() {
-            @Override public void onFailure(Call call, IOException e) {
-                plugin.getLogger().warning("cash event failed: " + e.getMessage());
-            }
-            @Override public void onResponse(Call call, Response response) { response.close(); }
-        });
+        try (Response response = http.newCall(req).execute()) {
+            // no-op
+        } catch (IOException e) {
+            plugin.getLogger().warning("cash event failed: " + e.getMessage());
+        }
     }
 
     private String locString(Location l) {
