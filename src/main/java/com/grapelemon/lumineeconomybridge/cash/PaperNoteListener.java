@@ -5,6 +5,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.entity.ItemDespawnEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.inventory.InventoryType;
@@ -74,6 +75,17 @@ public class PaperNoteListener implements Listener {
         ItemStack stack = e.getItem().getItemStack();
         Player p = e.getPlayer();
         service.trackItem(stack, p.getUniqueId().toString(), "pickup", p.getLocation());
+    }
+
+    @EventHandler
+    public void onDeath(PlayerDeathEvent e) {
+        Player victim = e.getEntity();
+        Player killer = victim.getKiller();
+        String actor = killer != null ? killer.getUniqueId().toString() : "";
+        Location loc = victim.getLocation();
+        for (ItemStack s : e.getDrops()) {
+            service.trackItem(s, actor, "drop", loc);
+        }
     }
 
     @EventHandler
