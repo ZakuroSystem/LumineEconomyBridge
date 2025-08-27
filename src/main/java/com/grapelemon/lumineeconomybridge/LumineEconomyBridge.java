@@ -115,7 +115,7 @@ public class LumineEconomyBridge extends JavaPlugin {
             long settlePeriod = 20L * 20L;
             settleTask = Bukkit.getScheduler().runTaskTimer(this, () -> syncService.flushAll(), settlePeriod, settlePeriod);
             Bukkit.getScheduler().runTaskAsynchronously(this, () -> syncService.rewriteAll());
-            Bukkit.getScheduler().runTask(this, () -> cashService.scanAll());
+            cashService.scanAll();
 
             getLogger().info("LumineEconomyBridge started. Endpoint = " + baseUrl);
             return true;

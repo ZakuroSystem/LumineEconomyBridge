@@ -20,6 +20,7 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Location;
+import org.bukkit.scheduler.BukkitRunnable;
 
 import java.io.File;
 import java.io.FileReader;
@@ -31,6 +32,7 @@ import java.util.Arrays;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.ArrayDeque;
 
 public class PaperCurrencyService {
     private final LumineEconomyBridge plugin;
@@ -125,15 +127,27 @@ public class PaperCurrencyService {
         for (Player p : Bukkit.getOnlinePlayers()) {
             scanInventory(p.getInventory(), p.getUniqueId().toString(), p.getLocation(), "pickup");
         }
+        Queue<Chunk> chunks = new ArrayDeque<>();
         for (World w : Bukkit.getWorlds()) {
-            for (Chunk c : w.getLoadedChunks()) {
-                for (BlockState st : c.getTileEntities()) {
-                    if (st instanceof Chest chest) {
-                        scanInventory(chest.getBlockInventory(), "", chest.getLocation(), "store");
-                    } else if (st instanceof InventoryHolder holder) {
-                        scanInventory(holder.getInventory(), "", st.getLocation(), "store");
-                    }
+            chunks.addAll(Arrays.asList(w.getLoadedChunks()));
+        }
+        new BukkitRunnable() {
+            @Override public void run() {
+                int perTick = 1;
+                for (int i = 0; i < perTick && !chunks.isEmpty(); i++) {
+                    scanChunk(chunks.poll());
                 }
+                if (chunks.isEmpty()) cancel();
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    private void scanChunk(Chunk c) {
+        for (BlockState st : c.getTileEntities()) {
+            if (st instanceof Chest chest) {
+                scanInventory(chest.getBlockInventory(), "", chest.getLocation(), "store");
+            } else if (st instanceof InventoryHolder holder) {
+                scanInventory(holder.getInventory(), "", st.getLocation(), "store");
             }
         }
     }
