@@ -28,6 +28,9 @@ import java.util.HashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 
 public class LumineEconomyBridge extends JavaPlugin {
 
@@ -132,6 +135,25 @@ public class LumineEconomyBridge extends JavaPlugin {
     public void stopBridge() {
         if (retryTask != null) { retryTask.cancel(); retryTask = null; }
         if (settleTask != null) { settleTask.cancel(); settleTask = null; }
+        if (cashService != null) {
+            CompletableFuture<Void> future = new CompletableFuture<>();
+            Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+                try {
+                    cashService.flushEvents();
+                    cashService.flushAll();
+                } finally {
+                    future.complete(null);
+                }
+            });
+            try {
+                future.get(5, TimeUnit.SECONDS);
+            } catch (InterruptedException | ExecutionException e) {
+                getLogger().warning("Failed to flush cash data: " + e.getMessage());
+            } catch (TimeoutException e) {
+                getLogger().warning("Timed out while flushing cash data");
+            }
+            cashService = null;
+        }
         syncService = null;
         httpClient = null;
         getLogger().info("LumineEconomyBridge stopped.");
