@@ -255,6 +255,10 @@ public class LeCommandExecutor implements CommandExecutor {
                             target = other;
                             ownerUuid = other.getUniqueId().toString();
                         }
+                        if (!canCreateShop(ownerUuid, shopId)) {
+                            p.sendMessage(ChatColor.RED + "Shop ID unavailable / 使用できません" + ChatColor.RESET);
+                            return true;
+                        }
                         ItemStack barrel = new ItemStack(Material.BARREL);
                         ItemMeta meta = barrel.getItemMeta();
                         PersistentDataContainer c = meta.getPersistentDataContainer();
@@ -831,6 +835,34 @@ public class LeCommandExecutor implements CommandExecutor {
 
         p.sendActionBar(Lang.get("send-pending"));
         return true;
+    }
+
+    private boolean canCreateShop(String ownerUuid, String shopId) {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) return false;
+        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
+                .addQueryParameter("shop_id", shopId)
+                .build();
+        Request req = new Request.Builder().url(url).build();
+        try (Response res = http.newCall(req).execute()) {
+            if (!res.isSuccessful()) return false;
+            String body = res.body() != null ? res.body().string() : "{}";
+            JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
+            if (obj.has("owners")) {
+                for (JsonElement el : obj.getAsJsonArray("owners")) {
+                    if (ownerUuid.equalsIgnoreCase(el.getAsString())) {
+                        return true; // owner already has this shop
+                    }
+                }
+                return false; // shop exists but owned by others
+            }
+            if (obj.has("reason") && "shop_not_found".equals(obj.get("reason").getAsString())) {
+                return true; // id available
+            }
+        } catch (IOException ex) {
+            plugin.getLogger().warning("Shop ID check failed: " + ex.getMessage());
+        }
+        return false;
     }
 
     private boolean hasShopPermission(Player p, String shopId) {
