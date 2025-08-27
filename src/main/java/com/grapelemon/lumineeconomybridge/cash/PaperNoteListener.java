@@ -124,27 +124,23 @@ public class PaperNoteListener implements Listener {
 
     @EventHandler
     public void onChestMove(InventoryClickEvent e) {
-        if (!(e.getWhoClicked() instanceof Player)) return;
+        if (!(e.getWhoClicked() instanceof Player p)) return;
         ItemStack stack = e.getCurrentItem();
         if (stack == null) return;
-        Player p = (Player) e.getWhoClicked();
-        InventoryType type = e.getInventory().getType();
-        String action;
-        switch (type) {
-            case CHEST:
-            case BARREL:
-            case SHULKER_BOX:
-            case HOPPER:
-            case DISPENSER:
-            case DROPPER:
-                action = "store";
-                break;
-            default:
-                action = "retrieve";
+        // Ignore clicks when no container is open
+        Inventory top = e.getView().getTopInventory();
+        if (top == null || top.getType() == InventoryType.PLAYER) return;
+        int raw = e.getRawSlot();
+        if (raw < 0) return;
+        String action = null;
+        if (e.isShiftClick()) {
+            action = raw < top.getSize() ? "retrieve" : "store";
         }
-        Location loc = p.getLocation();
-        if (loc != null) {
-            service.trackItem(stack, p.getUniqueId().toString(), action, loc);
+        if (action != null) {
+            Location loc = p.getLocation();
+            if (loc != null) {
+                service.trackItem(stack, p.getUniqueId().toString(), action, loc);
+            }
         }
     }
 
