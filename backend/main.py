@@ -3194,7 +3194,15 @@ def cash_event(ev: CashEvent, token: None = Depends(verify_token)):
                 ts,
             ),
         )
-        if ev.action in ("issue", "transfer", "pickup", "store", "retrieve"):
+        if ev.action in (
+            "issue",
+            "transfer",
+            "pickup",
+            "store",
+            "retrieve",
+            "drop",
+            "move",
+        ):
             world = x = y = z = None
             if ev.location:
                 try:
