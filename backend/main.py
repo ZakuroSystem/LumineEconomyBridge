@@ -366,7 +366,11 @@ with cash_conn:
             note_id TEXT PRIMARY KEY,
             currency TEXT NOT NULL,
             amount INTEGER NOT NULL,
-            owner_uuid TEXT NOT NULL
+            owner_uuid TEXT NOT NULL,
+            world TEXT,
+            x INTEGER,
+            y INTEGER,
+            z INTEGER
         )
         """
     )
@@ -384,6 +388,11 @@ with cash_conn:
         )
         """
     )
+    for col, typ in (("world", "TEXT"), ("x", "INTEGER"), ("y", "INTEGER"), ("z", "INTEGER")):
+        try:
+            cash_conn.execute(f"ALTER TABLE notes ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError:
+            pass
 
 SHARED_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
 MAPCOLOR_URL = os.environ.get("MAPCOLOR_URL", "http://127.0.0.1:8765")
@@ -3186,9 +3195,25 @@ def cash_event(ev: CashEvent, token: None = Depends(verify_token)):
             ),
         )
         if ev.action in ("issue", "transfer", "pickup", "store", "retrieve"):
+            world = x = y = z = None
+            if ev.location:
+                try:
+                    world, xs, ys, zs = ev.location.split(",")
+                    x, y, z = int(xs), int(ys), int(zs)
+                except ValueError:
+                    world = x = y = z = None
             cash_conn.execute(
-                "INSERT OR REPLACE INTO notes(note_id, currency, amount, owner_uuid) VALUES(?,?,?,?)",
-                (ev.note_id, ev.currency, ev.amount, ev.player_uuid),
+                "INSERT OR REPLACE INTO notes(note_id, currency, amount, owner_uuid, world, x, y, z) VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    ev.note_id,
+                    ev.currency,
+                    ev.amount,
+                    ev.player_uuid,
+                    world,
+                    x,
+                    y,
+                    z,
+                ),
             )
         elif ev.action == "destroy":
             cash_conn.execute("DELETE FROM notes WHERE note_id=?", (ev.note_id,))
@@ -3202,6 +3227,21 @@ def cash_holdings(player_uuid: str, token: None = Depends(verify_token)):
         (player_uuid,),
     )
     return {"holdings": [dict(r) for r in cur.fetchall()]}
+
+
+@app.get("/api/cash/note/{note_id}")
+def cash_note(note_id: str, token: None = Depends(verify_token)):
+    note = cash_conn.execute(
+        "SELECT note_id, currency, amount, owner_uuid, world, x, y, z FROM notes WHERE note_id=?",
+        (note_id,),
+    ).fetchone()
+    if note is None:
+        raise HTTPException(status_code=404, detail="not found")
+    cur = cash_conn.execute(
+        "SELECT player_uuid, action, currency, amount, location, ts FROM cash_events WHERE note_id=? ORDER BY ts",
+        (note_id,),
+    )
+    return {"note": dict(note), "history": [dict(r) for r in cur.fetchall()]}
 
 
 class ChunkSnapshotRequest(BaseModel):
