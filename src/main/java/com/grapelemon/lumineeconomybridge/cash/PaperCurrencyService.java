@@ -26,7 +26,9 @@ public class PaperCurrencyService {
     private final String baseUrl;
     private final Gson gson = new Gson();
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-    private final BlockingQueue<CashEventPayload> eventQueue;
+    private final BlockingQueue<RetryableCashEvent> eventQueue;
+    private static final int MAX_RETRIES = 5;
+    private static final long BASE_RETRY_DELAY_TICKS = 20L; // 1 second
 
     public PaperCurrencyService(LumineEconomyBridge plugin, OkHttpClient http, String baseUrl) {
         this.plugin = plugin;
@@ -78,28 +80,42 @@ public class PaperCurrencyService {
                 stack.getAmount(),
                 locString(loc)
         );
-        if (!eventQueue.offer(payload)) {
+        if (!eventQueue.offer(new RetryableCashEvent(payload, 0))) {
             plugin.getLogger().warning("cash event dropped: queue full");
         }
     }
 
     private void flushEvents() {
-        CashEventPayload payload;
-        while ((payload = eventQueue.poll()) != null) {
-            sendPayload(payload);
+        RetryableCashEvent evt;
+        while ((evt = eventQueue.poll()) != null) {
+            sendPayload(evt);
         }
     }
 
-    private void sendPayload(CashEventPayload payload) {
+    private void sendPayload(RetryableCashEvent event) {
+        CashEventPayload payload = event.payload();
         Request req = new Request.Builder()
                 .url(baseUrl + "/api/cash/event")
                 .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
         try (Response response = http.newCall(req).execute()) {
-            // no-op
+            if (!response.isSuccessful()) {
+                throw new IOException("unexpected code " + response.code());
+            }
         } catch (IOException e) {
-            plugin.getLogger().warning("cash event failed: " + e.getMessage());
+            int nextAttempt = event.attempt() + 1;
+            if (nextAttempt > MAX_RETRIES) {
+                plugin.getLogger().warning("cash event permanently failed after " + event.attempt() + " retries: " + e.getMessage());
+                return;
+            }
+            long delay = (1L << (nextAttempt - 1)) * BASE_RETRY_DELAY_TICKS;
+            Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, () -> {
+                if (!eventQueue.offer(new RetryableCashEvent(payload, nextAttempt))) {
+                    plugin.getLogger().warning("cash event dropped after retry: queue full");
+                }
+            }, delay);
+            plugin.getLogger().warning("cash event failed: " + e.getMessage() + ", retrying in " + (delay / 20) + "s (attempt " + nextAttempt + ")");
         }
     }
 
@@ -141,6 +157,8 @@ public class PaperCurrencyService {
             @Override public void onResponse(Call call, Response response) { response.close(); }
         });
     }
+
+    private record RetryableCashEvent(CashEventPayload payload, int attempt) {}
 
     public record CashEventPayload(String player_uuid, String action, String currency, int amount, int quantity, String location) {}
 
