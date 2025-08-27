@@ -239,22 +239,12 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
-                        String shopId = args[2];
-                        Player target = p;
-                        String ownerUuid = p.getUniqueId().toString();
-                        if (args.length >= 4) {
-                            Player other = Bukkit.getPlayer(args[3]);
-                            if (other == null) {
-                                p.sendMessage(ChatColor.RED + "Player not found / プレイヤーが見つかりません" + ChatColor.RESET);
-                                return true;
-                            }
-                            if (!p.isOp()) {
-                                p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
-                                return true;
-                            }
-                            target = other;
-                            ownerUuid = other.getUniqueId().toString();
+                        if (args.length != 3) {
+                            p.sendMessage(ChatColor.YELLOW + "Usage: /le shop create <id>" + ChatColor.RESET);
+                            return true;
                         }
+                        String shopId = args[2];
+                        String ownerUuid = p.getUniqueId().toString();
                         if (!canCreateShop(ownerUuid, shopId)) {
                             p.sendMessage(ChatColor.RED + "Shop ID unavailable / 使用できません" + ChatColor.RESET);
                             return true;
@@ -280,10 +270,7 @@ public class LeCommandExecutor implements CommandExecutor {
                             }
                         }
                         barrel.setItemMeta(meta);
-                        target.getInventory().addItem(barrel);
-                        if (target != p) {
-                            p.sendMessage(ChatColor.GREEN + "Shop barrel created for " + target.getName() + ChatColor.RESET);
-                        }
+                        p.getInventory().addItem(barrel);
                         args = new String[]{"shop", "quick", shopId};
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
