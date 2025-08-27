@@ -85,7 +85,7 @@ public class PaperCurrencyService {
         }
     }
 
-    private void flushEvents() {
+    public void flushEvents() {
         RetryableCashEvent evt;
         while ((evt = eventQueue.poll()) != null) {
             sendPayload(evt);
