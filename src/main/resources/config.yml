@@ -10,3 +10,7 @@ mapcolor:
 
 cash:
   queue_capacity: 1000
+
+vault:
+  enabled: false
+  currency: "thy"
