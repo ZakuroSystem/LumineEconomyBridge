@@ -10,6 +10,7 @@ import org.bukkit.Chunk;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Chest;
 import org.bukkit.block.ShulkerBox;
+import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
@@ -110,8 +111,8 @@ public class PaperCurrencyService {
                 for (BlockState st : c.getTileEntities()) {
                     if (st instanceof Chest chest) {
                         scanInventory(chest.getBlockInventory(), "", chest.getLocation(), "store");
-                    } else if (st instanceof ShulkerBox box) {
-                        scanInventory(box.getInventory(), "", box.getLocation(), "store");
+                    } else if (st instanceof InventoryHolder holder) {
+                        scanInventory(holder.getInventory(), "", st.getLocation(), "store");
                     }
                 }
             }

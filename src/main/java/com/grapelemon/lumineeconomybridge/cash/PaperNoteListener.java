@@ -11,7 +11,7 @@ import org.bukkit.event.player.PlayerPickupItemEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Chest;
-import org.bukkit.block.ShulkerBox;
+import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 
 public class PaperNoteListener implements Listener {
@@ -41,7 +41,20 @@ public class PaperNoteListener implements Listener {
         ItemStack stack = e.getCurrentItem();
         if (stack == null) return;
         Player p = (Player) e.getWhoClicked();
-        String action = e.getInventory().getType() == InventoryType.CHEST ? "store" : "retrieve";
+        InventoryType type = e.getInventory().getType();
+        String action;
+        switch (type) {
+            case CHEST:
+            case BARREL:
+            case SHULKER_BOX:
+            case HOPPER:
+            case DISPENSER:
+            case DROPPER:
+                action = "store";
+                break;
+            default:
+                action = "retrieve";
+        }
         service.trackItem(stack, p.getUniqueId().toString(), action, p.getLocation());
     }
 
@@ -58,9 +71,9 @@ public class PaperNoteListener implements Listener {
                 for (ItemStack s : chest.getBlockInventory().getContents()) {
                     service.trackItem(s, "", "store", chest.getLocation());
                 }
-            } else if (st instanceof ShulkerBox box) {
-                for (ItemStack s : box.getInventory().getContents()) {
-                    service.trackItem(s, "", "store", box.getLocation());
+            } else if (st instanceof InventoryHolder holder) {
+                for (ItemStack s : holder.getInventory().getContents()) {
+                    service.trackItem(s, "", "store", st.getLocation());
                 }
             }
         }
