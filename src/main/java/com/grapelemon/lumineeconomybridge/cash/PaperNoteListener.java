@@ -1,11 +1,15 @@
 package com.grapelemon.lumineeconomybridge.cash;
 
 import org.bukkit.entity.Player;
+import org.bukkit.entity.ItemFrame;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.entity.ItemDespawnEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.hanging.HangingPlaceEvent;
+import org.bukkit.event.hanging.HangingBreakEvent;
+import org.bukkit.event.hanging.HangingBreakByEntityEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.inventory.InventoryType;
@@ -146,6 +150,25 @@ public class PaperNoteListener implements Listener {
         Location to = holderLocation(e.getDestination().getHolder());
         service.trackItem(stack, "", "retrieve", from);
         service.trackItem(stack, "", "store", to);
+    }
+
+    @EventHandler
+    public void onFramePlace(HangingPlaceEvent e) {
+        if (!(e.getEntity() instanceof ItemFrame frame)) return;
+        ItemStack stack = frame.getItem();
+        String actor = e.getPlayer() != null ? e.getPlayer().getUniqueId().toString() : "";
+        service.trackItem(stack, actor, "store", frame.getLocation());
+    }
+
+    @EventHandler
+    public void onFrameBreak(HangingBreakEvent e) {
+        if (!(e.getEntity() instanceof ItemFrame frame)) return;
+        String actor = "";
+        if (e instanceof HangingBreakByEntityEvent by && by.getRemover() instanceof Player p) {
+            actor = p.getUniqueId().toString();
+        }
+        ItemStack stack = frame.getItem();
+        service.trackItem(stack, actor, "retrieve", frame.getLocation());
     }
 
     @EventHandler
