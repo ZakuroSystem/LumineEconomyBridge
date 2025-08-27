@@ -21,9 +21,15 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Location;
 
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
-import java.util.UUID;
+import java.io.Reader;
+import java.io.Writer;
+import java.util.Arrays;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class PaperCurrencyService {
@@ -36,6 +42,7 @@ public class PaperCurrencyService {
     private final Gson gson = new Gson();
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private final Queue<CashEventPayload> queue = new ConcurrentLinkedQueue<>();
+    private final File queueFile;
     private volatile boolean sending = false;
 
     public PaperCurrencyService(LumineEconomyBridge plugin, OkHttpClient http, String baseUrl) {
@@ -45,7 +52,10 @@ public class PaperCurrencyService {
         this.noteKey = new NamespacedKey(plugin, "note_id");
         this.currencyKey = new NamespacedKey(plugin, "note_currency");
         this.amountKey = new NamespacedKey(plugin, "note_amount");
+        this.queueFile = new File(plugin.getDataFolder(), "cash_events.json");
+        loadQueue();
         Bukkit.getScheduler().runTaskTimerAsynchronously(plugin, this::processQueue, 20L, 20L);
+        processQueue();
     }
 
     public ItemStack issue(Player p, String currency, int amount) {
@@ -126,6 +136,7 @@ public class PaperCurrencyService {
 
     public void sendEvent(String id, String player, String action, String currency, int amount, String loc) {
         queue.offer(new CashEventPayload(id, player, action, currency, amount, loc));
+        saveQueue();
         processQueue();
     }
 
@@ -149,12 +160,44 @@ public class PaperCurrencyService {
                 sending = false;
             }
             @Override public void onResponse(Call call, Response response) {
-                response.close();
-                queue.poll();
-                sending = false;
-                processQueue();
+                try (response) {
+                    if (response.isSuccessful()) {
+                        queue.poll();
+                        saveQueue();
+                        sending = false;
+                        processQueue();
+                    } else {
+                        plugin.getLogger().warning("cash event HTTP " + response.code());
+                        sending = false;
+                    }
+                }
             }
         });
+    }
+
+    private synchronized void saveQueue() {
+        try {
+            plugin.getDataFolder().mkdirs();
+            if (queue.isEmpty()) {
+                if (queueFile.exists()) queueFile.delete();
+                return;
+            }
+            try (Writer w = new FileWriter(queueFile)) {
+                gson.toJson(queue.toArray(new CashEventPayload[0]), w);
+            }
+        } catch (IOException e) {
+            plugin.getLogger().warning("failed to persist cash queue: " + e.getMessage());
+        }
+    }
+
+    private void loadQueue() {
+        if (!queueFile.exists()) return;
+        try (Reader r = new FileReader(queueFile)) {
+            CashEventPayload[] arr = gson.fromJson(r, CashEventPayload[].class);
+            if (arr != null) queue.addAll(Arrays.asList(arr));
+        } catch (IOException e) {
+            plugin.getLogger().warning("failed to load cash queue: " + e.getMessage());
+        }
     }
 
     public record CashEventPayload(String note_id, String player_uuid, String action, String currency, int amount, String location) {}
