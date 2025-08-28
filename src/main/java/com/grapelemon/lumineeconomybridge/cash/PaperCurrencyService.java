@@ -56,19 +56,34 @@ public class PaperCurrencyService {
 
     public boolean isNote(ItemStack stack) {
         if (stack == null) return false;
-        ItemMeta meta = stack.getItemMeta();
-        return meta != null && meta.getPersistentDataContainer().has(currencyKey, PersistentDataType.STRING);
+        try {
+            ItemMeta meta = stack.getItemMeta();
+            return meta != null && meta.getPersistentDataContainer().has(currencyKey, PersistentDataType.STRING);
+        } catch (IllegalArgumentException e) {
+            plugin.getLogger().warning("failed to read item meta: " + e.getMessage());
+            return false;
+        }
     }
 
     public String getCurrency(ItemStack stack) {
-        ItemMeta meta = stack.getItemMeta();
-        return meta.getPersistentDataContainer().get(currencyKey, PersistentDataType.STRING);
+        try {
+            ItemMeta meta = stack.getItemMeta();
+            return meta.getPersistentDataContainer().get(currencyKey, PersistentDataType.STRING);
+        } catch (IllegalArgumentException e) {
+            plugin.getLogger().warning("failed to read currency: " + e.getMessage());
+            return "";
+        }
     }
 
     public int getAmount(ItemStack stack) {
-        ItemMeta meta = stack.getItemMeta();
-        Integer v = meta.getPersistentDataContainer().get(amountKey, PersistentDataType.INTEGER);
-        return v != null ? v : 0;
+        try {
+            ItemMeta meta = stack.getItemMeta();
+            Integer v = meta.getPersistentDataContainer().get(amountKey, PersistentDataType.INTEGER);
+            return v != null ? v : 0;
+        } catch (IllegalArgumentException e) {
+            plugin.getLogger().warning("failed to read amount: " + e.getMessage());
+            return 0;
+        }
     }
 
     public void sendEvent(String player, String action, ItemStack stack, Location loc) {
