@@ -836,6 +836,10 @@ public class LeCommandExecutor implements CommandExecutor {
             String body = res.body() != null ? res.body().string() : "{}";
             JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
             if (obj.has("owners")) {
+                if (obj.getAsJsonArray("owners").size() == 0) {
+                    purgeShop(shopId);
+                    return true; // orphan removed, id available
+                }
                 for (JsonElement el : obj.getAsJsonArray("owners")) {
                     if (ownerUuid.equalsIgnoreCase(el.getAsString())) {
                         return true; // owner already has this shop
@@ -865,6 +869,10 @@ public class LeCommandExecutor implements CommandExecutor {
             String body = res.body() != null ? res.body().string() : "{}";
             JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
             if (obj.has("owners")) {
+                if (obj.getAsJsonArray("owners").size() == 0) {
+                    purgeShop(shopId);
+                    return false;
+                }
                 for (JsonElement el : obj.getAsJsonArray("owners")) {
                     if (p.getUniqueId().toString().equalsIgnoreCase(el.getAsString())) {
                         return true;
@@ -875,6 +883,24 @@ public class LeCommandExecutor implements CommandExecutor {
             plugin.getLogger().warning("Shop permission check failed: " + ex.getMessage());
         }
         return false;
+    }
+
+    private void purgeShop(String shopId) {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) return;
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("shop_id", shopId);
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/remove")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        try (Response res = http.newCall(req).execute()) {
+            if (!res.isSuccessful()) {
+                plugin.getLogger().warning("Failed to purge shop " + shopId + ": " + res.code());
+            }
+        } catch (IOException ex) {
+            plugin.getLogger().warning("Failed to purge shop " + shopId + ": " + ex.getMessage());
+        }
     }
 
     private int parseAmount(String s) throws NumberFormatException {

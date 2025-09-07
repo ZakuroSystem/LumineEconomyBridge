@@ -676,6 +676,26 @@ def get_name(uuid: str) -> Optional[str]:
         return row["name"] if row else None
 
 
+def purge_shop(cur: sqlite3.Cursor, shop_id: str) -> None:
+    cur.execute("DELETE FROM shop_locations WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shop_stock WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shop_prices WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shop_tx WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shop_owners WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shop_visits WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM sale_events WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shops WHERE shop_id=?", (shop_id,))
+
+
+def purge_orphan_shops() -> None:
+    with transaction() as cur:
+        rows = cur.execute(
+            "SELECT shop_id FROM shops WHERE shop_id NOT IN (SELECT shop_id FROM shop_owners)"
+        ).fetchall()
+        for r in rows:
+            purge_shop(cur, r["shop_id"])
+
+
 def has_link(cur: sqlite3.Cursor, user_uuid: str, system_uuid: str) -> bool:
     return (
         cur.execute(
@@ -2137,6 +2157,7 @@ async def shop_place(payload: ShopPlacePayload, token: None = Depends(verify_tok
 
 @app.get("/api/shop/ids")
 async def shop_ids(owner_uuid: Optional[str] = None):
+    purge_orphan_shops()
     start = time.time()
     with transaction() as cur:
         if owner_uuid:
@@ -2162,58 +2183,62 @@ async def shop_ids(owner_uuid: Optional[str] = None):
 async def shop_items(shop_id: str):
     start = time.time()
     with transaction() as cur:
-        srow = cur.execute(
-            "SELECT owner_uuid,status,last_activity_at FROM shops WHERE shop_id=?",
-            (shop_id,),
-        ).fetchone()
-        if not srow:
+        owners = [r["owner_uuid"] for r in cur.execute("SELECT owner_uuid FROM shop_owners WHERE shop_id=?", (shop_id,)).fetchall()]
+        if not owners:
+            purge_shop(cur, shop_id)
             result = {"status": "error", "reason": "shop_not_found"}
-        elif srow["status"] != "active":
-            result = {
-                "status": srow["status"],
-                "last_activity_at": srow["last_activity_at"],
-                "owner_uuid": srow["owner_uuid"],
-            }
         else:
-            rows = cur.execute(
-                "SELECT st.item_key, st.sale_name, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+            srow = cur.execute(
+                "SELECT owner_uuid,status,last_activity_at FROM shops WHERE shop_id=?",
                 (shop_id,),
-            ).fetchall()
-            items = []
-            owners = [r["owner_uuid"] for r in cur.execute("SELECT owner_uuid FROM shop_owners WHERE shop_id=?", (shop_id,)).fetchall()]
-            sale = cur.execute(
-                "SELECT pct,end_ts FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
-                (int(time.time()), int(time.time())),
             ).fetchone()
-            for r in rows:
-                price_rows = cur.execute(
-                    "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
-                    (shop_id, r["item_key"]),
+            if not srow:
+                result = {"status": "error", "reason": "shop_not_found"}
+            elif srow["status"] != "active":
+                result = {
+                    "status": srow["status"],
+                    "last_activity_at": srow["last_activity_at"],
+                    "owner_uuid": srow["owner_uuid"],
+                }
+            else:
+                rows = cur.execute(
+                    "SELECT st.item_key, st.sale_name, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+                    (shop_id,),
                 ).fetchall()
-                prices = {pr["currency"]: pr["price"] for pr in price_rows}
+                items = []
+                sale = cur.execute(
+                    "SELECT pct,end_ts FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
+                    (int(time.time()), int(time.time())),
+                ).fetchone()
+                for r in rows:
+                    price_rows = cur.execute(
+                        "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                        (shop_id, r["item_key"]),
+                    ).fetchall()
+                    prices = {pr["currency"]: pr["price"] for pr in price_rows}
+                    if sale:
+                        for k in list(prices.keys()):
+                            prices[k] = int(prices[k] * (100 - sale["pct"]) / 100)
+                    items.append(
+                        {
+                            "item_key": r["item_key"],
+                            "sale_name": r["sale_name"],
+                            "material": r["material"],
+                            "display_name": r["display_name"],
+                            "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
+                            "stock": r["stock"],
+                            "prices": prices,
+                        }
+                    )
+                result = {
+                    "status": "active",
+                    "owner_uuid": srow["owner_uuid"],
+                    "owners": owners,
+                    "items": items,
+                }
                 if sale:
-                    for k in list(prices.keys()):
-                        prices[k] = int(prices[k] * (100 - sale["pct"]) / 100)
-                items.append(
-                    {
-                        "item_key": r["item_key"],
-                        "sale_name": r["sale_name"],
-                        "material": r["material"],
-                        "display_name": r["display_name"],
-                        "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
-                        "stock": r["stock"],
-                        "prices": prices,
-                    }
-                )
-            result = {
-                "status": "active",
-                "owner_uuid": srow["owner_uuid"],
-                "owners": owners,
-                "items": items,
-            }
-            if sale:
-                result["sale_pct"] = sale["pct"]
-                result["sale_ends"] = sale["end_ts"]
+                    result["sale_pct"] = sale["pct"]
+                    result["sale_ends"] = sale["end_ts"]
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_items",
