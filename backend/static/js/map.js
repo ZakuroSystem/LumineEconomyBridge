@@ -143,13 +143,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       if(pResp && pResp.ok) break;
     }
     if(!pResp || !pResp.ok){
-      palette = Array.from({length:64}, (_,i)=>[i*4,i*4,i*4]);
+      palette = Array.from({length:64}, ()=>[0x40,0x40,0x40]);
+      palette[1] = [0x9B,0xEC,0x77];
+      palette[2] = [0x79,0xD4,0x5C];
+      palette[3] = [0x89,0xB9,0xCD];
+      palette[4] = [0xF5,0xF5,0xF5];
+      palette[5] = [0xA5,0xA5,0xA5];
+      palette[6] = [0xF8,0x92,0x21];
     }else{
       try{
         const data = await pResp.json();
         palette = data.palette;
       } catch {
-        palette = Array.from({length:64}, (_,i)=>[i*4,i*4,i*4]);
+        palette = Array.from({length:64}, ()=>[0x40,0x40,0x40]);
+        palette[1] = [0x9B,0xEC,0x77];
+        palette[2] = [0x79,0xD4,0x5C];
+        palette[3] = [0x89,0xB9,0xCD];
+        palette[4] = [0xF5,0xF5,0xF5];
+        palette[5] = [0xA5,0xA5,0xA5];
+        palette[6] = [0xF8,0x92,0x21];
       }
     }
     refreshTiles();
