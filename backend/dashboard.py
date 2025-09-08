@@ -19,6 +19,7 @@ import yaml
 import shutil
 import requests
 import re
+import logging
 from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime
@@ -33,8 +34,11 @@ from tile_format import PIXEL_COUNT
 from flask_sock import Sock
 from palette import PALETTE, resolve_block
 
+logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 sock = Sock(app)
+
+
 class SignedIntConverter(BaseConverter):
     regex = r"-?\d+"
 
@@ -80,13 +84,35 @@ def append_log(entry: Dict[str, Union[str, int, float, bool]]) -> None:
 
 def _log_world_dir_status() -> None:
     root = os.environ.get("WORLD_DIR")
+    candidates: List[str] = []
+    resolved = None
     exists = bool(root and os.path.isdir(root))
-    app.logger.info("WORLD_DIR env=%s exists=%s", root, exists)
+    if root:
+        candidates = [os.path.join(root, "region"), root]
+        for cand in candidates:
+            if os.path.isdir(cand):
+                has_mca = any(fn.endswith(".mca") for fn in os.listdir(cand))
+                app.logger.info(
+                    "WORLD_DIR candidate %s exists=%s mca=%s", cand, True, has_mca
+                )
+                if has_mca:
+                    resolved = cand
+                    break
+            else:
+                app.logger.info("WORLD_DIR candidate %s exists=%s", cand, False)
+    if not root:
+        app.logger.warning("WORLD_DIR is not set")
+    else:
+        app.logger.info(
+            "WORLD_DIR env=%s exists=%s resolved=%s", root, exists, resolved
+        )
     append_log(
         {
             "type": "world_dir",
             "world_dir": root,
             "exists": exists,
+            "resolved": resolved,
+            "candidates": candidates,
             "ts": int(time.time() * 1000),
         }
     )

@@ -18,6 +18,9 @@ from contextlib import closing, contextmanager, asynccontextmanager, suppress
 from pathlib import Path
 import yaml
 import os
+import logging
+
+logging.basicConfig(level=logging.INFO)
 import time
 import shutil
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -443,13 +446,35 @@ async def _stop_tile_worker() -> None:
 async def _log_world_dir_status() -> None:
     """Record the WORLD_DIR environment variable on startup."""
     root = os.environ.get("WORLD_DIR")
+    candidates: List[str] = []
+    resolved = None
     exists = bool(root and os.path.isdir(root))
-    app.logger.info("WORLD_DIR env=%s exists=%s", root, exists)
+    if root:
+        candidates = [os.path.join(root, "region"), root]
+        for cand in candidates:
+            if os.path.isdir(cand):
+                has_mca = any(fn.endswith(".mca") for fn in os.listdir(cand))
+                app.logger.info(
+                    "WORLD_DIR candidate %s exists=%s mca=%s", cand, True, has_mca
+                )
+                if has_mca:
+                    resolved = cand
+                    break
+            else:
+                app.logger.info("WORLD_DIR candidate %s exists=%s", cand, False)
+    if not root:
+        app.logger.warning("WORLD_DIR is not set")
+    else:
+        app.logger.info(
+            "WORLD_DIR env=%s exists=%s resolved=%s", root, exists, resolved
+        )
     append_log(
         {
             "type": "world_dir",
             "world_dir": root,
             "exists": exists,
+            "resolved": resolved,
+            "candidates": candidates,
             "ts": int(time.time() * 1000),
         }
     )
