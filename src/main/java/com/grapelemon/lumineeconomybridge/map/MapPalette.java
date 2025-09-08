@@ -3,27 +3,26 @@ package com.grapelemon.lumineeconomybridge.map;
 import org.bukkit.Material;
 
 public final class MapPalette {
-    // 0 is transparent/unmapped. Extend as needed up to 63.
+    // 0 is default/other. Indices 1-6 correspond to palette entries in MapColorService.
     public static int indexOf(Material m) {
-        if (m == null) return 0;
-        switch (m) {
-            case GRASS_BLOCK: return 1;
-            case DIRT: return 2;
-            case STONE: return 11;
-            case SAND: return 12;
-            case WATER: return 20;
-            case OAK_LEAVES:
-            case SPRUCE_LEAVES:
-            case BIRCH_LEAVES: return 25;
-            case OAK_LOG:
-            case SPRUCE_LOG:
-            case BIRCH_LOG: return 26;
-            case SNOW:
-            case POWDER_SNOW: return 30;
-            case LAVA: return 31;
-            case CLAY: return 32;
-            default: return 0;
+        if (m == null) {
+            return 0;
         }
+        String id = m.name().toLowerCase();
+        if ("grass_block".equals(id) || id.contains("tall_grass") || id.contains("grass") || id.contains("green")) {
+            return 1; // grass/green
+        } else if (id.contains("leaves")) {
+            return 2; // leaves
+        } else if (id.contains("water")) {
+            return 3; // water
+        } else if (id.contains("quartz") || id.contains("white") || id.contains("snow")) {
+            return 4; // quartz/white/snow
+        } else if (id.contains("stone") || id.contains("gray")) {
+            return 5; // stone/gray
+        } else if (id.contains("lava")) {
+            return 6; // lava
+        }
+        return 0; // other
     }
 
     private MapPalette() {}

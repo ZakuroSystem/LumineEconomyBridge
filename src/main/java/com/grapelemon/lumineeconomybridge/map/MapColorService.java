@@ -33,12 +33,19 @@ public class MapColorService {
 
     private int[][] generatePalette() {
         int[][] p = new int[64][3];
-        for (int i = 0; i < 64; i++) {
-            int v = Math.min(255, i * 4);
-            p[i][0] = v;
-            p[i][1] = v;
-            p[i][2] = v;
+        // Fill with default colour (#404040)
+        for (int i = 0; i < p.length; i++) {
+            p[i][0] = 0x40;
+            p[i][1] = 0x40;
+            p[i][2] = 0x40;
         }
+        // Custom palette indices
+        p[1] = new int[] {0x9B, 0xEC, 0x77}; // grass/green
+        p[2] = new int[] {0x79, 0xD4, 0x5C}; // leaves
+        p[3] = new int[] {0x89, 0xB9, 0xCD}; // water
+        p[4] = new int[] {0xF5, 0xF5, 0xF5}; // quartz/white/snow
+        p[5] = new int[] {0xA5, 0xA5, 0xA5}; // stone/gray
+        p[6] = new int[] {0xF8, 0x92, 0x21}; // lava
         return p;
     }
 
@@ -102,11 +109,27 @@ public class MapColorService {
     }
 
     private int resolveBlock(String name) {
-        return switch (name) {
-            case "minecraft:grass_block" -> 1;
-            case "minecraft:stone" -> 11;
-            default -> 0;
-        };
+        String id = name;
+        int colon = id.indexOf(':');
+        if (colon != -1) {
+            id = id.substring(colon + 1);
+        }
+        id = id.toLowerCase();
+        if ("grass_block".equals(id) || id.contains("tall_grass") || id.contains("grass") || id.contains("green")) {
+            return 1; // grass/green
+        } else if (id.contains("leaves")) {
+            return 2; // leaves
+        } else if (id.contains("water")) {
+            return 3; // water
+        } else if (id.contains("quartz") || id.contains("white") || id.contains("snow")) {
+            return 4; // quartz/white/snow
+        } else if (id.contains("stone") || id.contains("gray")) {
+            return 5; // stone/gray
+        } else if (id.contains("lava")) {
+            return 6; // lava
+        } else {
+            return 0; // other
+        }
     }
 
     private boolean checkToken(HttpExchange ex) throws IOException {
