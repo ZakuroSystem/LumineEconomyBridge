@@ -1680,6 +1680,20 @@ def get_tile_endpoint(world: str, tx: int, tz: int):
     return Response(data, mimetype="application/octet-stream")
 
 
+@app.route("/<sint:tx>/<sint:tz>")
+def root_tile_endpoint(tx: int, tz: int):
+    """Serve tiles when the world name is omitted.
+
+    Some legacy clients request tiles using paths like ``/x/z`` without the
+    world component.  For compatibility, resolve the first available world and
+    delegate to :func:`get_tile_endpoint`.
+    """
+
+    worlds = list_worlds_endpoint().get("worlds", [])
+    world = worlds[0] if worlds else "world"
+    return get_tile_endpoint(world, tx, tz)
+
+
 @sock.route("/ws/tiles")
 def ws_tiles(ws):
     ws.accept()
