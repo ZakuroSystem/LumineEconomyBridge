@@ -729,7 +729,8 @@ public class LeCommandExecutor implements CommandExecutor {
         OkHttpClient http = plugin.getHttpClient();
         String baseUrl = plugin.getBaseUrl();
 
-        sync.sendDelta(p); // avoid resetting scoreboard
+        // Flush only this player's delta to keep scoreboard intact without a full rewrite
+        sync.flush(p);
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("player", p.getUniqueId().toString());
