@@ -1711,4 +1711,8 @@ def world_dir_status_endpoint():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # Enable threaded mode so Flask's development server can upgrade WebSocket
+    # connections without returning 400 responses on the `/ws/tiles` endpoint.
+    # Single threaded mode cannot handle the socket handshake, which manifested
+    # as sporadic 400 errors in the logs when the browser attempted to connect.
+    app.run(debug=True, threaded=True)
