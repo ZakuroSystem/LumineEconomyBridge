@@ -438,6 +438,22 @@ async def _stop_tile_worker() -> None:
         with suppress(Exception):
             await _tile_worker_task
 
+
+@app.on_event("startup")
+async def _log_world_dir_status() -> None:
+    """Record the WORLD_DIR environment variable on startup."""
+    root = os.environ.get("WORLD_DIR")
+    exists = bool(root and os.path.isdir(root))
+    app.logger.info("WORLD_DIR env=%s exists=%s", root, exists)
+    append_log(
+        {
+            "type": "world_dir",
+            "world_dir": root,
+            "exists": exists,
+            "ts": int(time.time() * 1000),
+        }
+    )
+
 db_lock = threading.Lock()
 
 undo_stacks: Dict[str, List[List[Dict[str, Union[str, int, None]]]]] = {}
@@ -3434,6 +3450,29 @@ def logs_summary(
                 if "error" in entry or entry.get("status") == "error":
                     info["errors"] += 1
     return summary
+
+
+@app.get("/logs/world_dir")
+def logs_world_dir(token: None = Depends(verify_token)) -> List[Dict[str, Union[str, int, bool]]]:
+    """Return world directory detection log entries."""
+    entries: List[Dict[str, Union[str, int, bool]]] = []
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if obj.get("type") == "world_dir":
+                    entries.append(obj)
+    return entries
+
+
+@app.get("/api/world_dir")
+def world_dir_status() -> Dict[str, Union[str, bool, None]]:
+    root = os.environ.get("WORLD_DIR")
+    exists = bool(root and os.path.isdir(root))
+    return {"world_dir": root, "exists": exists}
 
 
 @app.websocket("/ws/tiles")

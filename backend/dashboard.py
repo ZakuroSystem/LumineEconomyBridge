@@ -25,7 +25,7 @@ from datetime import datetime
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.routing import BaseConverter
-from typing import Callable, Dict, Iterable, Tuple, Optional, List
+from typing import Callable, Dict, Iterable, Tuple, Optional, List, Union
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from tile_store import TileStore
@@ -71,6 +71,28 @@ with open(BASE_DIR / "lang.yml", encoding="utf-8") as f:
 # Local tile store and palette for map rendering when the FastAPI backend is
 # not running separately.
 WS_CLIENTS: List = []
+
+
+def append_log(entry: Dict[str, Union[str, int, float, bool]]) -> None:
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _log_world_dir_status() -> None:
+    root = os.environ.get("WORLD_DIR")
+    exists = bool(root and os.path.isdir(root))
+    app.logger.info("WORLD_DIR env=%s exists=%s", root, exists)
+    append_log(
+        {
+            "type": "world_dir",
+            "world_dir": root,
+            "exists": exists,
+            "ts": int(time.time() * 1000),
+        }
+    )
+
+
+_log_world_dir_status()
 
 
 def broadcast_tile(world: str, tx: int, tz: int) -> None:
@@ -1638,6 +1660,28 @@ def logs_summary_endpoint():
                 if entry.get("error") or entry.get("status") == "error":
                     info["errors"] += 1
     return summary
+
+
+@app.get("/logs/world_dir")
+def logs_world_dir_endpoint():
+    entries: List[Dict[str, Union[str, int, bool]]] = []
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") == "world_dir":
+                    entries.append(entry)
+    return entries
+
+
+@app.get("/api/world_dir")
+def world_dir_status_endpoint():
+    root = os.environ.get("WORLD_DIR")
+    exists = bool(root and os.path.isdir(root))
+    return {"world_dir": root, "exists": exists}
 
 
 if __name__ == "__main__":
