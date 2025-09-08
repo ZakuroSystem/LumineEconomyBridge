@@ -6,7 +6,16 @@
 {% block content %}
 <h2>World Map</h2>
 <canvas id="mapCanvas" width="512" height="512" class="border mb-2"></canvas>
-<div class="mb-2">Coord: <span id="coordDisplay">0,0</span></div>
+<div class="mb-2">
+  Coord: <span id="coordDisplay">0,0</span>
+  <span class="ms-3">Zoom:
+    <select id="zoomSelect" class="form-select form-select-sm d-inline w-auto">
+      <option value="1">1×</option>
+      <option value="0.3333">1/3×</option>
+      <option value="0.125">1/8×</option>
+    </select>
+  </span>
+</div>
 <div class="btn-group mb-4" role="group">
   <button id="btnUp" class="btn btn-secondary">▲</button>
   <button id="btnLeft" class="btn btn-secondary">◀</button>

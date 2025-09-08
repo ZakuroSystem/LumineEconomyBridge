@@ -16,6 +16,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   let originX = -4;
   let originZ = -4;
   const coordLabel = document.getElementById('coordDisplay');
+  const zoomSelect = document.getElementById('zoomSelect');
+  let scale = 1;
+  ctx.imageSmoothingEnabled = false;
 
   async function resolveWorld(){
     const prefixes = [];
@@ -70,7 +73,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           img.data[p]=r; img.data[p+1]=g; img.data[p+2]=b; img.data[p+3]=255;
           bit+=6;
         }
-        tileCache[key]=img;
+        const off = document.createElement('canvas');
+        off.width = 64; off.height = 64;
+        off.getContext('2d').putImageData(img,0,0);
+        tileCache[key]=off;
         drawTile(tx,tz);
       })
       .catch(()=>{});
@@ -80,15 +86,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     const key=`${tx},${tz}`;
     const img = tileCache[key];
     if(!img) return;
-    const px=(tx-originX)*64;
-    const pz=(tz-originZ)*64;
-    if(px>=0&&px<512&&pz>=0&&pz<512) ctx.putImageData(img,px,pz);
+    const size = 64*scale;
+    const px = Math.round((tx-originX)*size);
+    const pz = Math.round((tz-originZ)*size);
+    if(px>=0&&px<canvas.width&&pz>=0&&pz<canvas.height)
+      ctx.drawImage(img,px,pz,size,size);
   }
 
   function refreshTiles(){
-    ctx.clearRect(0,0,512,512);
-    for(let tx=originX;tx<originX+8;tx++)
-      for(let tz=originZ;tz<originZ+8;tz++){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    const spanX = Math.ceil(canvas.width / (64*scale));
+    const spanZ = Math.ceil(canvas.height / (64*scale));
+    for(let tx=originX;tx<originX+spanX;tx++)
+      for(let tz=originZ;tz<originZ+spanZ;tz++){
         const key=`${tx},${tz}`;
         if(!tileCache[key]) loadTile(tx,tz);
         else drawTile(tx,tz);
@@ -180,8 +190,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX-rect.left;
     const y = e.clientY-rect.top;
-    const tx = Math.floor(x/64)+originX;
-    const tz = Math.floor(y/64)+originZ;
+    const size = 64*scale;
+    const tx = Math.floor(x/size)+originX;
+    const tz = Math.floor(y/size)+originZ;
     coordLabel.textContent = `${tx},${tz}`;
   });
 
@@ -195,6 +206,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     else if(e.key==='ArrowDown') shift(0,1);
     else if(e.key==='ArrowLeft') shift(-1,0);
     else if(e.key==='ArrowRight') shift(1,0);
+  });
+
+  zoomSelect.addEventListener('change', e=>{
+    scale = parseFloat(e.target.value);
+    refreshTiles();
   });
 
   init();
