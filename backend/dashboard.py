@@ -1667,9 +1667,23 @@ def get_tile_endpoint(world: str, tx: int, tz: int):
                 os.path.join(region_dir, region_file) if region_dir else None
             )
             exists = bool(region_path and os.path.exists(region_path))
-            log_fn = app.logger.warning if exists else app.logger.info
+            chunk_present = False
+            if exists:
+                try:
+                    import anvil  # type: ignore
+                    r = anvil.Region.from_file(region_path)
+                    start_cx, start_cz = (tx % 8) * 4, (tz % 8) * 4
+                    chunk_present = any(
+                        _chunk_exists(r, cx, cz)
+                        for cx in range(start_cx, start_cx + 4)
+                        for cz in range(start_cz, start_cz + 4)
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    app.logger.debug("chunk probe failed for %s: %s", region_file, exc)
+                    chunk_present = True
+            log_fn = app.logger.warning if chunk_present else app.logger.info
             log_fn(
-                "tile missing; world=%s tx=%d tz=%d WORLD_DIR=%s resolved=%s region=%s exists=%s",
+                "tile missing; world=%s tx=%d tz=%d WORLD_DIR=%s resolved=%s region=%s exists=%s chunk=%s",
                 world,
                 tx,
                 tz,
@@ -1677,8 +1691,9 @@ def get_tile_endpoint(world: str, tx: int, tz: int):
                 region_dir,
                 region_file,
                 exists,
+                chunk_present,
             )
-            if exists:
+            if chunk_present:
                 try:
                     generate_world_tiles(world, region_dir, PaletteClient(), tile_store)
                     data = tile_store.load_tile(world, tx, tz)
@@ -1686,10 +1701,11 @@ def get_tile_endpoint(world: str, tx: int, tz: int):
                     app.logger.exception("tile generation failed for %s: %s", world, exc)
             else:
                 app.logger.debug(
-                    "region file %s absent for %s; candidates=%s",
-                    region_file,
+                    "no chunks for tile %s:%d,%d in region %s",
                     world,
-                    candidates,
+                    tx,
+                    tz,
+                    region_file,
                 )
     if data is None:
         abort(404)
