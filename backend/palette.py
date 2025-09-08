@@ -23,8 +23,6 @@ def resolve_block(name: str) -> int:
         return 3
     if "quartz" in block_id or "white" in block_id or "snow" in block_id:
         return 4
-    if "stone" in block_id or "gray" in block_id:
-        return 5
     if "lava" in block_id:
         return 6
     return 0

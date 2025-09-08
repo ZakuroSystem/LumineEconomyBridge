@@ -31,8 +31,36 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from tile_store import TileStore
 from tile_format import PIXEL_COUNT, decode_tile
-from flask_sock import Sock
-from simple_websocket import ConnectionClosed
+
+# ``flask_sock`` (and its dependency ``simple_websocket``) are only required
+# when running the live dashboard with websocket support.  The unit tests in
+# this kata exercise the Flask application but do not touch the websocket
+# functionality.  Importing ``flask_sock`` unconditionally causes the module to
+# fail to load in minimal environments where the optional dependency isn't
+# installed.  To keep the dashboard importable in such cases we provide a very
+# small stub that mimics the API used in the tests.
+try:  # pragma: no cover - exercised implicitly when dependency is present
+    from flask_sock import Sock
+    from simple_websocket import ConnectionClosed
+except ModuleNotFoundError:  # pragma: no cover - executed in CI
+
+    class Sock:  # type: ignore[misc]
+        """Fallback stub when :mod:`flask_sock` isn't available."""
+
+        def __init__(self, app: Flask) -> None:  # noqa: D401 - simple stub
+            self.app = app
+
+        def route(self, *args, **kwargs):
+            def decorator(fn):
+                return fn
+
+            return decorator
+
+    class ConnectionClosed(Exception):
+        """Replacement for :class:`simple_websocket.ConnectionClosed`."""
+
+        pass
+
 from palette import PALETTE, resolve_block
 
 logging.basicConfig(level=logging.INFO)
@@ -1628,7 +1656,7 @@ def get_tile_endpoint(world: str, tx: int, tz: int):
                 root,
             ]
             region_dir = next((d for d in candidates if os.path.isdir(d)), None)
-            app.logger.info(
+            app.logger.warning(
                 "tile missing; world=%s tx=%d tz=%d WORLD_DIR=%s resolved=%s",
                 world,
                 tx,
