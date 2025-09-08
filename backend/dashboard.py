@@ -31,6 +31,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from tile_store import TileStore
 from tile_format import PIXEL_COUNT
 from flask_sock import Sock
+from palette import PALETTE, resolve_block
 
 app = Flask(__name__)
 sock = Sock(app)
@@ -89,13 +90,6 @@ def broadcast_tile(world: str, tx: int, tz: int) -> None:
 
 
 tile_store = TileStore("tiles", broadcast_fn=broadcast_tile)
-PALETTE = [[0x40, 0x40, 0x40] for _ in range(64)]
-PALETTE[1] = [0x9B, 0xEC, 0x77]  # grass / green
-PALETTE[2] = [0x79, 0xD4, 0x5C]  # leaves
-PALETTE[3] = [0x89, 0xB9, 0xCD]  # water
-PALETTE[4] = [0xF5, 0xF5, 0xF5]  # quartz / white / snow
-PALETTE[5] = [0xA5, 0xA5, 0xA5]  # stone / gray
-PALETTE[6] = [0xF8, 0x92, 0x21]  # lava
 
 
 def wt(key: str) -> str:
@@ -1447,50 +1441,16 @@ def analytics():
     )
 
 
-def _generate_palette() -> List[List[int]]:
-    p = [[0x40, 0x40, 0x40] for _ in range(64)]
-    p[1] = [0x9B, 0xEC, 0x77]
-    p[2] = [0x79, 0xD4, 0x5C]
-    p[3] = [0x89, 0xB9, 0xCD]
-    p[4] = [0xF5, 0xF5, 0xF5]
-    p[5] = [0xA5, 0xA5, 0xA5]
-    p[6] = [0xF8, 0x92, 0x21]
-    return p
-
-
-def _resolve_block(name: str) -> int:
-    block_id = name.split(":")[-1].lower()
-    if (
-        block_id == "grass_block"
-        or "tall_grass" in block_id
-        or "grass" in block_id
-        or "green" in block_id
-    ):
-        return 1
-    if "leaves" in block_id:
-        return 2
-    if "water" in block_id:
-        return 3
-    if "quartz" in block_id or "white" in block_id or "snow" in block_id:
-        return 4
-    if "stone" in block_id or "gray" in block_id:
-        return 5
-    if "lava" in block_id:
-        return 6
-    return 0
 
 
 class PaletteClient:
     """Local palette resolver applying fixed template rules."""
 
-    def __init__(self) -> None:
-        self.palette_data = _generate_palette()
-
     def palette(self) -> Dict:
-        return {"palette": self.palette_data}
+        return {"palette": PALETTE}
 
     def resolve(self, blocks: Iterable[str]) -> Iterable[int]:
-        return [_resolve_block(b) for b in blocks]
+        return [resolve_block(b) for b in blocks]
 
 
 def _chunk_exists(region, cx: int, cz: int) -> bool:
