@@ -13,10 +13,13 @@ import okhttp3.Response;
 import com.grapelemon.lumineeconomybridge.shop.ShopListener;
 import com.grapelemon.lumineeconomybridge.cash.PaperCurrencyService;
 import com.grapelemon.lumineeconomybridge.cash.PaperNoteListener;
+import com.grapelemon.lumineeconomybridge.vault.VaultEconomyBridge;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.plugin.ServicePriority;
+import net.milkbowl.vault.economy.Economy;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -28,6 +31,9 @@ import java.util.HashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 
 public class LumineEconomyBridge extends JavaPlugin {
 
@@ -37,6 +43,7 @@ public class LumineEconomyBridge extends JavaPlugin {
     private BukkitTask settleTask;
     private BukkitTask retryTask;
     private LeCommandExecutor executor;
+    private VaultEconomyBridge vaultEconomy;
 
     private String baseUrl;
     private int timeout = 2000;
@@ -108,6 +115,13 @@ public class LumineEconomyBridge extends JavaPlugin {
             cashService = new PaperCurrencyService(this, httpClient, baseUrl);
             getServer().getPluginManager().registerEvents(new PaperNoteListener(cashService), this);
 
+            if (getConfig().getBoolean("vault.enabled", false) &&
+                    Bukkit.getPluginManager().getPlugin("Vault") != null) {
+                vaultEconomy = new VaultEconomyBridge(this);
+                getServer().getServicesManager().register(Economy.class, vaultEconomy, this, ServicePriority.Lowest);
+                getLogger().info("Registered Vault economy bridge");
+            }
+
             for (Player p : Bukkit.getOnlinePlayers()) {
                 syncService.seed(p);
             }
@@ -132,6 +146,29 @@ public class LumineEconomyBridge extends JavaPlugin {
     public void stopBridge() {
         if (retryTask != null) { retryTask.cancel(); retryTask = null; }
         if (settleTask != null) { settleTask.cancel(); settleTask = null; }
+        if (vaultEconomy != null) {
+            getServer().getServicesManager().unregister(Economy.class, vaultEconomy);
+            vaultEconomy = null;
+        }
+        if (cashService != null) {
+            CompletableFuture<Void> future = new CompletableFuture<>();
+            Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+                try {
+                    cashService.flushEvents();
+                    cashService.flushAll();
+                } finally {
+                    future.complete(null);
+                }
+            });
+            try {
+                future.get(5, TimeUnit.SECONDS);
+            } catch (InterruptedException | ExecutionException e) {
+                getLogger().warning("Failed to flush cash data: " + e.getMessage());
+            } catch (TimeoutException e) {
+                getLogger().warning("Timed out while flushing cash data");
+            }
+            cashService = null;
+        }
         syncService = null;
         httpClient = null;
         getLogger().info("LumineEconomyBridge stopped.");
