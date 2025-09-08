@@ -3,7 +3,7 @@ package com.grapelemon.lumineeconomybridge.map;
 import org.bukkit.Material;
 
 public final class MapPalette {
-    // 0 is default/other. Indices 1-6 correspond to palette entries in MapColorService.
+    // 0 is default/other. Indices 1-6 correspond to palette entries served by the backend.
     public static int indexOf(Material m) {
         if (m == null) {
             return 0;

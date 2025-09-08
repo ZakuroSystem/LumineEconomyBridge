@@ -1397,27 +1397,50 @@ def analytics():
     )
 
 
-class PaletteClient:
-    """HTTP client for the Java mapcolor plugin."""
+def _generate_palette() -> List[List[int]]:
+    p = [[0x40, 0x40, 0x40] for _ in range(64)]
+    p[1] = [0x9B, 0xEC, 0x77]
+    p[2] = [0x79, 0xD4, 0x5C]
+    p[3] = [0x89, 0xB9, 0xCD]
+    p[4] = [0xF5, 0xF5, 0xF5]
+    p[5] = [0xA5, 0xA5, 0xA5]
+    p[6] = [0xF8, 0x92, 0x21]
+    return p
 
-    def __init__(self, base_url: str, token: str) -> None:
-        self._session = requests.Session()
-        self._session.headers.update({"X-LE-Token": token})
-        self.base_url = base_url.rstrip("/")
+
+def _resolve_block(name: str) -> int:
+    block_id = name.split(":")[-1].lower()
+    if (
+        block_id == "grass_block"
+        or "tall_grass" in block_id
+        or "grass" in block_id
+        or "green" in block_id
+    ):
+        return 1
+    if "leaves" in block_id:
+        return 2
+    if "water" in block_id:
+        return 3
+    if "quartz" in block_id or "white" in block_id or "snow" in block_id:
+        return 4
+    if "stone" in block_id or "gray" in block_id:
+        return 5
+    if "lava" in block_id:
+        return 6
+    return 0
+
+
+class PaletteClient:
+    """Local palette resolver applying fixed template rules."""
+
+    def __init__(self) -> None:
+        self.palette_data = _generate_palette()
 
     def palette(self) -> Dict:
-        resp = self._session.get(f"{self.base_url}/plugin/mapcolor/palette", timeout=10)
-        resp.raise_for_status()
-        return resp.json()
+        return {"palette": self.palette_data}
 
     def resolve(self, blocks: Iterable[str]) -> Iterable[int]:
-        resp = self._session.post(
-            f"{self.base_url}/plugin/mapcolor/resolve",
-            json={"blocks": list(blocks)},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        return resp.json().get("indices", [])
+        return [_resolve_block(b) for b in blocks]
 
 
 def _chunk_exists(region, cx: int, cz: int) -> bool:

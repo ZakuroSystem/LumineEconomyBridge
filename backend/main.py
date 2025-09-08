@@ -24,7 +24,6 @@ import asyncio
 import secrets
 import base64
 import hashlib
-import httpx
 import re
 from email.utils import parsedate_to_datetime, formatdate
 
@@ -381,7 +380,41 @@ with cash_conn:
     )
 
 SHARED_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
-MAPCOLOR_URL = os.environ.get("MAPCOLOR_URL", "http://127.0.0.1:8765")
+
+# Seven-colour palette used for map rendering. Index 0 is the default colour.
+PALETTE = [[0x40, 0x40, 0x40] for _ in range(64)]
+PALETTE[1] = [0x9B, 0xEC, 0x77]  # grass / green
+PALETTE[2] = [0x79, 0xD4, 0x5C]  # leaves
+PALETTE[3] = [0x89, 0xB9, 0xCD]  # water
+PALETTE[4] = [0xF5, 0xF5, 0xF5]  # quartz / white / snow
+PALETTE[5] = [0xA5, 0xA5, 0xA5]  # stone / gray
+PALETTE[6] = [0xF8, 0x92, 0x21]  # lava
+
+
+def resolve_block(name: str) -> int:
+    """Map a block id to a palette index using template rules."""
+
+    block_id = name.split(":")[-1].lower()
+    if (
+        block_id == "grass_block"
+        or "tall_grass" in block_id
+        or "grass" in block_id
+        or "green" in block_id
+    ):
+        return 1
+    if "leaves" in block_id:
+        return 2
+    if "water" in block_id:
+        return 3
+    if "quartz" in block_id or "white" in block_id or "snow" in block_id:
+        return 4
+    if "stone" in block_id or "gray" in block_id:
+        return 5
+    if "lava" in block_id:
+        return 6
+    return 0
+
+
 RATE_LIMIT: Dict[str, Tuple[float, int]] = {}
 RATE_LIMIT_MAX = 10
 
@@ -3231,39 +3264,23 @@ def chunk_snapshot(
 @app.get("/mapcolor/palette")
 @app.get("/plugin/mapcolor/palette")
 async def mapcolor_palette(token: None = Depends(verify_token_optional)):
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{MAPCOLOR_URL}/plugin/mapcolor/palette",
-            headers={"X-LE-Token": SHARED_TOKEN},
-            timeout=10,
-        )
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type=resp.headers.get("content-type"),
-    )
+    """Return the static map colour palette."""
+
+    return {
+        "palette": PALETTE,
+        "world_info": [],
+        "server_version": "python",
+    }
 
 
 @app.post("/api/mapcolor/resolve")
 @app.post("/mapcolor/resolve")
 @app.post("/plugin/mapcolor/resolve")
 async def mapcolor_resolve(req: Request, token: None = Depends(verify_token_optional)):
-    body = await req.body()
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{MAPCOLOR_URL}/plugin/mapcolor/resolve",
-            content=body,
-            headers={
-                "X-LE-Token": SHARED_TOKEN,
-                "Content-Type": "application/json",
-            },
-            timeout=10,
-        )
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type=resp.headers.get("content-type"),
-    )
+    body = await req.json()
+    blocks = body.get("blocks", [])
+    indices = [resolve_block(name) for name in blocks]
+    return {"indices": indices}
 
 
 @app.get("/tiles/worlds")

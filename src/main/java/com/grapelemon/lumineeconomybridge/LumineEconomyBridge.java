@@ -1,7 +1,6 @@
 package com.grapelemon.lumineeconomybridge;
 
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
-import com.grapelemon.lumineeconomybridge.map.MapColorService;
 import com.grapelemon.lumineeconomybridge.map.SnapshotService;
 import com.grapelemon.lumineeconomybridge.map.TileDebounceManager;
 import com.grapelemon.lumineeconomybridge.map.BlockEventListener;
@@ -48,7 +47,6 @@ public class LumineEconomyBridge extends JavaPlugin {
     private String baseUrl;
     private int timeout = 2000;
 
-    private MapColorService mapColorService;
     private SnapshotService snapshotService;
     private TileDebounceManager tileDebounceManager;
 
@@ -73,7 +71,6 @@ public class LumineEconomyBridge extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new ShopListener(this), this);
 
         startBridge();
-        startMapColorService();
         startTileUpdates();
     }
 
@@ -174,19 +171,6 @@ public class LumineEconomyBridge extends JavaPlugin {
         getLogger().info("LumineEconomyBridge stopped.");
     }
 
-    private void startMapColorService() {
-        if (mapColorService != null) return;
-        int port = getConfig().getInt("mapcolor.port", 8765);
-        String token = getConfig().getString("api.token", "");
-        try {
-            mapColorService = new MapColorService(this, token, port);
-            mapColorService.start();
-            getLogger().info("server_version=" + getServer().getVersion() +
-                    " palette_len=" + mapColorService.getPaletteLength());
-        } catch (IOException e) {
-            getLogger().warning("failed to start mapcolor service: " + e.getMessage());
-        }
-    }
 
     private void startTileUpdates() {
         String token = getConfig().getString("api.token", "");
@@ -199,10 +183,6 @@ public class LumineEconomyBridge extends JavaPlugin {
     @Override
     public void onDisable() {
         stopBridge();
-        if (mapColorService != null) {
-            mapColorService.stop();
-            mapColorService = null;
-        }
         snapshotService = null;
         tileDebounceManager = null;
     }
