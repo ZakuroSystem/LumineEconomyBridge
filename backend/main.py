@@ -11,6 +11,7 @@ from fastapi import (
 from pydantic import BaseModel
 from typing import Dict, Optional, List, Union, Tuple, Any
 from tile_store import TileStore
+from tile_format import PIXEL_COUNT
 import sqlite3
 import json
 from contextlib import closing, contextmanager, asynccontextmanager, suppress
@@ -3313,7 +3314,9 @@ def get_tile(
 ):
     data = tile_store.load_tile(world, tx, tz)
     if data is None:
-        raise HTTPException(status_code=404, detail="tile not found")
+        # generate a blank tile so the client can render an empty chunk
+        tile_store.save_tile(world, tx, tz, [0] * PIXEL_COUNT)
+        data = tile_store.load_tile(world, tx, tz)
     tile_store.touch_tile(world, tx, tz)
     meta = tile_store.tile_meta(world, tx, tz)
     last = meta.get("last_updated", 0)

@@ -28,6 +28,7 @@ from typing import Callable, Dict, Iterable, Tuple, Optional, List
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from tile_store import TileStore
+from tile_format import PIXEL_COUNT
 
 app = Flask(__name__)
 app.secret_key = "lumineeconomy"
@@ -1571,7 +1572,8 @@ def list_worlds_endpoint():
 def get_tile_endpoint(world: str, tx: int, tz: int):
     data = tile_store.load_tile(world, tx, tz)
     if data is None:
-        abort(404)
+        tile_store.save_tile(world, tx, tz, [0] * PIXEL_COUNT)
+        data = tile_store.load_tile(world, tx, tz)
     tile_store.touch_tile(world, tx, tz)
     return Response(data, mimetype="application/octet-stream")
 
