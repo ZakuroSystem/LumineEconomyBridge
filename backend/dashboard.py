@@ -1605,10 +1605,24 @@ def generate_world_tiles(
 
 def _top_index(chunk: "anvil.Chunk", x: int, z: int, resolver: Callable[[str], int]) -> int:
     """Return the colour index for the column at (x,z)."""
+    sections = getattr(chunk, "sections", None)
+    if sections:
+        ys = [s.y for s in sections if s]
+    else:
+        try:
+            ys = [s["Y"].value for s in chunk.data["Sections"]]
+        except Exception:
+            ys = []
+    if not ys:
+        return 0
+    min_y = min(ys) * 16
+    max_y = (max(ys) + 1) * 16 - 1
 
-    for y in range(250, -64, -1):
+    for y in range(max_y, min_y - 1, -1):
         block = chunk.get_block(x, y, z)
-        name = getattr(block, "id", "minecraft:air")
+        name = getattr(block, "name", getattr(block, "id", "minecraft:air"))
+        if callable(name):
+            name = name()
         if name != "minecraft:air":
             return resolver(name)
     return 0
