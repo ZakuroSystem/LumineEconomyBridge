@@ -50,9 +50,14 @@ except ModuleNotFoundError:  # pragma: no cover - executed in CI
         def __init__(self, app: Flask) -> None:  # noqa: D401 - simple stub
             self.app = app
 
-        def route(self, *args, **kwargs):
+        def route(self, rule: str, **_kwargs):
             def decorator(fn):
-                return fn
+                @self.app.route(rule)
+                @wraps(fn)
+                def disabled_ws(*args, **kwargs):
+                    abort(400, description="websocket support not installed")
+
+                return disabled_ws
 
             return decorator
 
@@ -1656,23 +1661,35 @@ def get_tile_endpoint(world: str, tx: int, tz: int):
                 root,
             ]
             region_dir = next((d for d in candidates if os.path.isdir(d)), None)
-            app.logger.warning(
-                "tile missing; world=%s tx=%d tz=%d WORLD_DIR=%s resolved=%s",
+            rx, rz = tx // 8, tz // 8
+            region_file = f"r.{rx}.{rz}.mca"
+            region_path = (
+                os.path.join(region_dir, region_file) if region_dir else None
+            )
+            exists = bool(region_path and os.path.exists(region_path))
+            log_fn = app.logger.warning if exists else app.logger.info
+            log_fn(
+                "tile missing; world=%s tx=%d tz=%d WORLD_DIR=%s resolved=%s region=%s exists=%s",
                 world,
                 tx,
                 tz,
                 root,
                 region_dir,
+                region_file,
+                exists,
             )
-            if region_dir and any(fn.endswith(".mca") for fn in os.listdir(region_dir)):
+            if exists:
                 try:
                     generate_world_tiles(world, region_dir, PaletteClient(), tile_store)
                     data = tile_store.load_tile(world, tx, tz)
                 except Exception as exc:
                     app.logger.exception("tile generation failed for %s: %s", world, exc)
             else:
-                app.logger.warning(
-                    "region dir not found or empty for %s; candidates=%s", world, candidates
+                app.logger.debug(
+                    "region file %s absent for %s; candidates=%s",
+                    region_file,
+                    world,
+                    candidates,
                 )
     if data is None:
         abort(404)
