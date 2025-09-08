@@ -31,8 +31,41 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from tile_store import TileStore
 from tile_format import PIXEL_COUNT, decode_tile
-from flask_sock import Sock
-from simple_websocket import ConnectionClosed
+
+# ``flask_sock`` (and its dependency ``simple_websocket``) are only required
+# when running the live dashboard with websocket support.  The unit tests in
+# this kata exercise the Flask application but do not touch the websocket
+# functionality.  Importing ``flask_sock`` unconditionally causes the module to
+# fail to load in minimal environments where the optional dependency isn't
+# installed.  To keep the dashboard importable in such cases we provide a very
+# small stub that mimics the API used in the tests.
+try:  # pragma: no cover - exercised implicitly when dependency is present
+    from flask_sock import Sock
+    from simple_websocket import ConnectionClosed
+except ModuleNotFoundError:  # pragma: no cover - executed in CI
+
+    class Sock:  # type: ignore[misc]
+        """Fallback stub when :mod:`flask_sock` isn't available."""
+
+        def __init__(self, app: Flask) -> None:  # noqa: D401 - simple stub
+            self.app = app
+
+        def route(self, rule: str, **_kwargs):
+            def decorator(fn):
+                @self.app.route(rule)
+                @wraps(fn)
+                def disabled_ws(*args, **kwargs):
+                    abort(400, description="websocket support not installed")
+
+                return disabled_ws
+
+            return decorator
+
+    class ConnectionClosed(Exception):
+        """Replacement for :class:`simple_websocket.ConnectionClosed`."""
+
+        pass
+
 from palette import PALETTE, resolve_block
 
 logging.basicConfig(level=logging.INFO)
@@ -1628,28 +1661,70 @@ def get_tile_endpoint(world: str, tx: int, tz: int):
                 root,
             ]
             region_dir = next((d for d in candidates if os.path.isdir(d)), None)
-            app.logger.info(
-                "tile missing; world=%s tx=%d tz=%d WORLD_DIR=%s resolved=%s",
+            rx, rz = tx // 8, tz // 8
+            region_file = f"r.{rx}.{rz}.mca"
+            region_path = (
+                os.path.join(region_dir, region_file) if region_dir else None
+            )
+            exists = bool(region_path and os.path.exists(region_path))
+            chunk_present = False
+            if exists:
+                try:
+                    import anvil  # type: ignore
+                    r = anvil.Region.from_file(region_path)
+                    start_cx, start_cz = (tx % 8) * 4, (tz % 8) * 4
+                    chunk_present = any(
+                        _chunk_exists(r, cx, cz)
+                        for cx in range(start_cx, start_cx + 4)
+                        for cz in range(start_cz, start_cz + 4)
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    app.logger.debug("chunk probe failed for %s: %s", region_file, exc)
+                    chunk_present = True
+            log_fn = app.logger.warning if chunk_present else app.logger.info
+            log_fn(
+                "tile missing; world=%s tx=%d tz=%d WORLD_DIR=%s resolved=%s region=%s exists=%s chunk=%s",
                 world,
                 tx,
                 tz,
                 root,
                 region_dir,
+                region_file,
+                exists,
+                chunk_present,
             )
-            if region_dir and any(fn.endswith(".mca") for fn in os.listdir(region_dir)):
+            if chunk_present:
                 try:
                     generate_world_tiles(world, region_dir, PaletteClient(), tile_store)
                     data = tile_store.load_tile(world, tx, tz)
                 except Exception as exc:
                     app.logger.exception("tile generation failed for %s: %s", world, exc)
             else:
-                app.logger.warning(
-                    "region dir not found or empty for %s; candidates=%s", world, candidates
+                app.logger.debug(
+                    "no chunks for tile %s:%d,%d in region %s",
+                    world,
+                    tx,
+                    tz,
+                    region_file,
                 )
     if data is None:
         abort(404)
     tile_store.touch_tile(world, tx, tz)
     return Response(data, mimetype="application/octet-stream")
+
+
+@app.route("/<sint:tx>/<sint:tz>")
+def root_tile_endpoint(tx: int, tz: int):
+    """Serve tiles when the world name is omitted.
+
+    Some legacy clients request tiles using paths like ``/x/z`` without the
+    world component.  For compatibility, resolve the first available world and
+    delegate to :func:`get_tile_endpoint`.
+    """
+
+    worlds = list_worlds_endpoint().get("worlds", [])
+    world = worlds[0] if worlds else "world"
+    return get_tile_endpoint(world, tx, tz)
 
 
 @sock.route("/ws/tiles")
