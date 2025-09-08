@@ -35,6 +35,12 @@ app = Flask(__name__)
 class SignedIntConverter(BaseConverter):
     regex = r"-?\d+"
 
+    def to_python(self, value: str) -> int:  # ensure route params are ints
+        return int(value)
+
+    def to_url(self, value: int) -> str:
+        return str(int(value))
+
 app.url_map.converters["sint"] = SignedIntConverter
 app.secret_key = "lumineeconomy"
 app.config.update(
