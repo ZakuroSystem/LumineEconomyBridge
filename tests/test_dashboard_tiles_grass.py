@@ -44,11 +44,13 @@ def test_generate_tile_has_grass():
 
         anvil.Region.from_file = from_file_with_coords
         try:
-            generate_world_tiles('world', region_dir, PaletteClient(), tile_store)
+            client = PaletteClient()
+            generate_world_tiles('world', region_dir, client, tile_store)
             raw = tile_store.load_tile('world', 0, 0)
             assert raw is not None
             _, indices = decode_tile(raw)
-            assert any(i != 0 for i in indices)
+            grass_index = client.resolve(['minecraft:grass_block'])[0]
+            assert grass_index in indices
         finally:
             anvil.Region.from_file = orig_from_file
             tile_store.base_dir = old_base

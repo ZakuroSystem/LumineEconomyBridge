@@ -1615,8 +1615,10 @@ def _top_index(chunk: "anvil.Chunk", x: int, z: int, resolver: Callable[[str], i
             ys = []
     if not ys:
         return 0
-    min_y = min(ys) * 16
-    max_y = (max(ys) + 1) * 16 - 1
+    min_section = min(ys)
+    max_section = max(ys)
+    min_y = min_section * 16
+    max_y = (max_section + 1) * 16 - 1
 
     for y in range(max_y, min_y - 1, -1):
         block = chunk.get_block(x, y, z)
