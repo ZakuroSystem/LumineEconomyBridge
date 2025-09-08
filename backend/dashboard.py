@@ -30,7 +30,7 @@ from typing import Callable, Dict, Iterable, Tuple, Optional, List, Union
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from tile_store import TileStore
-from tile_format import PIXEL_COUNT, decode_tile
+from tile_format import PIXEL_COUNT
 
 # ``flask_sock`` (and its dependency ``simple_websocket``) are only required
 # when running the live dashboard with websocket support.  The unit tests in
@@ -1645,13 +1645,6 @@ def list_worlds_endpoint():
 @app.route("/plugin/tiles/<world>/<sint:tx>/<sint:tz>")
 def get_tile_endpoint(world: str, tx: int, tz: int):
     data = tile_store.load_tile(world, tx, tz)
-    if data is not None:
-        try:
-            _, indices = decode_tile(data)
-            if all(idx == 0 for idx in indices):
-                data = None
-        except Exception:
-            data = None
     if data is None:
         root = os.environ.get("WORLD_DIR")
         if root:
