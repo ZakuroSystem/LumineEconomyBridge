@@ -1615,10 +1615,24 @@ def _top_index(chunk: "anvil.Chunk", x: int, z: int, resolver: Callable[[str], i
             ys = []
     if not ys:
         return 0
-    min_y = min(ys) * 16
-    max_y = (max(ys) + 1) * 16 - 1
 
-    for y in range(max_y, min_y - 1, -1):
+    data = getattr(chunk, "data", {})
+    y_pos = data.get("yPos") if isinstance(data, dict) else None
+    if hasattr(y_pos, "value"):
+        y_pos = y_pos.value
+    base_y = int(y_pos) * 16 if isinstance(y_pos, int) else 0
+
+    min_local = min(ys) * 16
+    max_local = (max(ys) + 1) * 16 - 1
+    min_abs = base_y + min_local
+    max_abs = base_y + max_local
+
+    start = max(0, min(max_abs, 255))
+    end = min(255, max(min_abs, 0))
+    if start < end:
+        return 0
+
+    for y in range(start, end - 1, -1):
         block = chunk.get_block(x, y, z)
         name = getattr(block, "name", getattr(block, "id", "minecraft:air"))
         if callable(name):
