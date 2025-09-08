@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 from datetime import datetime
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.routing import BaseConverter
 from typing import Callable, Dict, Iterable, Tuple, Optional, List
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
@@ -31,6 +32,10 @@ from tile_store import TileStore
 from tile_format import PIXEL_COUNT
 
 app = Flask(__name__)
+class SignedIntConverter(BaseConverter):
+    regex = r"-?\d+"
+
+app.url_map.converters["sint"] = SignedIntConverter
 app.secret_key = "lumineeconomy"
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
@@ -1566,9 +1571,9 @@ def list_worlds_endpoint():
     return {"worlds": sorted(worlds)}
 
 
-@app.route("/api/tiles/<world>/<int:tx>/<int:tz>")
-@app.route("/tiles/<world>/<int:tx>/<int:tz>")
-@app.route("/plugin/tiles/<world>/<int:tx>/<int:tz>")
+@app.route("/api/tiles/<world>/<sint:tx>/<sint:tz>")
+@app.route("/tiles/<world>/<sint:tx>/<sint:tz>")
+@app.route("/plugin/tiles/<world>/<sint:tx>/<sint:tz>")
 def get_tile_endpoint(world: str, tx: int, tz: int):
     data = tile_store.load_tile(world, tx, tz)
     if data is None:
