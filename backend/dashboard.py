@@ -1566,10 +1566,30 @@ def get_tile_endpoint(world: str, tx: int, tz: int):
     if data is None:
         root = os.environ.get("WORLD_DIR")
         if root:
-            region_dir = os.path.join(root, world, "region")
-            if os.path.isdir(region_dir):
-                generate_world_tiles(world, region_dir, PaletteClient(), tile_store)
-                data = tile_store.load_tile(world, tx, tz)
+            candidates = [
+                os.path.join(root, world, "region"),
+                os.path.join(root, world),
+                root,
+            ]
+            region_dir = next((d for d in candidates if os.path.isdir(d)), None)
+            app.logger.info(
+                "tile missing; world=%s tx=%d tz=%d WORLD_DIR=%s resolved=%s",
+                world,
+                tx,
+                tz,
+                root,
+                region_dir,
+            )
+            if region_dir and any(fn.endswith(".mca") for fn in os.listdir(region_dir)):
+                try:
+                    generate_world_tiles(world, region_dir, PaletteClient(), tile_store)
+                    data = tile_store.load_tile(world, tx, tz)
+                except Exception as exc:
+                    app.logger.exception("tile generation failed for %s: %s", world, exc)
+            else:
+                app.logger.warning(
+                    "region dir not found or empty for %s; candidates=%s", world, candidates
+                )
     if data is None:
         abort(404)
     tile_store.touch_tile(world, tx, tz)
