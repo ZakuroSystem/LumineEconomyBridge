@@ -13,6 +13,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const ctx = canvas.getContext('2d');
   const tileCache = {};
   let palette = [];
+  let originX = -4;
+  let originZ = -4;
+  const coordLabel = document.getElementById('coordDisplay');
 
   async function resolveWorld(){
     const prefixes = [];
@@ -76,7 +79,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   function drawTile(tx,tz){
     const key=`${tx},${tz}`;
     const img = tileCache[key];
-    if(img) ctx.putImageData(img,(tx+4)*64,(tz+4)*64);
+    if(!img) return;
+    const px=(tx-originX)*64;
+    const pz=(tz-originZ)*64;
+    if(px>=0&&px<512&&pz>=0&&pz<512) ctx.putImageData(img,px,pz);
+  }
+
+  function refreshTiles(){
+    ctx.clearRect(0,0,512,512);
+    for(let tx=originX;tx<originX+8;tx++)
+      for(let tz=originZ;tz<originZ+8;tz++){
+        const key=`${tx},${tz}`;
+        if(!tileCache[key]) loadTile(tx,tz);
+        else drawTile(tx,tz);
+      }
+  }
+
+  function shift(dx,dz){
+    originX+=dx; originZ+=dz; refreshTiles();
   }
 
   function updateCharts(){
@@ -132,7 +152,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         palette = Array.from({length:64}, (_,i)=>[i*4,i*4,i*4]);
       }
     }
-    for(let tx=-4;tx<4;tx++) for(let tz=-4;tz<4;tz++) loadTile(tx,tz);
+    refreshTiles();
     const wsHost = apiUrl ? apiUrl.host : location.host;
     const wsScheme = (apiUrl ? apiUrl.protocol : location.protocol) === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${wsScheme}://${wsHost}/ws/tiles`);
@@ -143,6 +163,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateCharts();
     setInterval(updateCharts,5000);
   }
+
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX-rect.left;
+    const y = e.clientY-rect.top;
+    const tx = Math.floor(x/64)+originX;
+    const tz = Math.floor(y/64)+originZ;
+    coordLabel.textContent = `${tx},${tz}`;
+  });
+
+  document.getElementById('btnUp').addEventListener('click', ()=>shift(0,-1));
+  document.getElementById('btnDown').addEventListener('click', ()=>shift(0,1));
+  document.getElementById('btnLeft').addEventListener('click', ()=>shift(-1,0));
+  document.getElementById('btnRight').addEventListener('click', ()=>shift(1,0));
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowUp') shift(0,-1);
+    else if(e.key==='ArrowDown') shift(0,1);
+    else if(e.key==='ArrowLeft') shift(-1,0);
+    else if(e.key==='ArrowRight') shift(1,0);
+  });
 
   init();
 });
