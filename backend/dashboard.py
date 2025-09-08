@@ -32,6 +32,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from tile_store import TileStore
 from tile_format import PIXEL_COUNT
 from flask_sock import Sock
+from simple_websocket import ConnectionClosed
 from palette import PALETTE, resolve_block
 
 logging.basicConfig(level=logging.INFO)
@@ -1650,7 +1651,7 @@ def ws_tiles(ws):
     try:
         while True:
             ws.receive()
-    except Exception:
+    except ConnectionClosed:
         pass
     finally:
         if ws in WS_CLIENTS:
