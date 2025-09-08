@@ -3283,9 +3283,15 @@ def get_tile(
 ):
     data = tile_store.load_tile(world, tx, tz)
     if data is None:
-        # generate a blank tile so the client can render an empty chunk
-        tile_store.save_tile(world, tx, tz, [0] * PIXEL_COUNT)
-        data = tile_store.load_tile(world, tx, tz)
+        root = os.environ.get("WORLD_DIR")
+        if root:
+            region_dir = os.path.join(root, world, "region")
+            if os.path.isdir(region_dir):
+                from mca_import import PaletteClient, generate_world_tiles
+                generate_world_tiles(world, region_dir, PaletteClient(), tile_store)
+                data = tile_store.load_tile(world, tx, tz)
+    if data is None:
+        return Response(status_code=404)
     tile_store.touch_tile(world, tx, tz)
     meta = tile_store.tile_meta(world, tx, tz)
     last = meta.get("last_updated", 0)

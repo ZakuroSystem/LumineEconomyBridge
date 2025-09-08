@@ -1564,8 +1564,14 @@ def list_worlds_endpoint():
 def get_tile_endpoint(world: str, tx: int, tz: int):
     data = tile_store.load_tile(world, tx, tz)
     if data is None:
-        tile_store.save_tile(world, tx, tz, [0] * PIXEL_COUNT)
-        data = tile_store.load_tile(world, tx, tz)
+        root = os.environ.get("WORLD_DIR")
+        if root:
+            region_dir = os.path.join(root, world, "region")
+            if os.path.isdir(region_dir):
+                generate_world_tiles(world, region_dir, PaletteClient(), tile_store)
+                data = tile_store.load_tile(world, tx, tz)
+    if data is None:
+        abort(404)
     tile_store.touch_tile(world, tx, tz)
     return Response(data, mimetype="application/octet-stream")
 
