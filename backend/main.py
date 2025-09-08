@@ -14,6 +14,7 @@ from tile_store import TileStore
 import sqlite3
 import json
 from contextlib import closing, contextmanager, asynccontextmanager, suppress
+from pathlib import Path
 import yaml
 import os
 import time
@@ -487,7 +488,8 @@ def transaction():
             cur.close()
 
 
-with open("lang.yml", encoding="utf-8") as f:
+BASE_DIR = Path(__file__).resolve().parent
+with open(BASE_DIR / "lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
 
 
@@ -3468,3 +3470,9 @@ async def ws_tiles(ws: WebSocket):
     finally:
         if ws in WS_CLIENTS:
             WS_CLIENTS.remove(ws)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

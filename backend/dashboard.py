@@ -17,6 +17,7 @@ import json
 import yaml
 import shutil
 import requests
+from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime
 from functools import wraps
@@ -44,7 +45,8 @@ API_ORIGIN = (
     f"{_parsed.scheme}://{_parsed.netloc}" if _parsed and _parsed.scheme and _parsed.netloc else ""
 )
 
-with open("lang.yml", encoding="utf-8") as f:
+BASE_DIR = Path(__file__).resolve().parent
+with open(BASE_DIR / "lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
 
 
