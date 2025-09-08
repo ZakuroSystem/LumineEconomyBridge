@@ -6,6 +6,7 @@ from flask import (
     url_for,
     flash,
     send_file,
+    Response,
     session,
     g,
     abort,
@@ -17,6 +18,7 @@ import json
 import yaml
 import shutil
 import requests
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime
@@ -24,6 +26,8 @@ from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from typing import Callable, Dict, Iterable, Tuple, Optional, List
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+from tile_store import TileStore
 
 app = Flask(__name__)
 app.secret_key = "lumineeconomy"
@@ -48,6 +52,17 @@ API_ORIGIN = (
 BASE_DIR = Path(__file__).resolve().parent
 with open(BASE_DIR / "lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
+
+# Local tile store and palette for map rendering when the FastAPI backend is
+# not running separately.
+tile_store = TileStore("tiles")
+PALETTE = [[0x40, 0x40, 0x40] for _ in range(64)]
+PALETTE[1] = [0x9B, 0xEC, 0x77]  # grass / green
+PALETTE[2] = [0x79, 0xD4, 0x5C]  # leaves
+PALETTE[3] = [0x89, 0xB9, 0xCD]  # water
+PALETTE[4] = [0xF5, 0xF5, 0xF5]  # quartz / white / snow
+PALETTE[5] = [0xA5, 0xA5, 0xA5]  # stone / gray
+PALETTE[6] = [0xF8, 0x92, 0x21]  # lava
 
 
 def wt(key: str) -> str:
@@ -1522,6 +1537,43 @@ def _top_index(chunk: "anvil.Chunk", x: int, z: int, resolver: Callable[[str], i
         if name != "minecraft:air":
             return resolver(name)
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Minimal map API served directly from Flask for standalone usage
+
+@app.route("/api/mapcolor/palette")
+@app.route("/mapcolor/palette")
+@app.route("/plugin/mapcolor/palette")
+def mapcolor_palette_endpoint():
+    return {"palette": PALETTE, "world_info": [], "server_version": "python"}
+
+
+@app.route("/api/tiles/worlds")
+@app.route("/tiles/worlds")
+@app.route("/plugin/tiles/worlds")
+def list_worlds_endpoint():
+    worlds = set()
+    try:
+        names = os.listdir(tile_store.base_dir)
+    except FileNotFoundError:
+        names = []
+    for name in names:
+        m = re.match(r"tile_(.+?)_(-?\d+)_(-?\d+)\.tile\.zlib$", name)
+        if m:
+            worlds.add(m.group(1))
+    return {"worlds": sorted(worlds)}
+
+
+@app.route("/api/tiles/<world>/<int:tx>/<int:tz>")
+@app.route("/tiles/<world>/<int:tx>/<int:tz>")
+@app.route("/plugin/tiles/<world>/<int:tx>/<int:tz>")
+def get_tile_endpoint(world: str, tx: int, tz: int):
+    data = tile_store.load_tile(world, tx, tz)
+    if data is None:
+        abort(404)
+    tile_store.touch_tile(world, tx, tz)
+    return Response(data, mimetype="application/octet-stream")
 
 
 if __name__ == "__main__":
