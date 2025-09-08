@@ -30,8 +30,10 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from tile_store import TileStore
 from tile_format import PIXEL_COUNT
+from flask_sock import Sock
 
 app = Flask(__name__)
+sock = Sock(app)
 class SignedIntConverter(BaseConverter):
     regex = r"-?\d+"
 
@@ -67,7 +69,26 @@ with open(BASE_DIR / "lang.yml", encoding="utf-8") as f:
 
 # Local tile store and palette for map rendering when the FastAPI backend is
 # not running separately.
-tile_store = TileStore("tiles")
+WS_CLIENTS: List = []
+
+
+def broadcast_tile(world: str, tx: int, tz: int) -> None:
+    msg = json.dumps({"world": world, "tx": tx, "tz": tz})
+    stale: List = []
+    for ws in WS_CLIENTS:
+        try:
+            ws.send(msg)
+        except Exception:
+            stale.append(ws)
+    for ws in stale:
+        try:
+            ws.close()
+        except Exception:
+            pass
+        WS_CLIENTS.remove(ws)
+
+
+tile_store = TileStore("tiles", broadcast_fn=broadcast_tile)
 PALETTE = [[0x40, 0x40, 0x40] for _ in range(64)]
 PALETTE[1] = [0x9B, 0xEC, 0x77]  # grass / green
 PALETTE[2] = [0x79, 0xD4, 0x5C]  # leaves
@@ -1587,6 +1608,50 @@ def get_tile_endpoint(world: str, tx: int, tz: int):
         data = tile_store.load_tile(world, tx, tz)
     tile_store.touch_tile(world, tx, tz)
     return Response(data, mimetype="application/octet-stream")
+
+
+@sock.route("/ws/tiles")
+def ws_tiles(ws):
+    WS_CLIENTS.append(ws)
+    try:
+        while True:
+            ws.receive()
+    except Exception:
+        pass
+    finally:
+        if ws in WS_CLIENTS:
+            WS_CLIENTS.remove(ws)
+
+
+@app.get("/metrics")
+def metrics_endpoint():
+    metrics = tile_store.metrics()
+    lines = [f"{k} {v}" for k, v in metrics.items()]
+    return Response("\n".join(lines), mimetype="text/plain")
+
+
+@app.get("/logs/summary")
+def logs_summary_endpoint():
+    since_s = request.args.get("since")
+    since = int(since_s) if since_s and since_s.isdigit() else None
+    summary: Dict[str, Dict[str, int]] = {}
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if since is not None and entry.get("ts", 0) < since:
+                    continue
+                etype = entry.get("type")
+                if not etype:
+                    continue
+                info = summary.setdefault(etype, {"count": 0, "errors": 0})
+                info["count"] += 1
+                if entry.get("error") or entry.get("status") == "error":
+                    info["errors"] += 1
+    return summary
 
 
 if __name__ == "__main__":
