@@ -1702,6 +1702,13 @@ def get_tile_endpoint(world: str, tx: int, tz: int):
                 )
     if data is None:
         abort(404)
+    app.logger.info(
+        "tile served; world=%s tx=%d tz=%d bytes=%d",
+        world,
+        tx,
+        tz,
+        len(data),
+    )
     tile_store.touch_tile(world, tx, tz)
     return Response(data, mimetype="application/octet-stream")
 
