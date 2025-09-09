@@ -6,6 +6,7 @@ from flask import (
     url_for,
     flash,
     send_file,
+    Response,
     session,
     g,
     abort,
@@ -17,14 +18,38 @@ import json
 import yaml
 import shutil
 import requests
+import re
+import logging
+from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
-from typing import Callable, Dict, Iterable, Tuple, Optional, List
+from werkzeug.routing import BaseConverter
+from typing import Callable, Dict, Iterable, Tuple, Optional, List, Union
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
+from tile_store import TileStore
+from tile_format import PIXEL_COUNT, decode_tile
+from flask_sock import Sock
+from simple_websocket import ConnectionClosed
+from palette import PALETTE, resolve_block
+
+logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
+sock = Sock(app)
+
+
+class SignedIntConverter(BaseConverter):
+    regex = r"-?\d+"
+
+    def to_python(self, value: str) -> int:  # ensure route params are ints
+        return int(value)
+
+    def to_url(self, value: int) -> str:
+        return str(int(value))
+
+app.url_map.converters["sint"] = SignedIntConverter
 app.secret_key = "lumineeconomy"
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
@@ -44,8 +69,76 @@ API_ORIGIN = (
     f"{_parsed.scheme}://{_parsed.netloc}" if _parsed and _parsed.scheme and _parsed.netloc else ""
 )
 
-with open("lang.yml", encoding="utf-8") as f:
+BASE_DIR = Path(__file__).resolve().parent
+with open(BASE_DIR / "lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
+
+# Local tile store and palette for map rendering when the FastAPI backend is
+# not running separately.
+WS_CLIENTS: List = []
+
+
+def append_log(entry: Dict[str, Union[str, int, float, bool]]) -> None:
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _log_world_dir_status() -> None:
+    root = os.environ.get("WORLD_DIR")
+    candidates: List[str] = []
+    resolved = None
+    exists = bool(root and os.path.isdir(root))
+    if root:
+        candidates = [os.path.join(root, "region"), root]
+        for cand in candidates:
+            if os.path.isdir(cand):
+                has_mca = any(fn.endswith(".mca") for fn in os.listdir(cand))
+                app.logger.info(
+                    "WORLD_DIR candidate %s exists=%s mca=%s", cand, True, has_mca
+                )
+                if has_mca:
+                    resolved = cand
+                    break
+            else:
+                app.logger.info("WORLD_DIR candidate %s exists=%s", cand, False)
+    if not root:
+        app.logger.warning("WORLD_DIR is not set")
+    else:
+        app.logger.info(
+            "WORLD_DIR env=%s exists=%s resolved=%s", root, exists, resolved
+        )
+    append_log(
+        {
+            "type": "world_dir",
+            "world_dir": root,
+            "exists": exists,
+            "resolved": resolved,
+            "candidates": candidates,
+            "ts": int(time.time() * 1000),
+        }
+    )
+
+
+_log_world_dir_status()
+
+
+def broadcast_tile(world: str, tx: int, tz: int) -> None:
+    msg = json.dumps({"world": world, "tx": tx, "tz": tz})
+    stale: List = []
+    for ws in WS_CLIENTS:
+        try:
+            ws.send(msg)
+        except Exception:
+            stale.append(ws)
+    for ws in stale:
+        try:
+            ws.close()
+        except Exception:
+            pass
+        WS_CLIENTS.remove(ws)
+
+
+tile_store = TileStore("tiles", broadcast_fn=broadcast_tile)
 
 
 def wt(key: str) -> str:
@@ -1397,27 +1490,16 @@ def analytics():
     )
 
 
-class PaletteClient:
-    """HTTP client for the Java mapcolor plugin."""
 
-    def __init__(self, base_url: str, token: str) -> None:
-        self._session = requests.Session()
-        self._session.headers.update({"X-LE-Token": token})
-        self.base_url = base_url.rstrip("/")
+
+class PaletteClient:
+    """Local palette resolver applying fixed template rules."""
 
     def palette(self) -> Dict:
-        resp = self._session.get(f"{self.base_url}/plugin/mapcolor/palette", timeout=10)
-        resp.raise_for_status()
-        return resp.json()
+        return {"palette": PALETTE}
 
     def resolve(self, blocks: Iterable[str]) -> Iterable[int]:
-        resp = self._session.post(
-            f"{self.base_url}/plugin/mapcolor/resolve",
-            json={"blocks": list(blocks)},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        return resp.json().get("indices", [])
+        return [resolve_block(b) for b in blocks]
 
 
 def _chunk_exists(region, cx: int, cz: int) -> bool:
@@ -1499,5 +1581,147 @@ def _top_index(chunk: "anvil.Chunk", x: int, z: int, resolver: Callable[[str], i
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Minimal map API served directly from Flask for standalone usage
+
+@app.route("/api/mapcolor/palette")
+@app.route("/mapcolor/palette")
+@app.route("/plugin/mapcolor/palette")
+def mapcolor_palette_endpoint():
+    return {"palette": PALETTE, "world_info": [], "server_version": "python"}
+
+
+@app.route("/api/tiles/worlds")
+@app.route("/tiles/worlds")
+@app.route("/plugin/tiles/worlds")
+def list_worlds_endpoint():
+    worlds = set()
+    try:
+        names = os.listdir(tile_store.base_dir)
+    except FileNotFoundError:
+        names = []
+    for name in names:
+        m = re.match(r"tile_(.+?)_(-?\d+)_(-?\d+)\.tile\.zlib$", name)
+        if m:
+            worlds.add(m.group(1))
+    return {"worlds": sorted(worlds)}
+
+
+@app.route("/api/tiles/<world>/<sint:tx>/<sint:tz>")
+@app.route("/tiles/<world>/<sint:tx>/<sint:tz>")
+@app.route("/plugin/tiles/<world>/<sint:tx>/<sint:tz>")
+def get_tile_endpoint(world: str, tx: int, tz: int):
+    data = tile_store.load_tile(world, tx, tz)
+    if data is not None:
+        try:
+            _, indices = decode_tile(data)
+            if all(idx == 0 for idx in indices):
+                data = None
+        except Exception:
+            data = None
+    if data is None:
+        root = os.environ.get("WORLD_DIR")
+        if root:
+            candidates = [
+                os.path.join(root, world, "region"),
+                os.path.join(root, world),
+                root,
+            ]
+            region_dir = next((d for d in candidates if os.path.isdir(d)), None)
+            app.logger.info(
+                "tile missing; world=%s tx=%d tz=%d WORLD_DIR=%s resolved=%s",
+                world,
+                tx,
+                tz,
+                root,
+                region_dir,
+            )
+            if region_dir and any(fn.endswith(".mca") for fn in os.listdir(region_dir)):
+                try:
+                    generate_world_tiles(world, region_dir, PaletteClient(), tile_store)
+                    data = tile_store.load_tile(world, tx, tz)
+                except Exception as exc:
+                    app.logger.exception("tile generation failed for %s: %s", world, exc)
+            else:
+                app.logger.warning(
+                    "region dir not found or empty for %s; candidates=%s", world, candidates
+                )
+    if data is None:
+        abort(404)
+    tile_store.touch_tile(world, tx, tz)
+    return Response(data, mimetype="application/octet-stream")
+
+
+@sock.route("/ws/tiles")
+def ws_tiles(ws):
+    ws.accept()
+    WS_CLIENTS.append(ws)
+    try:
+        while True:
+            ws.receive()
+    except ConnectionClosed:
+        pass
+    finally:
+        if ws in WS_CLIENTS:
+            WS_CLIENTS.remove(ws)
+
+
+@app.get("/metrics")
+def metrics_endpoint():
+    metrics = tile_store.metrics()
+    lines = [f"{k} {v}" for k, v in metrics.items()]
+    return Response("\n".join(lines), mimetype="text/plain")
+
+
+@app.get("/logs/summary")
+def logs_summary_endpoint():
+    since_s = request.args.get("since")
+    since = int(since_s) if since_s and since_s.isdigit() else None
+    summary: Dict[str, Dict[str, int]] = {}
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if since is not None and entry.get("ts", 0) < since:
+                    continue
+                etype = entry.get("type")
+                if not etype:
+                    continue
+                info = summary.setdefault(etype, {"count": 0, "errors": 0})
+                info["count"] += 1
+                if entry.get("error") or entry.get("status") == "error":
+                    info["errors"] += 1
+    return summary
+
+
+@app.get("/logs/world_dir")
+def logs_world_dir_endpoint():
+    entries: List[Dict[str, Union[str, int, bool]]] = []
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") == "world_dir":
+                    entries.append(entry)
+    return entries
+
+
+@app.get("/api/world_dir")
+def world_dir_status_endpoint():
+    root = os.environ.get("WORLD_DIR")
+    exists = bool(root and os.path.isdir(root))
+    return {"world_dir": root, "exists": exists}
+
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    # Enable threaded mode so Flask's development server can upgrade WebSocket
+    # connections without returning 400 responses on the `/ws/tiles` endpoint.
+    # Single threaded mode cannot handle the socket handshake, which manifested
+    # as sporadic 400 errors in the logs when the browser attempted to connect.
+    app.run(debug=True, threaded=True)

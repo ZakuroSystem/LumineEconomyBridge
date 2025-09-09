@@ -3,6 +3,7 @@ version: 0.1.0
 main: com.grapelemon.lumineeconomybridge.LumineEconomyBridge
 api-version: '1.21'
 authors: [grapelemon]
+softdepend: [Vault]
 commands:
   le:
     description: Send command to Lumine Economy backend

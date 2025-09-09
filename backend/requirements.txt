@@ -5,3 +5,5 @@ Flask
 requests
 anvil-parser
 httpx
+flask-sock
+simple-websocket

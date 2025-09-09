@@ -15,6 +15,8 @@ import org.bukkit.Bukkit;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 public class PaperCurrencyService {
     private final LumineEconomyBridge plugin;
@@ -24,6 +26,9 @@ public class PaperCurrencyService {
     private final String baseUrl;
     private final Gson gson = new Gson();
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+    private final BlockingQueue<RetryableCashEvent> eventQueue;
+    private static final int MAX_RETRIES = 5;
+    private static final long BASE_RETRY_DELAY_TICKS = 20L; // 1 second
 
     public PaperCurrencyService(LumineEconomyBridge plugin, OkHttpClient http, String baseUrl) {
         this.plugin = plugin;
@@ -31,6 +36,10 @@ public class PaperCurrencyService {
         this.baseUrl = baseUrl;
         this.currencyKey = new NamespacedKey(plugin, "note_currency");
         this.amountKey = new NamespacedKey(plugin, "note_amount");
+        int capacity = plugin.getConfig().getInt("cash.queue_capacity", 1000);
+        this.eventQueue = new LinkedBlockingQueue<>(capacity);
+        long period = 20L * 5L;
+        Bukkit.getScheduler().runTaskTimerAsynchronously(plugin, this::flushEvents, period, period);
     }
 
     public ItemStack issue(Player p, String currency, int amount) {
@@ -47,19 +56,34 @@ public class PaperCurrencyService {
 
     public boolean isNote(ItemStack stack) {
         if (stack == null) return false;
-        ItemMeta meta = stack.getItemMeta();
-        return meta != null && meta.getPersistentDataContainer().has(currencyKey, PersistentDataType.STRING);
+        try {
+            ItemMeta meta = stack.getItemMeta();
+            return meta != null && meta.getPersistentDataContainer().has(currencyKey, PersistentDataType.STRING);
+        } catch (IllegalArgumentException e) {
+            plugin.getLogger().warning("failed to read item meta: " + e.getMessage());
+            return false;
+        }
     }
 
     public String getCurrency(ItemStack stack) {
-        ItemMeta meta = stack.getItemMeta();
-        return meta.getPersistentDataContainer().get(currencyKey, PersistentDataType.STRING);
+        try {
+            ItemMeta meta = stack.getItemMeta();
+            return meta.getPersistentDataContainer().get(currencyKey, PersistentDataType.STRING);
+        } catch (IllegalArgumentException e) {
+            plugin.getLogger().warning("failed to read currency: " + e.getMessage());
+            return "";
+        }
     }
 
     public int getAmount(ItemStack stack) {
-        ItemMeta meta = stack.getItemMeta();
-        Integer v = meta.getPersistentDataContainer().get(amountKey, PersistentDataType.INTEGER);
-        return v != null ? v : 0;
+        try {
+            ItemMeta meta = stack.getItemMeta();
+            Integer v = meta.getPersistentDataContainer().get(amountKey, PersistentDataType.INTEGER);
+            return v != null ? v : 0;
+        } catch (IllegalArgumentException e) {
+            plugin.getLogger().warning("failed to read amount: " + e.getMessage());
+            return 0;
+        }
     }
 
     public void sendEvent(String player, String action, ItemStack stack, Location loc) {
@@ -67,21 +91,46 @@ public class PaperCurrencyService {
                 player,
                 action,
                 getCurrency(stack),
-                getAmount(stack),
-                stack.getAmount(),
+                getAmount(stack) * stack.getAmount(),
                 locString(loc)
         );
+        if (!eventQueue.offer(new RetryableCashEvent(payload, 0))) {
+            plugin.getLogger().warning("cash event dropped: queue full");
+        }
+    }
+
+    public void flushEvents() {
+        RetryableCashEvent evt;
+        while ((evt = eventQueue.poll()) != null) {
+            sendPayload(evt);
+        }
+    }
+
+    private void sendPayload(RetryableCashEvent event) {
+        CashEventPayload payload = event.payload();
         Request req = new Request.Builder()
                 .url(baseUrl + "/api/cash/event")
                 .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
-        http.newCall(req).enqueue(new Callback() {
-            @Override public void onFailure(Call call, IOException e) {
-                plugin.getLogger().warning("cash event failed: " + e.getMessage());
+        try (Response response = http.newCall(req).execute()) {
+            if (!response.isSuccessful()) {
+                throw new IOException("unexpected code " + response.code());
             }
-            @Override public void onResponse(Call call, Response response) { response.close(); }
-        });
+        } catch (IOException e) {
+            int nextAttempt = event.attempt() + 1;
+            if (nextAttempt > MAX_RETRIES) {
+                plugin.getLogger().warning("cash event permanently failed after " + event.attempt() + " retries: " + e.getMessage());
+                return;
+            }
+            long delay = (1L << (nextAttempt - 1)) * BASE_RETRY_DELAY_TICKS;
+            Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, () -> {
+                if (!eventQueue.offer(new RetryableCashEvent(payload, nextAttempt))) {
+                    plugin.getLogger().warning("cash event dropped after retry: queue full");
+                }
+            }, delay);
+            plugin.getLogger().warning("cash event failed: " + e.getMessage() + ", retrying in " + (delay / 20) + "s (attempt " + nextAttempt + ")");
+        }
     }
 
     private String locString(Location l) {
@@ -90,25 +139,23 @@ public class PaperCurrencyService {
 
     public void flushAll() {
         for (Player p : Bukkit.getOnlinePlayers()) {
-            Map<String, Map<Integer, Integer>> map = new HashMap<>();
+            Map<String, Integer> totals = new HashMap<>();
             for (ItemStack stack : p.getInventory().getContents()) {
                 if (isNote(stack)) {
                     String cur = getCurrency(stack);
-                    int amt = getAmount(stack);
-                    map.computeIfAbsent(cur, k -> new HashMap<>()).merge(amt, stack.getAmount(), Integer::sum);
+                    int value = getAmount(stack) * stack.getAmount();
+                    totals.merge(cur, value, Integer::sum);
                 }
             }
-            List<NotePayload> notes = new ArrayList<>();
-            for (Map.Entry<String, Map<Integer, Integer>> ce : map.entrySet()) {
-                for (Map.Entry<Integer, Integer> ae : ce.getValue().entrySet()) {
-                    notes.add(new NotePayload(ce.getKey(), ae.getKey(), ae.getValue()));
-                }
+            List<CashBalancePayload> notes = new ArrayList<>();
+            for (Map.Entry<String, Integer> e : totals.entrySet()) {
+                notes.add(new CashBalancePayload(e.getKey(), e.getValue()));
             }
             sendRewrite(p.getUniqueId().toString(), notes);
         }
     }
 
-    private void sendRewrite(String player, List<NotePayload> notes) {
+    private void sendRewrite(String player, List<CashBalancePayload> notes) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("player_uuid", player);
         payload.put("notes", notes);
@@ -123,7 +170,9 @@ public class PaperCurrencyService {
         });
     }
 
-    public record CashEventPayload(String player_uuid, String action, String currency, int amount, int quantity, String location) {}
+    private record RetryableCashEvent(CashEventPayload payload, int attempt) {}
 
-    public record NotePayload(String currency, int amount, int quantity) {}
+    public record CashEventPayload(String player_uuid, String action, String currency, int amount, String location) {}
+
+    public record CashBalancePayload(String currency, int amount) {}
 }

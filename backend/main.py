@@ -11,11 +11,16 @@ from fastapi import (
 from pydantic import BaseModel
 from typing import Dict, Optional, List, Union, Tuple, Any
 from tile_store import TileStore
+from tile_format import PIXEL_COUNT
 import sqlite3
 import json
 from contextlib import closing, contextmanager, asynccontextmanager, suppress
+from pathlib import Path
 import yaml
 import os
+import logging
+
+logging.basicConfig(level=logging.INFO)
 import time
 import shutil
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -24,7 +29,6 @@ import asyncio
 import secrets
 import base64
 import hashlib
-import httpx
 import re
 from email.utils import parsedate_to_datetime, formatdate
 
@@ -357,11 +361,14 @@ with cash_conn:
             owner_uuid TEXT NOT NULL,
             currency TEXT NOT NULL,
             amount INTEGER NOT NULL,
-            quantity INTEGER NOT NULL,
-            PRIMARY KEY(owner_uuid, currency, amount)
+            PRIMARY KEY(owner_uuid, currency)
         )
         """
     )
+    try:
+        cash_conn.execute("ALTER TABLE notes DROP COLUMN quantity")
+    except sqlite3.OperationalError:
+        pass
     cash_conn.execute(
         """
         CREATE TABLE IF NOT EXISTS cash_events (
@@ -378,7 +385,10 @@ with cash_conn:
     )
 
 SHARED_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
-MAPCOLOR_URL = os.environ.get("MAPCOLOR_URL", "http://127.0.0.1:8765")
+
+from palette import PALETTE, resolve_block
+
+
 RATE_LIMIT: Dict[str, Tuple[float, int]] = {}
 RATE_LIMIT_MAX = 10
 
@@ -431,6 +441,44 @@ async def _stop_tile_worker() -> None:
         with suppress(Exception):
             await _tile_worker_task
 
+
+@app.on_event("startup")
+async def _log_world_dir_status() -> None:
+    """Record the WORLD_DIR environment variable on startup."""
+    root = os.environ.get("WORLD_DIR")
+    candidates: List[str] = []
+    resolved = None
+    exists = bool(root and os.path.isdir(root))
+    if root:
+        candidates = [os.path.join(root, "region"), root]
+        for cand in candidates:
+            if os.path.isdir(cand):
+                has_mca = any(fn.endswith(".mca") for fn in os.listdir(cand))
+                app.logger.info(
+                    "WORLD_DIR candidate %s exists=%s mca=%s", cand, True, has_mca
+                )
+                if has_mca:
+                    resolved = cand
+                    break
+            else:
+                app.logger.info("WORLD_DIR candidate %s exists=%s", cand, False)
+    if not root:
+        app.logger.warning("WORLD_DIR is not set")
+    else:
+        app.logger.info(
+            "WORLD_DIR env=%s exists=%s resolved=%s", root, exists, resolved
+        )
+    append_log(
+        {
+            "type": "world_dir",
+            "world_dir": root,
+            "exists": exists,
+            "resolved": resolved,
+            "candidates": candidates,
+            "ts": int(time.time() * 1000),
+        }
+    )
+
 db_lock = threading.Lock()
 
 undo_stacks: Dict[str, List[List[Dict[str, Union[str, int, None]]]]] = {}
@@ -451,7 +499,8 @@ def transaction():
             cur.close()
 
 
-with open("lang.yml", encoding="utf-8") as f:
+BASE_DIR = Path(__file__).resolve().parent
+with open(BASE_DIR / "lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
 
 
@@ -671,6 +720,26 @@ def get_name(uuid: str) -> Optional[str]:
     with closing(conn.cursor()) as cur:
         row = cur.execute("SELECT name FROM name_index WHERE uuid=? LIMIT 1", (uuid,)).fetchone()
         return row["name"] if row else None
+
+
+def purge_shop(cur: sqlite3.Cursor, shop_id: str) -> None:
+    cur.execute("DELETE FROM shop_locations WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shop_stock WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shop_prices WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shop_tx WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shop_owners WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shop_visits WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM sale_events WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shops WHERE shop_id=?", (shop_id,))
+
+
+def purge_orphan_shops() -> None:
+    with transaction() as cur:
+        rows = cur.execute(
+            "SELECT shop_id FROM shops WHERE shop_id NOT IN (SELECT shop_id FROM shop_owners)"
+        ).fetchall()
+        for r in rows:
+            purge_shop(cur, r["shop_id"])
 
 
 def has_link(cur: sqlite3.Cursor, user_uuid: str, system_uuid: str) -> bool:
@@ -2133,10 +2202,17 @@ async def shop_place(payload: ShopPlacePayload, token: None = Depends(verify_tok
 
 
 @app.get("/api/shop/ids")
-async def shop_ids():
+async def shop_ids(owner_uuid: Optional[str] = None):
+    purge_orphan_shops()
     start = time.time()
     with transaction() as cur:
-        rows = cur.execute("SELECT shop_id FROM shops").fetchall()
+        if owner_uuid:
+            rows = cur.execute(
+                "SELECT shop_id FROM shop_owners WHERE owner_uuid=?",
+                (owner_uuid,),
+            ).fetchall()
+        else:
+            rows = cur.execute("SELECT shop_id FROM shops").fetchall()
     ids = [r["shop_id"] for r in rows]
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
@@ -2153,58 +2229,62 @@ async def shop_ids():
 async def shop_items(shop_id: str):
     start = time.time()
     with transaction() as cur:
-        srow = cur.execute(
-            "SELECT owner_uuid,status,last_activity_at FROM shops WHERE shop_id=?",
-            (shop_id,),
-        ).fetchone()
-        if not srow:
+        owners = [r["owner_uuid"] for r in cur.execute("SELECT owner_uuid FROM shop_owners WHERE shop_id=?", (shop_id,)).fetchall()]
+        if not owners:
+            purge_shop(cur, shop_id)
             result = {"status": "error", "reason": "shop_not_found"}
-        elif srow["status"] != "active":
-            result = {
-                "status": srow["status"],
-                "last_activity_at": srow["last_activity_at"],
-                "owner_uuid": srow["owner_uuid"],
-            }
         else:
-            rows = cur.execute(
-                "SELECT st.item_key, st.sale_name, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+            srow = cur.execute(
+                "SELECT owner_uuid,status,last_activity_at FROM shops WHERE shop_id=?",
                 (shop_id,),
-            ).fetchall()
-            items = []
-            owners = [r["owner_uuid"] for r in cur.execute("SELECT owner_uuid FROM shop_owners WHERE shop_id=?", (shop_id,)).fetchall()]
-            sale = cur.execute(
-                "SELECT pct,end_ts FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
-                (int(time.time()), int(time.time())),
             ).fetchone()
-            for r in rows:
-                price_rows = cur.execute(
-                    "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
-                    (shop_id, r["item_key"]),
+            if not srow:
+                result = {"status": "error", "reason": "shop_not_found"}
+            elif srow["status"] != "active":
+                result = {
+                    "status": srow["status"],
+                    "last_activity_at": srow["last_activity_at"],
+                    "owner_uuid": srow["owner_uuid"],
+                }
+            else:
+                rows = cur.execute(
+                    "SELECT st.item_key, st.sale_name, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+                    (shop_id,),
                 ).fetchall()
-                prices = {pr["currency"]: pr["price"] for pr in price_rows}
+                items = []
+                sale = cur.execute(
+                    "SELECT pct,end_ts FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
+                    (int(time.time()), int(time.time())),
+                ).fetchone()
+                for r in rows:
+                    price_rows = cur.execute(
+                        "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                        (shop_id, r["item_key"]),
+                    ).fetchall()
+                    prices = {pr["currency"]: pr["price"] for pr in price_rows}
+                    if sale:
+                        for k in list(prices.keys()):
+                            prices[k] = int(prices[k] * (100 - sale["pct"]) / 100)
+                    items.append(
+                        {
+                            "item_key": r["item_key"],
+                            "sale_name": r["sale_name"],
+                            "material": r["material"],
+                            "display_name": r["display_name"],
+                            "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
+                            "stock": r["stock"],
+                            "prices": prices,
+                        }
+                    )
+                result = {
+                    "status": "active",
+                    "owner_uuid": srow["owner_uuid"],
+                    "owners": owners,
+                    "items": items,
+                }
                 if sale:
-                    for k in list(prices.keys()):
-                        prices[k] = int(prices[k] * (100 - sale["pct"]) / 100)
-                items.append(
-                    {
-                        "item_key": r["item_key"],
-                        "sale_name": r["sale_name"],
-                        "material": r["material"],
-                        "display_name": r["display_name"],
-                        "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
-                        "stock": r["stock"],
-                        "prices": prices,
-                    }
-                )
-            result = {
-                "status": "active",
-                "owner_uuid": srow["owner_uuid"],
-                "owners": owners,
-                "items": items,
-            }
-            if sale:
-                result["sale_pct"] = sale["pct"]
-                result["sale_ends"] = sale["end_ts"]
+                    result["sale_pct"] = sale["pct"]
+                    result["sale_ends"] = sale["end_ts"]
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_items",
@@ -3133,15 +3213,14 @@ def cash_event(ev: CashEvent, token: None = Depends(verify_token)):
     return {"status": "ok"}
 
 
-class CashNote(BaseModel):
+class CashHolding(BaseModel):
     currency: str
     amount: int
-    quantity: int
 
 
 class CashRewrite(BaseModel):
     player_uuid: str
-    notes: List[CashNote]
+    notes: List[CashHolding]
 
 
 @app.post("/api/cash/rewrite")
@@ -3150,8 +3229,8 @@ def cash_rewrite(payload: CashRewrite, token: None = Depends(verify_token)):
         cash_conn.execute("DELETE FROM notes WHERE owner_uuid=?", (payload.player_uuid,))
         for n in payload.notes:
             cash_conn.execute(
-                "INSERT INTO notes(owner_uuid, currency, amount, quantity) VALUES(?,?,?,?)",
-                (payload.player_uuid, n.currency, n.amount, n.quantity),
+                "INSERT INTO notes(owner_uuid, currency, amount) VALUES(?,?,?)",
+                (payload.player_uuid, n.currency, n.amount),
             )
     return {"status": "ok"}
 
@@ -3159,7 +3238,7 @@ def cash_rewrite(payload: CashRewrite, token: None = Depends(verify_token)):
 @app.get("/api/cash/holdings/{player_uuid}")
 def cash_holdings(player_uuid: str, token: None = Depends(verify_token)):
     cur = cash_conn.execute(
-        "SELECT currency, SUM(amount * quantity) AS total FROM notes WHERE owner_uuid=? GROUP BY currency",
+        "SELECT currency, amount FROM notes WHERE owner_uuid=?",
         (player_uuid,),
     )
     return {"holdings": [dict(r) for r in cur.fetchall()]}
@@ -3198,39 +3277,23 @@ def chunk_snapshot(
 @app.get("/mapcolor/palette")
 @app.get("/plugin/mapcolor/palette")
 async def mapcolor_palette(token: None = Depends(verify_token_optional)):
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{MAPCOLOR_URL}/plugin/mapcolor/palette",
-            headers={"X-LE-Token": SHARED_TOKEN},
-            timeout=10,
-        )
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type=resp.headers.get("content-type"),
-    )
+    """Return the static map colour palette."""
+
+    return {
+        "palette": PALETTE,
+        "world_info": [],
+        "server_version": "python",
+    }
 
 
 @app.post("/api/mapcolor/resolve")
 @app.post("/mapcolor/resolve")
 @app.post("/plugin/mapcolor/resolve")
 async def mapcolor_resolve(req: Request, token: None = Depends(verify_token_optional)):
-    body = await req.body()
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{MAPCOLOR_URL}/plugin/mapcolor/resolve",
-            content=body,
-            headers={
-                "X-LE-Token": SHARED_TOKEN,
-                "Content-Type": "application/json",
-            },
-            timeout=10,
-        )
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type=resp.headers.get("content-type"),
-    )
+    body = await req.json()
+    blocks = body.get("blocks", [])
+    indices = [resolve_block(name) for name in blocks]
+    return {"indices": indices}
 
 
 @app.get("/tiles/worlds")
@@ -3261,7 +3324,15 @@ def get_tile(
 ):
     data = tile_store.load_tile(world, tx, tz)
     if data is None:
-        raise HTTPException(status_code=404, detail="tile not found")
+        root = os.environ.get("WORLD_DIR")
+        if root:
+            region_dir = os.path.join(root, world, "region")
+            if os.path.isdir(region_dir):
+                from mca_import import PaletteClient, generate_world_tiles
+                generate_world_tiles(world, region_dir, PaletteClient(), tile_store)
+                data = tile_store.load_tile(world, tx, tz)
+    if data is None:
+        return Response(status_code=404)
     tile_store.touch_tile(world, tx, tz)
     meta = tile_store.tile_meta(world, tx, tz)
     last = meta.get("last_updated", 0)
@@ -3406,6 +3477,29 @@ def logs_summary(
     return summary
 
 
+@app.get("/logs/world_dir")
+def logs_world_dir(token: None = Depends(verify_token)) -> List[Dict[str, Union[str, int, bool]]]:
+    """Return world directory detection log entries."""
+    entries: List[Dict[str, Union[str, int, bool]]] = []
+    if os.path.exists(LOG_PATH):
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if obj.get("type") == "world_dir":
+                    entries.append(obj)
+    return entries
+
+
+@app.get("/api/world_dir")
+def world_dir_status() -> Dict[str, Union[str, bool, None]]:
+    root = os.environ.get("WORLD_DIR")
+    exists = bool(root and os.path.isdir(root))
+    return {"world_dir": root, "exists": exists}
+
+
 @app.websocket("/ws/tiles")
 async def ws_tiles(ws: WebSocket):
     await ws.accept()
@@ -3418,3 +3512,9 @@ async def ws_tiles(ws: WebSocket):
     finally:
         if ws in WS_CLIENTS:
             WS_CLIENTS.remove(ws)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

@@ -5,5 +5,11 @@ api:
 sync:
   interval: 10
 mapcolor:
-  port: 8765
   debounce_ms: 1000
+
+cash:
+  queue_capacity: 1000
+
+vault:
+  enabled: false
+  currency: "thy"

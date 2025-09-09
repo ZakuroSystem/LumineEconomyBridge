@@ -5,6 +5,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonElement;
 import okhttp3.*;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -238,7 +239,16 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
+                        if (args.length != 3) {
+                            p.sendMessage(ChatColor.YELLOW + "Usage: /le shop create <id>" + ChatColor.RESET);
+                            return true;
+                        }
                         String shopId = args[2];
+                        String ownerUuid = p.getUniqueId().toString();
+                        if (!canCreateShop(ownerUuid, shopId)) {
+                            p.sendMessage(ChatColor.RED + "Shop ID unavailable / 使用できません" + ChatColor.RESET);
+                            return true;
+                        }
                         ItemStack barrel = new ItemStack(Material.BARREL);
                         ItemMeta meta = barrel.getItemMeta();
                         PersistentDataContainer c = meta.getPersistentDataContainer();
@@ -247,14 +257,14 @@ public class LeCommandExecutor implements CommandExecutor {
                         NamespacedKey keyOwner = new NamespacedKey(plugin, "owner_uuid");
                         c.set(keyShop, PersistentDataType.BYTE, (byte)1);
                         c.set(keyId, PersistentDataType.STRING, shopId);
-                        c.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
+                        c.set(keyOwner, PersistentDataType.STRING, ownerUuid);
                         if (meta instanceof BlockStateMeta bsm) {
                             BlockState state = bsm.getBlockState();
                             if (state instanceof TileState tile) {
                                 PersistentDataContainer tc = tile.getPersistentDataContainer();
                                 tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
                                 tc.set(keyId, PersistentDataType.STRING, shopId);
-                                tc.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
+                                tc.set(keyOwner, PersistentDataType.STRING, ownerUuid);
                                 tile.update(true);
                                 bsm.setBlockState(tile);
                             }
@@ -264,6 +274,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         args = new String[]{"shop", "quick", shopId};
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         int qty;
                         int price;
                         try { qty = Integer.parseInt(args[3]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid quantity / 数量が不正です" + ChatColor.RESET); return true; }
@@ -310,6 +324,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         });
                     } else if (args.length >= 5 && args[1].equalsIgnoreCase("take")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         String itemKey = args[3];
                         int qty;
                         try { qty = Integer.parseInt(args[4]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid quantity / 数量が不正です" + ChatColor.RESET); return true; }
@@ -355,6 +373,10 @@ public class LeCommandExecutor implements CommandExecutor {
                     } else if (args.length >= 5 && args[1].equalsIgnoreCase("partner")) {
                         String action = args[2];
                         String shopId = args[3];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         String target = args[4];
                         java.util.UUID uuid = Bukkit.getOfflinePlayer(target).getUniqueId();
                         Map<String, Object> payload = new HashMap<>();
@@ -387,6 +409,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         });
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("reopen")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("owner_uuid", p.getUniqueId().toString());
                         payload.put("shop_id", shopId);
@@ -416,6 +442,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         });
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("publish")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("owner_uuid", p.getUniqueId().toString());
                         payload.put("shop_id", shopId);
@@ -445,6 +475,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         });
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("hide")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("owner_uuid", p.getUniqueId().toString());
                         payload.put("shop_id", shopId);
@@ -507,6 +541,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         });
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("remove")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         if (args.length >= 4 && !args[3].equalsIgnoreCase("refund")) {
                             String saleName = args[3];
                             boolean refund = args.length >= 5 && args[4].equalsIgnoreCase("refund");
@@ -604,6 +642,10 @@ public class LeCommandExecutor implements CommandExecutor {
                         }
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("price")) {
                         String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
                         String saleName = args[3];
                         if ((args.length - 4) % 2 != 0) {
                             p.sendMessage(ChatColor.RED + "Usage: /le shop price <id> <name> <currency> <amount> [<currency> <amount>...] / 使い方: /le shop price <id> <name> <currency> <amount> [<currency> <amount>...]" + ChatColor.RESET);
@@ -687,7 +729,8 @@ public class LeCommandExecutor implements CommandExecutor {
         OkHttpClient http = plugin.getHttpClient();
         String baseUrl = plugin.getBaseUrl();
 
-        sync.sendDelta(p); // avoid resetting scoreboard
+        // Flush only this player's delta to keep scoreboard intact without a full rewrite
+        sync.flush(p);
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("player", p.getUniqueId().toString());
@@ -780,6 +823,85 @@ public class LeCommandExecutor implements CommandExecutor {
 
         p.sendActionBar(Lang.get("send-pending"));
         return true;
+    }
+
+    private boolean canCreateShop(String ownerUuid, String shopId) {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) return false;
+        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
+                .addQueryParameter("shop_id", shopId)
+                .build();
+        Request req = new Request.Builder().url(url).build();
+        try (Response res = http.newCall(req).execute()) {
+            if (!res.isSuccessful()) return false;
+            String body = res.body() != null ? res.body().string() : "{}";
+            JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
+            if (obj.has("owners")) {
+                if (obj.getAsJsonArray("owners").size() == 0) {
+                    purgeShop(shopId);
+                    return true; // orphan removed, id available
+                }
+                for (JsonElement el : obj.getAsJsonArray("owners")) {
+                    if (ownerUuid.equalsIgnoreCase(el.getAsString())) {
+                        return true; // owner already has this shop
+                    }
+                }
+                return false; // shop exists but owned by others
+            }
+            if (obj.has("reason") && "shop_not_found".equals(obj.get("reason").getAsString())) {
+                return true; // id available
+            }
+        } catch (IOException ex) {
+            plugin.getLogger().warning("Shop ID check failed: " + ex.getMessage());
+        }
+        return false;
+    }
+
+    private boolean hasShopPermission(Player p, String shopId) {
+        if (p.isOp()) return true;
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) return false;
+        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
+                .addQueryParameter("shop_id", shopId)
+                .build();
+        Request req = new Request.Builder().url(url).build();
+        try (Response res = http.newCall(req).execute()) {
+            if (!res.isSuccessful()) return false;
+            String body = res.body() != null ? res.body().string() : "{}";
+            JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
+            if (obj.has("owners")) {
+                if (obj.getAsJsonArray("owners").size() == 0) {
+                    purgeShop(shopId);
+                    return false;
+                }
+                for (JsonElement el : obj.getAsJsonArray("owners")) {
+                    if (p.getUniqueId().toString().equalsIgnoreCase(el.getAsString())) {
+                        return true;
+                    }
+                }
+            }
+        } catch (IOException ex) {
+            plugin.getLogger().warning("Shop permission check failed: " + ex.getMessage());
+        }
+        return false;
+    }
+
+    private void purgeShop(String shopId) {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) return;
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("shop_id", shopId);
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/remove")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        try (Response res = http.newCall(req).execute()) {
+            if (!res.isSuccessful()) {
+                plugin.getLogger().warning("Failed to purge shop " + shopId + ": " + res.code());
+            }
+        } catch (IOException ex) {
+            plugin.getLogger().warning("Failed to purge shop " + shopId + ": " + ex.getMessage());
+        }
     }
 
     private int parseAmount(String s) throws NumberFormatException {

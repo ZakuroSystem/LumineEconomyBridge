@@ -101,6 +101,14 @@ public class ScoreboardSyncService {
         sendDelta(p, delta);
     }
 
+    /**
+     * Flush scoreboard deltas for a single player. Wrapper around {@link #flushPlayer(Player)}
+     * to expose the functionality outside this service without revealing internal details.
+     */
+    public void flush(Player p) {
+        flushPlayer(p);
+    }
+
     public void flushAll() {
         for (Player p : Bukkit.getOnlinePlayers()) {
             try { flushPlayer(p); } catch (Exception ignored) {}
