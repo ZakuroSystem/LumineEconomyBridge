@@ -111,3 +111,53 @@ def test_shop_add_stock_requires_token():
             ("s3", item_key),
         ).fetchone()
         assert stock_row and stock_row["stock"] == 1
+
+
+def test_suspended_shop_without_owner_row_can_be_reclaimed():
+    with main.conn:
+        main.conn.execute("DELETE FROM shop_locations")
+        main.conn.execute("DELETE FROM shop_owners")
+        main.conn.execute("DELETE FROM shops")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("s4", "owner-s4", "suspended", now, now),
+        )
+    with TestClient(app) as client:
+        resp = client.get("/api/shop/items", params={"shop_id": "s4"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "suspended"
+        assert data["owner_uuid"] == "owner-s4"
+        assert data["owners"] == ["owner-s4"]
+    with main.conn:
+        owners = main.conn.execute(
+            "SELECT owner_uuid FROM shop_owners WHERE shop_id=?",
+            ("s4",),
+        ).fetchall()
+        assert [row["owner_uuid"] for row in owners] == ["owner-s4"]
+    payload = {
+        "shop_id": "s4",
+        "owner_uuid": "owner-s4",
+        "placer_uuid": "owner-s4",
+        "world": "world",
+        "x": 1,
+        "y": 64,
+        "z": 2,
+        "timestamp": int(time.time()),
+    }
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/place", json=payload, headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+    with main.conn:
+        loc = main.conn.execute(
+            "SELECT world, x, y, z FROM shop_locations WHERE shop_id=?",
+            ("s4",),
+        ).fetchone()
+        assert loc is not None
+        assert loc["world"] == "world"
+        assert loc["x"] == 1
+        assert loc["y"] == 64
+        assert loc["z"] == 2

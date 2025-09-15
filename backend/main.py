@@ -2160,10 +2160,21 @@ async def shop_place(payload: ShopPlacePayload, token: None = Depends(verify_tok
             ).fetchone()
             if not authorized:
                 raise HTTPException(status_code=403, detail="not owner")
-            cur.execute(
+            updated = cur.execute(
                 "UPDATE shop_locations SET world=?, x=?, y=?, z=? WHERE shop_id=?",
                 (payload.world, payload.x, payload.y, payload.z, payload.shop_id),
-            )
+            ).rowcount
+            if updated == 0:
+                cur.execute(
+                    "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
+                    (
+                        payload.shop_id,
+                        payload.world,
+                        payload.x,
+                        payload.y,
+                        payload.z,
+                    ),
+                )
             cur.execute(
                 "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
                 (payload.timestamp, payload.shop_id),
@@ -2229,64 +2240,81 @@ async def shop_ids(owner_uuid: Optional[str] = None):
 async def shop_items(shop_id: str):
     start = time.time()
     with transaction() as cur:
-        owners = [r["owner_uuid"] for r in cur.execute("SELECT owner_uuid FROM shop_owners WHERE shop_id=?", (shop_id,)).fetchall()]
-        if not owners:
-            purge_shop(cur, shop_id)
-            result = {"status": "error", "reason": "shop_not_found"}
-        else:
-            srow = cur.execute(
-                "SELECT owner_uuid,status,last_activity_at FROM shops WHERE shop_id=?",
-                (shop_id,),
-            ).fetchone()
-            if not srow:
-                purge_shop(cur, shop_id)
-                result = {"status": "error", "reason": "shop_not_found"}
-            elif srow["status"] != "active":
-                result = {
-                    "status": srow["status"],
-                    "last_activity_at": srow["last_activity_at"],
-                    "owner_uuid": srow["owner_uuid"],
-                    "owners": owners,
-                }
-            else:
-                rows = cur.execute(
-                    "SELECT st.item_key, st.sale_name, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+        srow = cur.execute(
+            "SELECT owner_uuid,status,last_activity_at FROM shops WHERE shop_id=?",
+            (shop_id,),
+        ).fetchone()
+        owners: List[str] = []
+        if srow:
+            owners = [
+                r["owner_uuid"]
+                for r in cur.execute(
+                    "SELECT owner_uuid FROM shop_owners WHERE shop_id=?",
                     (shop_id,),
                 ).fetchall()
-                items = []
-                sale = cur.execute(
-                    "SELECT pct,end_ts FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
-                    (int(time.time()), int(time.time())),
-                ).fetchone()
-                for r in rows:
-                    price_rows = cur.execute(
-                        "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
-                        (shop_id, r["item_key"]),
-                    ).fetchall()
-                    prices = {pr["currency"]: pr["price"] for pr in price_rows}
-                    if sale:
-                        for k in list(prices.keys()):
-                            prices[k] = int(prices[k] * (100 - sale["pct"]) / 100)
-                    items.append(
-                        {
-                            "item_key": r["item_key"],
-                            "sale_name": r["sale_name"],
-                            "material": r["material"],
-                            "display_name": r["display_name"],
-                            "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
-                            "stock": r["stock"],
-                            "prices": prices,
-                        }
+            ]
+            primary_owner = srow["owner_uuid"]
+            if primary_owner:
+                if primary_owner not in owners:
+                    cur.execute(
+                        "INSERT OR IGNORE INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+                        (shop_id, primary_owner),
                     )
-                result = {
-                    "status": "active",
-                    "owner_uuid": srow["owner_uuid"],
-                    "owners": owners,
-                    "items": items,
-                }
+                    owners.insert(0, primary_owner)
+                else:
+                    owners = [primary_owner] + [o for o in owners if o != primary_owner]
+        if not srow:
+            purge_shop(cur, shop_id)
+            result = {"status": "error", "reason": "shop_not_found"}
+        elif not owners:
+            purge_shop(cur, shop_id)
+            result = {"status": "error", "reason": "shop_not_found"}
+        elif srow["status"] != "active":
+            result = {
+                "status": srow["status"],
+                "last_activity_at": srow["last_activity_at"],
+                "owner_uuid": srow["owner_uuid"],
+                "owners": owners,
+            }
+        else:
+            rows = cur.execute(
+                "SELECT st.item_key, st.sale_name, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+                (shop_id,),
+            ).fetchall()
+            items = []
+            sale = cur.execute(
+                "SELECT pct,end_ts FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
+                (int(time.time()), int(time.time())),
+            ).fetchone()
+            for r in rows:
+                price_rows = cur.execute(
+                    "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                    (shop_id, r["item_key"]),
+                ).fetchall()
+                prices = {pr["currency"]: pr["price"] for pr in price_rows}
                 if sale:
-                    result["sale_pct"] = sale["pct"]
-                    result["sale_ends"] = sale["end_ts"]
+                    for k in list(prices.keys()):
+                        prices[k] = int(prices[k] * (100 - sale["pct"]) / 100)
+                items.append(
+                    {
+                        "item_key": r["item_key"],
+                        "sale_name": r["sale_name"],
+                        "material": r["material"],
+                        "display_name": r["display_name"],
+                        "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
+                        "stock": r["stock"],
+                        "prices": prices,
+                    }
+                )
+            result = {
+                "status": "active",
+                "owner_uuid": srow["owner_uuid"],
+                "owners": owners,
+                "items": items,
+            }
+            if sale:
+                result["sale_pct"] = sale["pct"]
+                result["sale_ends"] = sale["end_ts"]
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_items",
