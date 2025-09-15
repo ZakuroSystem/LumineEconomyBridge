@@ -2717,7 +2717,9 @@ async def shop_sell(payload: ShopSellPayload):
 
 
 @app.post("/api/shop/add_stock")
-async def shop_add_stock(payload: ShopAddStockPayload):
+async def shop_add_stock(
+    payload: ShopAddStockPayload, token: None = Depends(verify_token)
+):
     start = time.time()
     blob = base64.b64decode(payload.nbt_blob)
     item_key = hashlib.sha256(blob).hexdigest()

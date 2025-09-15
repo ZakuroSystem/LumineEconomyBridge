@@ -299,6 +299,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         payload.put("sale_name", saleName);
                         Request req = new Request.Builder()
                                 .url(plugin.getBaseUrl() + "/api/shop/add_stock")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                                 .post(RequestBody.create(gson.toJson(payload), JSON))
                                 .build();
                         plugin.getHttpClient().newCall(req).enqueue(new Callback() {
