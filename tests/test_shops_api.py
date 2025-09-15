@@ -216,6 +216,47 @@ def test_shop_add_owner_requires_token_and_valid_owner():
         assert [row["owner_uuid"] for row in owners] == ["owner-s5", "partner-s5"]
 
 
+def test_shop_add_stock_rejects_non_local_client():
+    with main.conn:
+        main.conn.execute("DELETE FROM shop_stock")
+        main.conn.execute("DELETE FROM shop_prices")
+        main.conn.execute("DELETE FROM shop_items")
+        main.conn.execute("DELETE FROM shop_owners")
+        main.conn.execute("DELETE FROM shops")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("remote-shop", "owner-remote", "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("remote-shop", "owner-remote"),
+        )
+    payload = {
+        "owner_uuid": "owner-remote",
+        "shop_id": "remote-shop",
+        "nbt_blob": base64.b64encode(b"demo-item").decode("ascii"),
+        "material": "STONE",
+        "display_name": "Demo",
+        "qty": 1,
+        "price": 250,
+        "sale_name": "demo",
+        "currency": "thy",
+    }
+    with TestClient(app) as client:
+        original_hosts = main.ALLOWED_PLUGIN_HOSTS.copy()
+        try:
+            main.ALLOWED_PLUGIN_HOSTS = {"127.0.0.1", "::1", "localhost"}
+            resp = client.post(
+                "/api/shop/add_stock",
+                json=payload,
+                headers={"X-LE-Token": main.SHARED_TOKEN},
+            )
+            assert resp.status_code == 403
+        finally:
+            main.ALLOWED_PLUGIN_HOSTS = original_hosts
+
+
 def test_shop_remove_requires_owner_and_token():
     with main.conn:
         main.conn.execute("DELETE FROM shop_stock")

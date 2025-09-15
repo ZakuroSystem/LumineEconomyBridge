@@ -403,6 +403,29 @@ def verify_token_optional(x_le_token: str | None = Header(None)) -> None:
         raise HTTPException(status_code=401, detail="invalid token")
 
 
+ALLOWED_PLUGIN_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def _is_trusted_client(host: str) -> bool:
+    if not host:
+        return False
+    if host in ALLOWED_PLUGIN_HOSTS:
+        return True
+    if host.startswith("127."):
+        return True
+    if host.startswith("::ffff:127."):
+        return True
+    return False
+
+
+def ensure_plugin_request(
+    request: Request, token: None = Depends(verify_token)
+) -> None:
+    host = request.client.host if request.client else ""
+    if not _is_trusted_client(host):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+
 def check_rate_limit(ip: str) -> None:
     """Very small per-IP rate limiter for snapshot posts."""
 
@@ -2146,7 +2169,9 @@ async def rewrite(payload: RewritePayload, token: None = Depends(verify_token)):
 
 
 @app.post("/api/shop/place")
-async def shop_place(payload: ShopPlacePayload, token: None = Depends(verify_token)):
+async def shop_place(
+    payload: ShopPlacePayload, _auth: None = Depends(ensure_plugin_request)
+):
     start = time.time()
     result = "ok"
     with transaction() as cur:
@@ -2747,7 +2772,7 @@ async def shop_sell(payload: ShopSellPayload):
 
 @app.post("/api/shop/add_stock")
 async def shop_add_stock(
-    payload: ShopAddStockPayload, token: None = Depends(verify_token)
+    payload: ShopAddStockPayload, _auth: None = Depends(ensure_plugin_request)
 ):
     start = time.time()
     blob = base64.b64decode(payload.nbt_blob)
@@ -2811,7 +2836,7 @@ async def shop_add_stock(
 
 @app.post("/api/shop/take_stock")
 async def shop_take_stock(
-    payload: ShopTakeStockPayload, token: None = Depends(verify_token)
+    payload: ShopTakeStockPayload, _auth: None = Depends(ensure_plugin_request)
 ):
     start = time.time()
     grant: List[Dict[str, str]] = []
@@ -2875,7 +2900,7 @@ async def shop_take_stock(
 
 @app.post("/api/shop/set_price")
 async def shop_set_price(
-    payload: ShopSetPricePayload, token: None = Depends(verify_token)
+    payload: ShopSetPricePayload, _auth: None = Depends(ensure_plugin_request)
 ):
     start = time.time()
     result = "success"
@@ -2939,7 +2964,7 @@ async def shop_set_price(
 
 @app.post("/api/shop/remove_item")
 async def shop_remove_item(
-    payload: ShopRemoveItemPayload, token: None = Depends(verify_token)
+    payload: ShopRemoveItemPayload, _auth: None = Depends(ensure_plugin_request)
 ):
     start = time.time()
     grants: List[Dict[str, str]] = []
@@ -3004,7 +3029,7 @@ async def shop_remove_item(
 
 @app.post("/api/shop/add_owner")
 async def shop_add_owner(
-    payload: ShopAddOwnerPayload, token: None = Depends(verify_token)
+    payload: ShopAddOwnerPayload, _auth: None = Depends(ensure_plugin_request)
 ):
     start = time.time()
     result = "success"
@@ -3036,7 +3061,7 @@ async def shop_add_owner(
 
 @app.post("/api/shop/remove_owner")
 async def shop_remove_owner(
-    payload: ShopRemoveOwnerPayload, token: None = Depends(verify_token)
+    payload: ShopRemoveOwnerPayload, _auth: None = Depends(ensure_plugin_request)
 ):
     start = time.time()
     result = "success"
@@ -3068,7 +3093,7 @@ async def shop_remove_owner(
 
 @app.post("/api/shop/listing")
 async def shop_listing(
-    payload: ShopListingPayload, token: None = Depends(verify_token)
+    payload: ShopListingPayload, _auth: None = Depends(ensure_plugin_request)
 ):
     start = time.time()
     result = "success"
@@ -3139,7 +3164,7 @@ async def shop_ping(payload: ShopPingPayload):
 
 @app.post("/api/shop/reopen")
 async def shop_reopen(
-    payload: ShopReopenPayload, token: None = Depends(verify_token)
+    payload: ShopReopenPayload, _auth: None = Depends(ensure_plugin_request)
 ):
     start = time.time()
     result = "success"
@@ -3171,7 +3196,7 @@ async def shop_reopen(
 
 @app.post("/api/shop/remove")
 async def shop_remove(
-    payload: ShopRemovePayload, token: None = Depends(verify_token)
+    payload: ShopRemovePayload, _auth: None = Depends(ensure_plugin_request)
 ):
     start = time.time()
     grants: List[Dict[str, str]] = []
