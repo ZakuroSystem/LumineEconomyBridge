@@ -637,6 +637,7 @@ class CashEvent(BaseModel):
 
 
 class ShopRemovePayload(BaseModel):
+    owner_uuid: Optional[str] = None
     shop_id: str
     refund: bool = False
 
@@ -2809,7 +2810,9 @@ async def shop_add_stock(
 
 
 @app.post("/api/shop/take_stock")
-async def shop_take_stock(payload: ShopTakeStockPayload):
+async def shop_take_stock(
+    payload: ShopTakeStockPayload, token: None = Depends(verify_token)
+):
     start = time.time()
     grant: List[Dict[str, str]] = []
     result = "success"
@@ -2871,7 +2874,9 @@ async def shop_take_stock(payload: ShopTakeStockPayload):
 
 
 @app.post("/api/shop/set_price")
-async def shop_set_price(payload: ShopSetPricePayload):
+async def shop_set_price(
+    payload: ShopSetPricePayload, token: None = Depends(verify_token)
+):
     start = time.time()
     result = "success"
     reason: Optional[str] = None
@@ -2933,7 +2938,9 @@ async def shop_set_price(payload: ShopSetPricePayload):
 
 
 @app.post("/api/shop/remove_item")
-async def shop_remove_item(payload: ShopRemoveItemPayload):
+async def shop_remove_item(
+    payload: ShopRemoveItemPayload, token: None = Depends(verify_token)
+):
     start = time.time()
     grants: List[Dict[str, str]] = []
     result = "success"
@@ -2996,9 +3003,12 @@ async def shop_remove_item(payload: ShopRemoveItemPayload):
 
 
 @app.post("/api/shop/add_owner")
-async def shop_add_owner(payload: ShopAddOwnerPayload):
+async def shop_add_owner(
+    payload: ShopAddOwnerPayload, token: None = Depends(verify_token)
+):
     start = time.time()
     result = "success"
+    reason: Optional[str] = None
     with transaction() as cur:
         if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
             result = "error"
@@ -3017,16 +3027,20 @@ async def shop_add_owner(payload: ShopAddOwnerPayload):
             "actor": payload.owner_uuid,
             "target": payload.target_uuid,
             "result": result,
+            "reason": reason,
             "latency_ms": latency_ms,
         }
     )
-    return {"status": result}
+    return {"status": result, "reason": reason}
 
 
 @app.post("/api/shop/remove_owner")
-async def shop_remove_owner(payload: ShopRemoveOwnerPayload):
+async def shop_remove_owner(
+    payload: ShopRemoveOwnerPayload, token: None = Depends(verify_token)
+):
     start = time.time()
     result = "success"
+    reason: Optional[str] = None
     with transaction() as cur:
         if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
             result = "error"
@@ -3045,14 +3059,17 @@ async def shop_remove_owner(payload: ShopRemoveOwnerPayload):
             "actor": payload.owner_uuid,
             "target": payload.target_uuid,
             "result": result,
+            "reason": reason,
             "latency_ms": latency_ms,
         }
     )
-    return {"status": result}
+    return {"status": result, "reason": reason}
 
 
 @app.post("/api/shop/listing")
-async def shop_listing(payload: ShopListingPayload):
+async def shop_listing(
+    payload: ShopListingPayload, token: None = Depends(verify_token)
+):
     start = time.time()
     result = "success"
     reason: Optional[str] = None
@@ -3121,7 +3138,9 @@ async def shop_ping(payload: ShopPingPayload):
 
 
 @app.post("/api/shop/reopen")
-async def shop_reopen(payload: ShopReopenPayload):
+async def shop_reopen(
+    payload: ShopReopenPayload, token: None = Depends(verify_token)
+):
     start = time.time()
     result = "success"
     reason: Optional[str] = None
@@ -3151,50 +3170,74 @@ async def shop_reopen(payload: ShopReopenPayload):
 
 
 @app.post("/api/shop/remove")
-async def shop_remove(payload: ShopRemovePayload):
+async def shop_remove(
+    payload: ShopRemovePayload, token: None = Depends(verify_token)
+):
     start = time.time()
     grants: List[Dict[str, str]] = []
     location: Optional[Dict[str, Union[str, float]]] = None
+    result = "success"
+    reason: Optional[str] = None
     with transaction() as cur:
-        if payload.refund:
-            rows = cur.execute(
-                "SELECT st.item_key, st.stock, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+        authorized = False
+        if payload.owner_uuid:
+            authorized = is_shop_owner(cur, payload.shop_id, payload.owner_uuid)
+        else:
+            authorized = (
+                cur.execute(
+                    "SELECT 1 FROM shop_owners WHERE shop_id=?", (payload.shop_id,)
+                ).fetchone()
+                is None
+            )
+        if not authorized:
+            result = "error"
+            reason = "not_owner"
+        else:
+            if payload.refund:
+                rows = cur.execute(
+                    "SELECT st.item_key, st.stock, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+                    (payload.shop_id,),
+                ).fetchall()
+                for r in rows:
+                    grants.append(
+                        {
+                            "item_key": r["item_key"],
+                            "qty": r["stock"],
+                            "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
+                            "grant_token": secrets.token_hex(8),
+                        }
+                    )
+                cur.execute("DELETE FROM shop_stock WHERE shop_id=?", (payload.shop_id,))
+            loc_row = cur.execute(
+                "SELECT world, x, y, z FROM shop_locations WHERE shop_id=?",
                 (payload.shop_id,),
-            ).fetchall()
-            for r in rows:
-                grants.append(
-                    {
-                        "item_key": r["item_key"],
-                        "qty": r["stock"],
-                        "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
-                        "grant_token": secrets.token_hex(8),
-                    }
-                )
-            cur.execute("DELETE FROM shop_stock WHERE shop_id=?", (payload.shop_id,))
-        loc_row = cur.execute(
-            "SELECT world, x, y, z FROM shop_locations WHERE shop_id=?",
-            (payload.shop_id,),
-        ).fetchone()
-        if loc_row:
-            location = {
-                "world": loc_row["world"],
-                "x": loc_row["x"],
-                "y": loc_row["y"],
-                "z": loc_row["z"],
-            }
-        cur.execute("DELETE FROM shop_locations WHERE shop_id=?", (payload.shop_id,))
-        cur.execute("UPDATE shops SET status='suspended' WHERE shop_id=?", (payload.shop_id,))
-        cur.execute("DELETE FROM shop_owners WHERE shop_id=?", (payload.shop_id,))
+            ).fetchone()
+            if loc_row:
+                location = {
+                    "world": loc_row["world"],
+                    "x": loc_row["x"],
+                    "y": loc_row["y"],
+                    "z": loc_row["z"],
+                }
+            cur.execute("DELETE FROM shop_locations WHERE shop_id=?", (payload.shop_id,))
+            cur.execute(
+                "UPDATE shops SET status='suspended' WHERE shop_id=?",
+                (payload.shop_id,),
+            )
+            cur.execute("DELETE FROM shop_owners WHERE shop_id=?", (payload.shop_id,))
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_remove",
         "timestamp": int(time.time()),
         "shop_id": payload.shop_id,
         "refund": payload.refund,
+        "owner": payload.owner_uuid,
+        "result": result,
+        "reason": reason,
         "latency_ms": latency_ms,
     }
     append_log(log_entry)
-    return {"status": "success", "grant": grants, "location": location}
+    return {"status": result, "reason": reason, "grant": grants, "location": location}
 
 
 class TileCoord(BaseModel):

@@ -161,3 +161,118 @@ def test_suspended_shop_without_owner_row_can_be_reclaimed():
         assert loc["x"] == 1
         assert loc["y"] == 64
         assert loc["z"] == 2
+
+
+def test_shop_add_owner_requires_token_and_valid_owner():
+    with main.conn:
+        main.conn.execute("DELETE FROM shop_owners")
+        main.conn.execute("DELETE FROM shops")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("s5", "owner-s5", "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("s5", "owner-s5"),
+        )
+    payload = {
+        "owner_uuid": "owner-s5",
+        "shop_id": "s5",
+        "target_uuid": "partner-s5",
+    }
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/add_owner", json=payload)
+        assert resp.status_code == 422
+        resp = client.post(
+            "/api/shop/add_owner",
+            json=payload,
+            headers={"X-LE-Token": "bad"},
+        )
+        assert resp.status_code == 401
+        bad_payload = dict(payload)
+        bad_payload["owner_uuid"] = "intruder"
+        resp = client.post(
+            "/api/shop/add_owner",
+            json=bad_payload,
+            headers={"X-LE-Token": main.SHARED_TOKEN},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "error"
+        assert data["reason"] == "not_owner"
+        resp = client.post(
+            "/api/shop/add_owner",
+            json=payload,
+            headers={"X-LE-Token": main.SHARED_TOKEN},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "success"
+    with main.conn:
+        owners = main.conn.execute(
+            "SELECT owner_uuid FROM shop_owners WHERE shop_id=? ORDER BY owner_uuid",
+            ("s5",),
+        ).fetchall()
+        assert [row["owner_uuid"] for row in owners] == ["owner-s5", "partner-s5"]
+
+
+def test_shop_remove_requires_owner_and_token():
+    with main.conn:
+        main.conn.execute("DELETE FROM shop_stock")
+        main.conn.execute("DELETE FROM shop_locations")
+        main.conn.execute("DELETE FROM shop_owners")
+        main.conn.execute("DELETE FROM shops")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("s6", "owner-s6", "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("s6", "owner-s6"),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
+            ("s6", "world", 3.0, 64.0, 5.0),
+        )
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/remove", json={"shop_id": "s6"})
+        assert resp.status_code == 422
+        resp = client.post(
+            "/api/shop/remove",
+            json={"owner_uuid": "owner-s6", "shop_id": "s6"},
+            headers={"X-LE-Token": "bad"},
+        )
+        assert resp.status_code == 401
+        resp = client.post(
+            "/api/shop/remove",
+            json={"owner_uuid": "intruder", "shop_id": "s6"},
+            headers={"X-LE-Token": main.SHARED_TOKEN},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "error"
+        assert data["reason"] == "not_owner"
+        resp = client.post(
+            "/api/shop/remove",
+            json={"owner_uuid": "owner-s6", "shop_id": "s6"},
+            headers={"X-LE-Token": main.SHARED_TOKEN},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "success"
+    with main.conn:
+        row = main.conn.execute(
+            "SELECT status FROM shops WHERE shop_id=?",
+            ("s6",),
+        ).fetchone()
+        assert row and row["status"] == "suspended"
+        owners = main.conn.execute(
+            "SELECT owner_uuid FROM shop_owners WHERE shop_id=?",
+            ("s6",),
+        ).fetchall()
+        assert owners == []
+        loc = main.conn.execute(
+            "SELECT 1 FROM shop_locations WHERE shop_id=?",
+            ("s6",),
+        ).fetchone()
+        assert loc is None

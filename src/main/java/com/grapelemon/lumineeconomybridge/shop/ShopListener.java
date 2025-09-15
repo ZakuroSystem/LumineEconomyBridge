@@ -629,6 +629,7 @@ public class ShopListener implements Listener {
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         Request req = new Request.Builder()
                 .url(plugin.getBaseUrl() + "/api/shop/take_stock")
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
         plugin.getHttpClient().newCall(req).enqueue(new Callback() {
@@ -791,6 +792,7 @@ public class ShopListener implements Listener {
         payload.put("shop_id", shopId);
         Request req = new Request.Builder()
                 .url(plugin.getBaseUrl() + "/api/shop/remove")
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
         http.newCall(req).enqueue(new Callback() {

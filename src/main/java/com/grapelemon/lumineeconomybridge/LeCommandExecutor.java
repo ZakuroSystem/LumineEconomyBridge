@@ -339,6 +339,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         payload.put("qty", qty);
                         Request req = new Request.Builder()
                                 .url(plugin.getBaseUrl() + "/api/shop/take_stock")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                                 .post(RequestBody.create(gson.toJson(payload), JSON))
                                 .build();
                         plugin.getHttpClient().newCall(req).enqueue(new Callback() {
@@ -387,6 +388,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         String path = action.equalsIgnoreCase("add") ? "/api/shop/add_owner" : "/api/shop/remove_owner";
                         Request req = new Request.Builder()
                                 .url(plugin.getBaseUrl() + path)
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                                 .post(RequestBody.create(gson.toJson(payload), JSON))
                                 .build();
                         plugin.getHttpClient().newCall(req).enqueue(new Callback() {
@@ -420,6 +422,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         payload.put("timestamp", System.currentTimeMillis() / 1000);
                         Request req = new Request.Builder()
                                 .url(plugin.getBaseUrl() + "/api/shop/reopen")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                                 .post(RequestBody.create(gson.toJson(payload), JSON))
                                 .build();
                         plugin.getHttpClient().newCall(req).enqueue(new Callback() {
@@ -453,6 +456,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         payload.put("listed", true);
                         Request req = new Request.Builder()
                                 .url(plugin.getBaseUrl() + "/api/shop/listing")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                                 .post(RequestBody.create(gson.toJson(payload), JSON))
                                 .build();
                         plugin.getHttpClient().newCall(req).enqueue(new Callback() {
@@ -486,6 +490,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         payload.put("listed", false);
                         Request req = new Request.Builder()
                                 .url(plugin.getBaseUrl() + "/api/shop/listing")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                                 .post(RequestBody.create(gson.toJson(payload), JSON))
                                 .build();
                         plugin.getHttpClient().newCall(req).enqueue(new Callback() {
@@ -556,6 +561,7 @@ public class LeCommandExecutor implements CommandExecutor {
                             payload.put("refund", refund);
                             Request req = new Request.Builder()
                                     .url(plugin.getBaseUrl() + "/api/shop/remove_item")
+                                    .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                                     .post(RequestBody.create(gson.toJson(payload), JSON))
                                     .build();
                             plugin.getHttpClient().newCall(req).enqueue(new Callback() {
@@ -591,10 +597,12 @@ public class LeCommandExecutor implements CommandExecutor {
                         } else {
                             boolean refund = args.length >= 4 && args[3].equalsIgnoreCase("refund");
                             Map<String, Object> payload = new HashMap<>();
+                            payload.put("owner_uuid", p.getUniqueId().toString());
                             payload.put("shop_id", shopId);
                             payload.put("refund", refund);
                             Request req = new Request.Builder()
                                     .url(plugin.getBaseUrl() + "/api/shop/remove")
+                                    .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                                     .post(RequestBody.create(gson.toJson(payload), JSON))
                                     .build();
                             plugin.getHttpClient().newCall(req).enqueue(new Callback() {
@@ -664,6 +672,7 @@ public class LeCommandExecutor implements CommandExecutor {
                             payload.put("price", amount);
                             Request req = new Request.Builder()
                                     .url(plugin.getBaseUrl() + "/api/shop/set_price")
+                                    .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                                     .post(RequestBody.create(gson.toJson(payload), JSON))
                                     .build();
                             final String fCurrency = currency;
@@ -894,6 +903,7 @@ public class LeCommandExecutor implements CommandExecutor {
         payload.put("shop_id", shopId);
         Request req = new Request.Builder()
                 .url(plugin.getBaseUrl() + "/api/shop/remove")
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
         try (Response res = http.newCall(req).execute()) {
