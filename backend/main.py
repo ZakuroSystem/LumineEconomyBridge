@@ -2239,12 +2239,14 @@ async def shop_items(shop_id: str):
                 (shop_id,),
             ).fetchone()
             if not srow:
+                purge_shop(cur, shop_id)
                 result = {"status": "error", "reason": "shop_not_found"}
             elif srow["status"] != "active":
                 result = {
                     "status": srow["status"],
                     "last_activity_at": srow["last_activity_at"],
                     "owner_uuid": srow["owner_uuid"],
+                    "owners": owners,
                 }
             else:
                 rows = cur.execute(

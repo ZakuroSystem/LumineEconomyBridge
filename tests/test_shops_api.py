@@ -35,3 +35,25 @@ def test_shops_endpoint():
         data = resp.json()
         assert data and data[0]["shop_id"] == "s1"
         assert data[0]["world"] == "world"
+
+
+def test_shop_items_includes_owners_when_suspended():
+    with main.conn:
+        main.conn.execute("DELETE FROM shop_locations")
+        main.conn.execute("DELETE FROM shop_owners")
+        main.conn.execute("DELETE FROM shops")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("s2", "u2", "suspended", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("s2", "u2"),
+        )
+    with TestClient(app) as client:
+        resp = client.get("/api/shop/items", params={"shop_id": "s2"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "suspended"
+        assert data["owners"] == ["u2"]
