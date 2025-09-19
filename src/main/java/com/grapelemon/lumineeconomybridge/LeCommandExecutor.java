@@ -822,7 +822,10 @@ public class LeCommandExecutor implements CommandExecutor {
                 .build();
         Request req = new Request.Builder().url(url).build();
         try (Response res = http.newCall(req).execute()) {
-            if (!res.isSuccessful()) return false;
+            if (!res.isSuccessful()) {
+                plugin.getLogger().warning("Shop ID check failed with status " + res.code());
+                return true;
+            }
             String body = res.body() != null ? res.body().string() : "{}";
             JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
             if (obj.has("owners")) {
@@ -842,8 +845,9 @@ public class LeCommandExecutor implements CommandExecutor {
             }
         } catch (IOException ex) {
             plugin.getLogger().warning("Shop ID check failed: " + ex.getMessage());
+            return true;
         }
-        return false;
+        return true;
     }
 
     private boolean hasShopPermission(Player p, String shopId) {
