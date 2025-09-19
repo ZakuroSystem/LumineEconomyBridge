@@ -388,12 +388,35 @@ def test_shop_buy_awards_quest_once():
         assert data["status"] == "success"
         texts = [m.get("text", "") for m in data.get("messages", []) if m.get("player") == buyer]
         assert any("Quest complete" in text for text in texts)
+        assert data["scoreboards"][buyer]["quest_points"] == 100
     with main.conn:
         row = main.conn.execute(
             "SELECT 1 FROM player_quests WHERE player_uuid=? AND quest_id=?",
             (buyer, "shop_buy"),
         ).fetchone()
         assert row
+        bal = main.conn.execute(
+            "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
+            (buyer, "quest_points"),
+        ).fetchone()
+        assert bal and bal["balance"] == 100
+    payload["client_tx_id"] = "quest-buy-tx-2"
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/buy", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+    with main.conn:
+        count = main.conn.execute(
+            "SELECT COUNT(*) AS c FROM player_quests WHERE player_uuid=? AND quest_id=?",
+            (buyer, "shop_buy"),
+        ).fetchone()
+        assert count["c"] == 1
+        bal = main.conn.execute(
+            "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
+            (buyer, "quest_points"),
+        ).fetchone()
+        assert bal and bal["balance"] == 100
 
 
 def test_shop_place_queues_creation_quest_message():
@@ -435,3 +458,81 @@ def test_shop_place_queues_creation_quest_message():
         assert queued
         payloads = [json.loads(entry["payload"]) for entry in queued]
         assert any("クエスト" in msg.get("text", "") or "Quest" in msg.get("text", "") for msg in payloads)
+
+
+def test_shop_sell_awards_quest_and_points():
+    seller = "seller-quest"
+    owner = "owner-quest-sell"
+    item_blob = b"quest-item-sell"
+    item_key = hashlib.sha256(item_blob).hexdigest()
+    with main.conn:
+        for table in [
+            "player_quests",
+            "pending_messages",
+            "shop_tx",
+            "shop_stock",
+            "shop_prices",
+            "shop_items",
+            "shop_locations",
+            "shop_owners",
+            "shops",
+            "accounts",
+        ]:
+            main.conn.execute(f"DELETE FROM {table}")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("sell-quest-shop", owner, "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("sell-quest-shop", owner),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
+            ("sell-quest-shop", "world", 0.0, 64.0, 0.0),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+            (item_key, "COBBLESTONE", "Quest Cobble", item_blob),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)",
+            ("sell-quest-shop", item_key, "thy", 150),
+        )
+        main.conn.execute(
+            "INSERT INTO accounts(uuid, currency, balance, frozen) VALUES(?,?,?,0)",
+            (owner, "thy", 1000),
+        )
+        main.conn.execute(
+            "INSERT INTO accounts(uuid, currency, balance, frozen) VALUES(?,?,?,0)",
+            (seller, "thy", 0),
+        )
+    payload = {
+        "player_uuid": seller,
+        "shop_id": "sell-quest-shop",
+        "item_key": item_key,
+        "qty": 1,
+        "currency": "thy",
+        "timestamp": int(time.time()),
+        "client_tx_id": "quest-sell-tx",
+    }
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/sell", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        texts = [m.get("text", "") for m in data.get("messages", []) if m.get("player") == seller]
+        assert any("Quest" in text for text in texts)
+        assert data["scoreboards"][seller]["quest_points"] == 100
+    with main.conn:
+        row = main.conn.execute(
+            "SELECT 1 FROM player_quests WHERE player_uuid=? AND quest_id=?",
+            (seller, "shop_sell"),
+        ).fetchone()
+        assert row
+        bal = main.conn.execute(
+            "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
+            (seller, "quest_points"),
+        ).fetchone()
+        assert bal and bal["balance"] == 100

@@ -540,7 +540,12 @@ with open(BASE_DIR / "lang.yml", encoding="utf-8") as f:
 QUEST_DEFINITIONS: Dict[str, Dict[str, str]] = {
     "shop_create": {"message_key": "quest.complete.shop_create"},
     "shop_buy": {"message_key": "quest.complete.shop_buy"},
+    "shop_sell": {"message_key": "quest.complete.shop_sell"},
 }
+
+QUEST_REWARD_CURRENCY = "quest_points"
+QUEST_REWARD_SYMBOL: Optional[str] = None
+QUEST_REWARD_POINTS = 100
 
 
 def t(key: str, *, lang: str = "en", **kwargs) -> str:
@@ -937,6 +942,7 @@ def complete_quest(
     timestamp: int,
     *,
     messages: Optional[List[Dict[str, str]]] = None,
+    scoreboards: Optional[Dict[str, Dict[str, int]]] = None,
 ) -> None:
     if not player_uuid or quest_id not in QUEST_DEFINITIONS:
         return
@@ -949,6 +955,10 @@ def complete_quest(
         "INSERT INTO player_quests(player_uuid, quest_id, completed_at) VALUES(?,?,?)",
         (player_uuid, quest_id, timestamp),
     )
+    ensure_currency(cur, QUEST_REWARD_CURRENCY, QUEST_REWARD_SYMBOL)
+    add_balance(cur, player_uuid, QUEST_REWARD_CURRENCY, QUEST_REWARD_POINTS)
+    if scoreboards is not None:
+        scoreboards[player_uuid] = get_scoreboard(cur, player_uuid)
     lang = get_lang_tx(cur, player_uuid)
     text = t(QUEST_DEFINITIONS[quest_id]["message_key"], lang=lang)
     msg = {"target": "chat", "player": player_uuid, "text": text}
@@ -2223,6 +2233,7 @@ async def shop_place(
 ):
     start = time.time()
     result = "ok"
+    scoreboards: Dict[str, Dict[str, int]] = {}
     with transaction() as cur:
         existing = cur.execute(
             "SELECT 1 FROM shops WHERE shop_id=?",
@@ -2274,6 +2285,7 @@ async def shop_place(
                 payload.owner_uuid,
                 "shop_create",
                 payload.timestamp,
+                scoreboards=scoreboards,
             )
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
@@ -2290,7 +2302,10 @@ async def shop_place(
         "latency_ms": latency_ms,
     }
     append_log(log_entry)
-    return {"status": result}
+    res: Dict[str, Any] = {"status": result}
+    if scoreboards:
+        res["scoreboards"] = scoreboards
+    return res
 
 
 @app.get("/api/shop/ids")
@@ -2597,6 +2612,7 @@ async def shop_buy(payload: ShopBuyPayload):
                                 "shop_buy",
                                 payload.timestamp,
                                 messages=messages,
+                                scoreboards=scoreboards,
                             )
             if not success:
                 cur.execute(
@@ -2776,6 +2792,14 @@ async def shop_sell(payload: ShopSellPayload):
                             queue_message(cur, owner_msg)
                         scoreboards[payload.player_uuid] = get_scoreboard(cur, payload.player_uuid)
                         scoreboards[owner] = get_scoreboard(cur, owner)
+                        complete_quest(
+                            cur,
+                            payload.player_uuid,
+                            "shop_sell",
+                            payload.timestamp,
+                            messages=messages,
+                            scoreboards=scoreboards,
+                        )
         if not success and not existing:
             cur.execute(
                 "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,reason,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
