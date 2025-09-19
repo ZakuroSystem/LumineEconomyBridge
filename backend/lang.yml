@@ -88,6 +88,10 @@ en:
     connected: "§aLinked system account §e{system}§a to §e{user}§a.§r"
   shop:
     quick_created: "§aShop barrel §e{shop}§a created. Place it then run /le shop add §e{shop}§a <qty> <price> <name>.§r"
+  quest:
+    complete:
+      shop_buy: "§6Quest complete§r: Bought an item from a shop!"
+      shop_create: "§6Quest complete§r: Opened your first shop!"
   webui:
     nav:
       dashboard: "Dashboard"
@@ -208,6 +212,10 @@ jp:
     connected: "§aシステムアカウント §e{system}§a を §e{user}§a に紐づけました。§r"
   shop:
     quick_created: "§aショップ樽 §e{shop}§a を作成しました。設置してから /le shop add §e{shop}§a <数量> <価格> <名前> を実行してください。§r"
+  quest:
+    complete:
+      shop_buy: "§6クエスト達成§r: ショップで商品を購入しました！"
+      shop_create: "§6クエスト達成§r: ショップを作成しました！"
   webui:
     nav:
       dashboard: "ダッシュボード"

@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import os
 import sys
 import time
@@ -317,3 +318,120 @@ def test_shop_remove_requires_owner_and_token():
             ("s6",),
         ).fetchone()
         assert loc is None
+
+
+def test_shop_buy_awards_quest_once():
+    buyer = "buyer-quest"
+    owner = "owner-quest"
+    item_blob = b"quest-item"
+    item_key = hashlib.sha256(item_blob).hexdigest()
+    with main.conn:
+        for table in [
+            "player_quests",
+            "pending_messages",
+            "shop_tx",
+            "shop_stock",
+            "shop_prices",
+            "shop_items",
+            "shop_locations",
+            "shop_owners",
+            "shops",
+            "accounts",
+        ]:
+            main.conn.execute(f"DELETE FROM {table}")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("quest-shop", owner, "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("quest-shop", owner),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
+            ("quest-shop", "world", 0.0, 64.0, 0.0),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+            (item_key, "STONE", "Quest Stone", item_blob),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at) VALUES(?,?,?,?,?)",
+            ("quest-shop", item_key, "stone", 5, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)",
+            ("quest-shop", item_key, "thy", 200),
+        )
+        main.conn.execute(
+            "INSERT INTO accounts(uuid, currency, balance, frozen) VALUES(?,?,?,0)",
+            (buyer, "thy", 500),
+        )
+        main.conn.execute(
+            "INSERT INTO accounts(uuid, currency, balance, frozen) VALUES(?,?,?,0)",
+            (owner, "thy", 0),
+        )
+    payload = {
+        "player_uuid": buyer,
+        "shop_id": "quest-shop",
+        "item_key": item_key,
+        "qty": 1,
+        "currency": "thy",
+        "timestamp": int(time.time()),
+        "client_tx_id": "quest-buy-tx",
+    }
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/buy", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        texts = [m.get("text", "") for m in data.get("messages", []) if m.get("player") == buyer]
+        assert any("Quest complete" in text for text in texts)
+    with main.conn:
+        row = main.conn.execute(
+            "SELECT 1 FROM player_quests WHERE player_uuid=? AND quest_id=?",
+            (buyer, "shop_buy"),
+        ).fetchone()
+        assert row
+
+
+def test_shop_place_queues_creation_quest_message():
+    owner = "owner-create"
+    with main.conn:
+        for table in [
+            "player_quests",
+            "pending_messages",
+            "shop_locations",
+            "shop_owners",
+            "shops",
+        ]:
+            main.conn.execute(f"DELETE FROM {table}")
+    payload = {
+        "shop_id": "create-quest-shop",
+        "owner_uuid": owner,
+        "placer_uuid": owner,
+        "world": "world",
+        "x": 10,
+        "y": 65,
+        "z": 10,
+        "timestamp": int(time.time()),
+    }
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/place", json=payload, headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+    with main.conn:
+        row = main.conn.execute(
+            "SELECT 1 FROM player_quests WHERE player_uuid=? AND quest_id=?",
+            (owner, "shop_create"),
+        ).fetchone()
+        assert row
+        queued = main.conn.execute(
+            "SELECT payload FROM pending_messages WHERE uuid=?",
+            (owner,),
+        ).fetchall()
+        assert queued
+        payloads = [json.loads(entry["payload"]) for entry in queued]
+        assert any("クエスト" in msg.get("text", "") or "Quest" in msg.get("text", "") for msg in payloads)

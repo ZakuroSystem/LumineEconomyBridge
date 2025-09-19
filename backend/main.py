@@ -336,6 +336,16 @@ with conn:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS player_quests (
+            player_uuid TEXT NOT NULL,
+            quest_id TEXT NOT NULL,
+            completed_at INTEGER NOT NULL,
+            PRIMARY KEY(player_uuid, quest_id)
+        )
+        """
+    )
 
 app = FastAPI()
 # allow the dashboard to access API endpoints when served from a different
@@ -527,6 +537,12 @@ with open(BASE_DIR / "lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
 
 
+QUEST_DEFINITIONS: Dict[str, Dict[str, str]] = {
+    "shop_create": {"message_key": "quest.complete.shop_create"},
+    "shop_buy": {"message_key": "quest.complete.shop_buy"},
+}
+
+
 def t(key: str, *, lang: str = "en", **kwargs) -> str:
     template = LANG.get(lang, {})
     for part in key.split('.'):  # nested lookup
@@ -543,6 +559,11 @@ def t(key: str, *, lang: str = "en", **kwargs) -> str:
 def get_lang(uuid: str) -> str:
     row = conn.execute("SELECT lang FROM player_lang WHERE uuid=?", (uuid,)).fetchone()
     return row["lang"] if row else "en"
+
+
+def get_lang_tx(cur: sqlite3.Cursor, uuid: str) -> str:
+    row = cur.execute("SELECT lang FROM player_lang WHERE uuid=?", (uuid,)).fetchone()
+    return row["lang"] if row and row["lang"] else "en"
 
 
 def set_lang(uuid: str, lang: str) -> None:
@@ -907,6 +928,34 @@ def queue_message(cur: sqlite3.Cursor, msg: Dict[str, str]) -> None:
         "INSERT INTO pending_messages(uuid, payload) VALUES(?, ?)",
         (safe.get("player"), json.dumps(safe, ensure_ascii=False)),
     )
+
+
+def complete_quest(
+    cur: sqlite3.Cursor,
+    player_uuid: Optional[str],
+    quest_id: str,
+    timestamp: int,
+    *,
+    messages: Optional[List[Dict[str, str]]] = None,
+) -> None:
+    if not player_uuid or quest_id not in QUEST_DEFINITIONS:
+        return
+    if cur.execute(
+        "SELECT 1 FROM player_quests WHERE player_uuid=? AND quest_id=?",
+        (player_uuid, quest_id),
+    ).fetchone():
+        return
+    cur.execute(
+        "INSERT INTO player_quests(player_uuid, quest_id, completed_at) VALUES(?,?,?)",
+        (player_uuid, quest_id, timestamp),
+    )
+    lang = get_lang_tx(cur, player_uuid)
+    text = t(QUEST_DEFINITIONS[quest_id]["message_key"], lang=lang)
+    msg = {"target": "chat", "player": player_uuid, "text": text}
+    if messages is not None:
+        messages.append(msg)
+    else:
+        queue_message(cur, msg)
 
 
 LOG_PATH = "economy_commands.log"
@@ -2220,6 +2269,12 @@ async def shop_place(
                 "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
                 (payload.shop_id, payload.owner_uuid),
             )
+            complete_quest(
+                cur,
+                payload.owner_uuid,
+                "shop_create",
+                payload.timestamp,
+            )
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_place",
@@ -2535,6 +2590,13 @@ async def shop_buy(payload: ShopBuyPayload):
                                     "qty": payload.qty,
                                     "grant_token": grant_token,
                                 }
+                            )
+                            complete_quest(
+                                cur,
+                                payload.player_uuid,
+                                "shop_buy",
+                                payload.timestamp,
+                                messages=messages,
                             )
             if not success:
                 cur.execute(
