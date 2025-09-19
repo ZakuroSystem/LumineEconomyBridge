@@ -536,3 +536,48 @@ def test_shop_sell_awards_quest_and_points():
             (seller, "thy"),
         ).fetchone()
         assert bal and bal["balance"] == 10150
+
+
+def test_recommended_quests_filters_completed():
+    player = "player-recommended"
+    now = int(time.time())
+    with main.conn:
+        main.conn.execute(
+            "DELETE FROM player_quests WHERE player_uuid=?",
+            (player,),
+        )
+        main.conn.execute(
+            "INSERT INTO player_quests(player_uuid, quest_id, completed_at) VALUES(?,?,?)",
+            (player, "shop_buy", now),
+        )
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    with TestClient(app) as client:
+        resp = client.get(
+            "/api/quests/recommended",
+            params={"player_uuid": player},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "quests" in data
+        assert "shop_buy" not in data["quests"]
+        assert "shop_create" in data["quests"]
+    with main.conn:
+        main.conn.execute(
+            "DELETE FROM player_quests WHERE player_uuid=?",
+            (player,),
+        )
+        for quest_id in main.QUEST_DEFINITIONS.keys():
+            main.conn.execute(
+                "INSERT INTO player_quests(player_uuid, quest_id, completed_at) VALUES(?,?,?)",
+                (player, quest_id, now),
+            )
+    with TestClient(app) as client:
+        resp = client.get(
+            "/api/quests/recommended",
+            params={"player_uuid": player},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["quests"] == []

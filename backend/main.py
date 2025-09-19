@@ -968,6 +968,22 @@ def complete_quest(
         queue_message(cur, msg)
 
 
+@app.get("/api/quests/recommended")
+def recommended_quests(
+    player_uuid: str,
+    _auth: None = Depends(ensure_plugin_request),
+):
+    completed = {
+        row["quest_id"]
+        for row in conn.execute(
+            "SELECT quest_id FROM player_quests WHERE player_uuid=?",
+            (player_uuid,),
+        )
+    }
+    quests = [qid for qid in QUEST_DEFINITIONS.keys() if qid not in completed]
+    return {"quests": quests}
+
+
 LOG_PATH = "economy_commands.log"
 
 
