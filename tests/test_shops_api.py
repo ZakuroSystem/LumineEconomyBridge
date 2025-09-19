@@ -388,7 +388,7 @@ def test_shop_buy_awards_quest_once():
         assert data["status"] == "success"
         texts = [m.get("text", "") for m in data.get("messages", []) if m.get("player") == buyer]
         assert any("Quest complete" in text for text in texts)
-        assert data["scoreboards"][buyer]["quest_points"] == 100
+        assert data["scoreboards"][buyer]["thy"] == 10300
     with main.conn:
         row = main.conn.execute(
             "SELECT 1 FROM player_quests WHERE player_uuid=? AND quest_id=?",
@@ -397,9 +397,9 @@ def test_shop_buy_awards_quest_once():
         assert row
         bal = main.conn.execute(
             "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
-            (buyer, "quest_points"),
+            (buyer, "thy"),
         ).fetchone()
-        assert bal and bal["balance"] == 100
+        assert bal and bal["balance"] == 10300
     payload["client_tx_id"] = "quest-buy-tx-2"
     with TestClient(app) as client:
         resp = client.post("/api/shop/buy", json=payload)
@@ -414,9 +414,9 @@ def test_shop_buy_awards_quest_once():
         assert count["c"] == 1
         bal = main.conn.execute(
             "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
-            (buyer, "quest_points"),
+            (buyer, "thy"),
         ).fetchone()
-        assert bal and bal["balance"] == 100
+        assert bal and bal["balance"] == 10100
 
 
 def test_shop_place_queues_creation_quest_message():
@@ -524,7 +524,7 @@ def test_shop_sell_awards_quest_and_points():
         assert data["status"] == "success"
         texts = [m.get("text", "") for m in data.get("messages", []) if m.get("player") == seller]
         assert any("Quest" in text for text in texts)
-        assert data["scoreboards"][seller]["quest_points"] == 100
+        assert data["scoreboards"][seller]["thy"] == 10150
     with main.conn:
         row = main.conn.execute(
             "SELECT 1 FROM player_quests WHERE player_uuid=? AND quest_id=?",
@@ -533,6 +533,6 @@ def test_shop_sell_awards_quest_and_points():
         assert row
         bal = main.conn.execute(
             "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
-            (seller, "quest_points"),
+            (seller, "thy"),
         ).fetchone()
-        assert bal and bal["balance"] == 100
+        assert bal and bal["balance"] == 10150

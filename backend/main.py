@@ -543,9 +543,9 @@ QUEST_DEFINITIONS: Dict[str, Dict[str, str]] = {
     "shop_sell": {"message_key": "quest.complete.shop_sell"},
 }
 
-QUEST_REWARD_CURRENCY = "quest_points"
+QUEST_REWARD_CURRENCY = "thy"
 QUEST_REWARD_SYMBOL: Optional[str] = None
-QUEST_REWARD_POINTS = 100
+QUEST_REWARD_POINTS = 10_000
 
 
 def t(key: str, *, lang: str = "en", **kwargs) -> str:
