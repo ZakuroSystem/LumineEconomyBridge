@@ -7,14 +7,21 @@ import com.google.gson.JsonObject;
 import com.grapelemon.lumineeconomybridge.Lang;
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.guide.GuideBookMenuHolder.GuideAction;
+import com.grapelemon.lumineeconomybridge.guide.GuideBookMenuHolder.MenuType;
+import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.conversations.Conversation;
@@ -165,11 +172,11 @@ public class GuideBookListener implements Listener {
             return;
         }
         event.setCancelled(true);
-        openMenu(event.getPlayer());
+        openMainMenu(event.getPlayer());
     }
 
-    private void openMenu(Player player) {
-        GuideBookMenuHolder holder = new GuideBookMenuHolder();
+    private void openMainMenu(Player player) {
+        GuideBookMenuHolder holder = new GuideBookMenuHolder(MenuType.MAIN);
         String title = Lang.get("guide.menu_title");
         Inventory inv = Bukkit.createInventory(holder, MENU_SIZE, title);
         holder.setInventory(inv);
@@ -229,19 +236,15 @@ public class GuideBookListener implements Listener {
             return;
         }
         switch (action) {
-            case CHECK_BALANCE -> {
-                player.closeInventory();
-                Bukkit.getScheduler().runTask(plugin, () -> player.performCommand("le wallet"));
-            }
+            case CHECK_BALANCE -> openBalanceMenu(player);
             case CREATE_SHOP -> {
                 player.closeInventory();
                 promptForShopId(player);
             }
-            case RECOMMENDED_QUESTS -> {
-                player.closeInventory();
-                showRecommendedQuests(player);
+            case RECOMMENDED_QUESTS -> openQuestMenu(player);
+            case BACK_TO_MAIN -> openMainMenu(player);
+            default -> {
             }
-            default -> { }
         }
     }
 
@@ -279,9 +282,77 @@ public class GuideBookListener implements Listener {
         }
     }
 
-    private void showRecommendedQuests(Player player) {
+    private void addBackButton(GuideBookMenuHolder holder, Inventory inv) {
+        inv.setItem(0, buildMenuItem(Material.ARROW,
+                Lang.get("guide.menu_back"),
+                Lang.get("guide.menu_back_lore")));
+        holder.bind(0, GuideAction.BACK_TO_MAIN);
+    }
+
+    private void openBalanceMenu(Player player) {
+        Map<String, Integer> balances = ScoreboardUtil.readAllSync(player);
+        int slotsNeeded = Math.max(1, balances.size()) + 1; // include back button
+        int size = Math.min(54, Math.max(9, ((slotsNeeded + 8) / 9) * 9));
+        GuideBookMenuHolder holder = new GuideBookMenuHolder(MenuType.BALANCE);
+        Inventory inv = Bukkit.createInventory(holder, size, Lang.get("guide.balance.title"));
+        holder.setInventory(inv);
+        addBackButton(holder, inv);
+
+        if (balances.isEmpty()) {
+            int slot = Math.min(13, size - 1);
+            inv.setItem(slot, buildMenuItem(Material.BARRIER,
+                    Lang.get("guide.balance.none")));
+        } else {
+            List<Map.Entry<String, Integer>> entries = new ArrayList<>(balances.entrySet());
+            entries.sort(Comparator.comparingInt(Map.Entry<String, Integer>::getValue).reversed());
+            int slot = 1;
+            for (Map.Entry<String, Integer> entry : entries) {
+                while (slot < size && holder.getAction(slot) != null) {
+                    slot++;
+                }
+                if (slot >= size) {
+                    break;
+                }
+                inv.setItem(slot, createBalanceItem(entry.getKey(), entry.getValue()));
+                slot++;
+            }
+        }
+        player.openInventory(inv);
+    }
+
+    private ItemStack createBalanceItem(String currency, int rawAmount) {
+        String name = Lang.get("guide.balance.item_name").replace("{currency}", currency);
+        String amount = formatAmount(rawAmount);
+        String lore = Lang.get("guide.balance.item_lore").replace("{amount}", amount);
+        return buildMenuItem(Material.GOLD_NUGGET, name, lore);
+    }
+
+    private String formatAmount(int rawAmount) {
+        BigDecimal decimal = BigDecimal.valueOf(rawAmount)
+                .divide(BigDecimal.valueOf(1000), 3, RoundingMode.DOWN)
+                .stripTrailingZeros();
+        if (decimal.scale() < 0) {
+            decimal = decimal.setScale(0, RoundingMode.UNNECESSARY);
+        }
+        DecimalFormatSymbols symbols = new DecimalFormatSymbols(Locale.US);
+        DecimalFormat format = new DecimalFormat("#,##0.###", symbols);
+        return format.format(decimal);
+    }
+
+    private void openQuestMenu(Player player) {
+        GuideBookMenuHolder holder = new GuideBookMenuHolder(MenuType.QUESTS);
+        Inventory inv = Bukkit.createInventory(holder, 27, Lang.get("guide.quests.menu_title"));
+        holder.setInventory(inv);
+        addBackButton(holder, inv);
+
+        inv.setItem(13, buildMenuItem(Material.PAPER, Lang.get("guide.quests.loading")));
+        player.openInventory(inv);
+        fetchRecommendedQuests(player, holder);
+    }
+
+    private void fetchRecommendedQuests(Player player, GuideBookMenuHolder holder) {
         if (!plugin.isActive() || plugin.getHttpClient() == null) {
-            player.sendMessage(Lang.get("error-unavailable"));
+            renderQuestError(player, holder, Lang.get("guide.quests.error"));
             return;
         }
         OkHttpClient client = plugin.getHttpClient();
@@ -297,7 +368,7 @@ public class GuideBookListener implements Listener {
             @Override
             public void onFailure(Call call, IOException ex) {
                 plugin.getLogger().warning("Failed to fetch quests: " + ex.getMessage());
-                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.get("error-unavailable")));
+                Bukkit.getScheduler().runTask(plugin, () -> renderQuestError(player, holder, Lang.get("guide.quests.error")));
             }
 
             @Override
@@ -305,7 +376,7 @@ public class GuideBookListener implements Listener {
                 try (response) {
                     if (!response.isSuccessful()) {
                         plugin.getLogger().warning("Quest API failed with status " + response.code());
-                        Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.get("error-unavailable")));
+                        Bukkit.getScheduler().runTask(plugin, () -> renderQuestError(player, holder, Lang.get("guide.quests.error")));
                         return;
                     }
                     String body = response.body() != null ? response.body().string() : "{}";
@@ -319,28 +390,65 @@ public class GuideBookListener implements Listener {
                             }
                         }
                     }
-                    Bukkit.getScheduler().runTask(plugin, () -> displayQuests(player, quests));
+                    Bukkit.getScheduler().runTask(plugin, () -> renderQuestList(player, holder, quests));
                 }
             }
         });
     }
 
-    private void displayQuests(Player player, List<String> quests) {
-        if (quests == null || quests.isEmpty()) {
-            player.sendMessage(Lang.get("guide.quests.none"));
+    private void renderQuestError(Player player, GuideBookMenuHolder holder, String message) {
+        Inventory inv = holder.getInventory();
+        if (!isHolderOpen(player, inv)) {
             return;
         }
-        player.sendMessage(Lang.get("guide.quests.header"));
-        int count = 0;
-        for (String questId : quests) {
-            String name = Lang.get("guide.quests." + questId + ".name");
-            String desc = Lang.get("guide.quests." + questId + ".description");
-            player.sendMessage(ChatColor.GOLD + " - " + ChatColor.RESET + name);
-            player.sendMessage(ChatColor.GRAY + "   " + ChatColor.RESET + desc);
-            count++;
-            if (count >= 3) {
+        clearQuestSlots(holder, inv);
+        inv.setItem(13, buildMenuItem(Material.BARRIER, message));
+    }
+
+    private void renderQuestList(Player player, GuideBookMenuHolder holder, List<String> questIds) {
+        Inventory inv = holder.getInventory();
+        if (!isHolderOpen(player, inv)) {
+            return;
+        }
+        clearQuestSlots(holder, inv);
+        if (questIds == null || questIds.isEmpty()) {
+            inv.setItem(13, buildMenuItem(Material.PAPER, Lang.get("guide.quests.none")));
+            return;
+        }
+        int[] slots = {10, 12, 14, 16, 19, 21, 23};
+        int index = 0;
+        for (String questId : questIds) {
+            if (index >= slots.length) {
                 break;
             }
+            int slot = slots[index++];
+            if (slot >= inv.getSize()) {
+                continue;
+            }
+            inv.setItem(slot, createQuestItem(questId));
         }
+    }
+
+    private boolean isHolderOpen(Player player, Inventory inv) {
+        return inv != null && player.getOpenInventory() != null
+                && player.getOpenInventory().getTopInventory().equals(inv);
+    }
+
+    private void clearQuestSlots(GuideBookMenuHolder holder, Inventory inv) {
+        if (inv == null) {
+            return;
+        }
+        for (int slot = 0; slot < inv.getSize(); slot++) {
+            if (holder.getAction(slot) == null) {
+                inv.setItem(slot, null);
+            }
+        }
+    }
+
+    private ItemStack createQuestItem(String questId) {
+        String name = Lang.get("guide.quests." + questId + ".name");
+        String desc = Lang.get("guide.quests." + questId + ".description");
+        String reward = Lang.get("guide.quests.reward_line");
+        return buildMenuItem(Material.ENCHANTED_BOOK, name, desc, reward);
     }
 }
