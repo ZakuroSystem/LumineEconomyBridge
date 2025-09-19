@@ -75,8 +75,14 @@ public class GuideBookListener implements Listener {
                 .addConversationAbandonedListener(new ConversationAbandonedListener() {
                     @Override
                     public void conversationAbandoned(ConversationAbandonedEvent event) {
-                        if (!event.gracefulExit() && event.getContext() != null
-                                && event.getForWhom() instanceof Player player) {
+                        if (event.gracefulExit()) {
+                            return;
+                        }
+                        ConversationContext context = event.getContext();
+                        if (context == null) {
+                            return;
+                        }
+                        if (context.getForWhom() instanceof Player player) {
                             Bukkit.getScheduler().runTask(plugin, () ->
                                     player.sendMessage(Lang.get("guide.shop.cancelled")));
                         }
