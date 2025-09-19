@@ -88,6 +88,10 @@ public class LeCommandExecutor implements CommandExecutor {
                     p.sendMessage(Lang.get("bridge-reloaded"));
                     return true;
                 }
+                case "help" -> {
+                    sendHelp(p);
+                    return true;
+                }
                 case "admin" -> {
                     if (!plugin.isActive() || plugin.getHttpClient() == null) {
                         p.sendMessage(Lang.get("error-unavailable"));
@@ -705,7 +709,7 @@ public class LeCommandExecutor implements CommandExecutor {
         }
 
         if (args.length == 0) {
-            p.sendMessage(Lang.get("usage"));
+            sendHelp(p);
             return true;
         }
 
@@ -812,6 +816,87 @@ public class LeCommandExecutor implements CommandExecutor {
 
         p.sendActionBar(Lang.get("send-pending"));
         return true;
+    }
+
+    private void sendHelp(Player p) {
+        String[][] playerCommands = new String[][] {
+                {"help", "/le help", "", "Show this help / ヘルプを表示"},
+                {"wallet", "/le wallet", "", "View your balances / 自分の残高を表示"},
+                {"balance", "/le balance", "[currency] [player]", "Check balances / 残高を確認"},
+                {"pay", "/le pay", "<player> <amount> [currency]", "Pay another player / プレイヤーへ送金"},
+                {"deposit", "/le deposit", "<src> <dst> <currency> <amount>", "Deposit funds / 入金処理"},
+                {"withdraw", "/le withdraw", "<src> <dst> <currency> <amount>", "Withdraw funds / 出金処理"},
+                {"transfer", "/le transfer", "<src> <dst> <currency> <amount>", "Transfer between accounts / 口座間振替"},
+                {"search", "/le search", "<item> [currency] [min] [max]", "Search public shops / ショップを検索"},
+                {"shop", "/le shop help", "", "Shop commands / ショップ操作一覧"},
+                {"lang", "/le lang", "<locale>", "Switch plugin language / 言語を切り替え"},
+                {"weblink", "/le weblink", "", "Generate web link token / Web連携トークン発行"}
+        };
+
+        String[][] adminCommands = new String[][] {
+                {"rewrite", "/le rewrite", "", "Rewrite all scoreboards / 全スコアボードを再同期"},
+                {"start", "/le start", "", "Start the bridge / ブリッジを開始"},
+                {"stop", "/le stop", "", "Stop the bridge / ブリッジを停止"},
+                {"reload", "/le reload", "", "Reload configuration / 設定を再読み込み"},
+                {"admin", "/le admin add", "<player>", "Grant web admin access / ダッシュボード管理者を追加"},
+                {"cash", "/le cash issue", "<amount> [currency]", "Issue paper cash / 紙幣を発行"},
+                {"money", "/le money", "<give|take|pay|top> ...", "Manage balances / 残高を管理"},
+                {"currency", "/le currency", "<create|supply|default|manager|tax|treasury> ...", "Manage currencies / 通貨を管理"},
+                {"setbalance", "/le setbalance", "<player> <currency> <amount>", "Set a player's balance / 残高を直接設定"},
+                {"history", "/le history", "<player> [limit]", "Review transactions / 取引履歴を確認"},
+                {"account", "/le account", "<create|connect> ...", "Manage system accounts / システム口座を管理"},
+                {"backup", "/le <backup|restore>", "[file]", "Backup or restore the database / データベースをバックアップ・復元"},
+                {"undo", "/le <undo|redo>", "", "Undo or redo recent operations / 操作を取り消し・やり直し"}
+        };
+
+        p.sendMessage(ChatColor.GOLD + "" + ChatColor.BOLD + "LumineEconomy Bridge Help" + ChatColor.RESET);
+        p.sendMessage(ChatColor.GRAY + "Filtered by your permissions / 権限に応じて表示しています" + ChatColor.RESET);
+
+        boolean printedPlayerHeader = false;
+        for (String[] entry : playerCommands) {
+            if (canUseCommand(p, entry[0])) {
+                if (!printedPlayerHeader) {
+                    p.sendMessage(ChatColor.GOLD + "" + ChatColor.BOLD + "Player Commands / プレイヤー向け" + ChatColor.RESET);
+                    printedPlayerHeader = true;
+                }
+                sendHelpLine(p, entry[1], entry[2], entry[3]);
+            }
+        }
+
+        boolean printedAdminHeader = false;
+        for (String[] entry : adminCommands) {
+            if (canUseCommand(p, entry[0])) {
+                if (!printedAdminHeader) {
+                    p.sendMessage("");
+                    p.sendMessage(ChatColor.GOLD + "" + ChatColor.BOLD + "Admin Commands / 管理者向け" + ChatColor.RESET);
+                    printedAdminHeader = true;
+                }
+                sendHelpLine(p, entry[1], entry[2], entry[3]);
+            }
+        }
+    }
+
+    private void sendHelpLine(Player p, String command, String args, String description) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(ChatColor.GREEN).append(command);
+        if (!args.isEmpty()) {
+            sb.append(" ").append(ChatColor.YELLOW).append(args);
+        }
+        sb.append(" ").append(ChatColor.GRAY).append("- ").append(description).append(ChatColor.RESET);
+        p.sendMessage(sb.toString());
+    }
+
+    private boolean canUseCommand(Player p, String commandKey) {
+        if (commandKey == null || commandKey.isEmpty()) {
+            return true;
+        }
+        if (!plugin.requiresAdmin(commandKey)) {
+            return true;
+        }
+        if (p.hasPermission("lumineeconomy.admin")) {
+            return true;
+        }
+        return commandKey.equalsIgnoreCase("money") || commandKey.equalsIgnoreCase("currency");
     }
 
     private boolean canCreateShop(String ownerUuid, String shopId) {
