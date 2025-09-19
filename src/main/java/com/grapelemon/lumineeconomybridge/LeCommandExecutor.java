@@ -201,30 +201,9 @@ public class LeCommandExecutor implements CommandExecutor {
                         return true;
                     }
                     if (args.length == 1) {
-                        String shopId = p.getName().toLowerCase() + "_" + Long.toHexString(System.currentTimeMillis());
-                        ItemStack barrel = new ItemStack(Material.BARREL);
-                        ItemMeta meta = barrel.getItemMeta();
-                        PersistentDataContainer c = meta.getPersistentDataContainer();
-                        NamespacedKey keyShop = new NamespacedKey(plugin, "le_shop");
-                        NamespacedKey keyId = new NamespacedKey(plugin, "shop_id");
-                        NamespacedKey keyOwner = new NamespacedKey(plugin, "owner_uuid");
-                        c.set(keyShop, PersistentDataType.BYTE, (byte)1);
-                        c.set(keyId, PersistentDataType.STRING, shopId);
-                        c.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
-                        if (meta instanceof BlockStateMeta bsm) {
-                            BlockState state = bsm.getBlockState();
-                            if (state instanceof TileState tile) {
-                                PersistentDataContainer tc = tile.getPersistentDataContainer();
-                                tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
-                                tc.set(keyId, PersistentDataType.STRING, shopId);
-                                tc.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
-                                tile.update(true);
-                                bsm.setBlockState(tile);
-                            }
-                        }
-                        barrel.setItemMeta(meta);
-                        p.getInventory().addItem(barrel);
-                        args = new String[]{"shop", "quick", shopId};
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le shop create <id>" + ChatColor.RESET);
+                        p.sendMessage(ChatColor.GRAY + "Use /le shop help for more commands" + ChatColor.RESET);
+                        return true;
                     } else if (args.length >= 2 && args[1].equalsIgnoreCase("help")) {
                         p.sendMessage(ChatColor.GREEN + "/le shop create " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Create a shop barrel / ショップ樽を作成");
                         p.sendMessage(ChatColor.GREEN + "/le shop add " + ChatColor.YELLOW + "<id> <qty> <price> <name> " + ChatColor.GRAY + "- Deposit item / 在庫追加");
