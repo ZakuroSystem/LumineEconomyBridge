@@ -864,21 +864,24 @@ public class ShopListener implements Listener {
             Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
             return;
         }
-        Integer buyPrice = null;
+        Integer parsedBuyPrice = null;
         if (parts.length >= 3) {
             try {
-                buyPrice = parseAmount(parts[2]);
+                parsedBuyPrice = parseAmount(parts[2]);
             } catch (NumberFormatException ex) {
                 e.getPlayer().sendMessage(ChatColor.RED + "Cancelled / キャンセルされました" + ChatColor.RESET);
                 Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
                 return;
             }
-            if (buyPrice > sellPrice) {
+            if (parsedBuyPrice > sellPrice) {
                 e.getPlayer().sendMessage(ChatColor.RED + "Buy price cannot exceed sell price / 買取額は販売額を超えられません" + ChatColor.RESET);
                 Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
                 return;
             }
         }
+        final String saleNameFinal = saleName;
+        final int sellPriceFinal = sellPrice;
+        final Integer buyPrice = parsedBuyPrice;
         Map<String, Object> payload = new HashMap<>();
         payload.put("owner_uuid", e.getPlayer().getUniqueId().toString());
         payload.put("shop_id", ps.shopId);
@@ -887,9 +890,9 @@ public class ShopListener implements Listener {
         payload.put("material", ps.item.getType().name());
         String dn = ps.item.getItemMeta() != null ? ps.item.getItemMeta().getDisplayName() : "";
         payload.put("display_name", dn);
-        payload.put("sale_name", saleName);
-        payload.put("price", sellPrice);
-        payload.put("sell_price", sellPrice);
+        payload.put("sale_name", saleNameFinal);
+        payload.put("price", sellPriceFinal);
+        payload.put("sell_price", sellPriceFinal);
         if (buyPrice != null) {
             payload.put("buy_price", buyPrice);
         }
@@ -914,20 +917,20 @@ public class ShopListener implements Listener {
             int slot = inv.firstEmpty();
             if (slot >= 0) {
                 Map<String, ShopItem.ShopPrice> priceMap = new HashMap<>();
-                priceMap.put("", new ShopItem.ShopPrice(sellPrice, buyPrice));
+                priceMap.put("", new ShopItem.ShopPrice(sellPriceFinal, buyPrice));
                 ItemStack display = ps.item.clone();
                 ItemMeta meta = display.getItemMeta();
                 List<String> lore = new ArrayList<>();
-                lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + saleName);
+                lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + saleNameFinal);
                 lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + ps.qty);
-                lore.add(ChatColor.GREEN + "Sell: " + ChatColor.YELLOW + formatAmount(sellPrice));
+                lore.add(ChatColor.GREEN + "Sell: " + ChatColor.YELLOW + formatAmount(sellPriceFinal));
                 if (buyPrice != null) {
                     lore.add(ChatColor.AQUA + "Buy: " + ChatColor.YELLOW + formatAmount(buyPrice));
                 }
                 meta.setLore(lore);
                 display.setItemMeta(meta);
                 inv.setItem(slot, display);
-                holder.getItems().put(slot, new ShopItem(sha256(Base64.getDecoder().decode(ps.blob)), saleName, display, ps.item, ps.qty, priceMap));
+                holder.getItems().put(slot, new ShopItem(sha256(Base64.getDecoder().decode(ps.blob)), saleNameFinal, display, ps.item, ps.qty, priceMap));
             }
         });
     }
