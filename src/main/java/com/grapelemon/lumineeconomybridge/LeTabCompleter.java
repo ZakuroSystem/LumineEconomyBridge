@@ -251,11 +251,31 @@ public class LeTabCompleter implements TabCompleter {
                     for (int i = 0; i < cache.itemKeys.size(); i++) {
                         slots.add(Integer.toString(i));
                     }
+                    String raw = args[3];
+                    String prefix = "";
+                    String needle = raw.trim();
+                    Set<String> chosen = new HashSet<>();
+                    if (raw.contains(",")) {
+                        int idx = raw.lastIndexOf(',');
+                        prefix = raw.substring(0, idx + 1);
+                        String[] tokens = raw.split(",");
+                        for (int i = 0; i < tokens.length - 1; i++) {
+                            String token = tokens[i].trim();
+                            if (!token.isEmpty()) {
+                                chosen.add(token);
+                            }
+                        }
+                        needle = tokens[tokens.length - 1].trim();
+                    }
+                    final String prefixFinal = prefix;
+                    final String needleFinal = needle;
                     return slots.stream()
-                            .filter(s -> s.startsWith(args[3]))
+                            .filter(s -> !chosen.contains(s))
+                            .filter(s -> needleFinal.isEmpty() || s.startsWith(needleFinal))
+                            .map(s -> prefixFinal + s)
                             .collect(Collectors.toList());
                 }
-                return Collections.singletonList("<slot>");
+                return Collections.singletonList("<slots>");
             }
             if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("account")) {
                 return Collections.singletonList("<company>");

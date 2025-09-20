@@ -33,8 +33,13 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import java.math.BigDecimal;
 import java.text.DecimalFormat;
 
@@ -260,14 +265,24 @@ public class LeCommandExecutor implements CommandExecutor {
                         args = new String[]{"shop", "quick", shopId};
                     } else if (args.length >= 4 && args[1].equalsIgnoreCase("hopper")) {
                         if (args.length != 4) {
-                            p.sendMessage(ChatColor.YELLOW + "Usage: /le shop hopper <id> <slot>" + ChatColor.RESET);
+                            p.sendMessage(ChatColor.YELLOW + "Usage: /le shop hopper <id> <slots>" + ChatColor.RESET);
                             return true;
                         }
                         String shopId = args[2];
-                        int slotIndex;
-                        try {
-                            slotIndex = Integer.parseInt(args[3]);
-                        } catch (NumberFormatException ex) {
+                        String slotArg = args[3];
+                        String[] parts = slotArg.split(",");
+                        Set<Integer> slotIndices = new LinkedHashSet<>();
+                        for (String part : parts) {
+                            String trimmed = part.trim();
+                            if (trimmed.isEmpty()) continue;
+                            try {
+                                slotIndices.add(Integer.parseInt(trimmed));
+                            } catch (NumberFormatException ex) {
+                                p.sendMessage(ChatColor.RED + "Invalid slot / スロット番号が不正です" + ChatColor.RESET);
+                                return true;
+                            }
+                        }
+                        if (slotIndices.isEmpty()) {
                             p.sendMessage(ChatColor.RED + "Invalid slot / スロット番号が不正です" + ChatColor.RESET);
                             return true;
                         }
@@ -285,12 +300,16 @@ public class LeCommandExecutor implements CommandExecutor {
                             return true;
                         }
                         JsonArray items = shopData.getAsJsonArray("items");
-                        if (slotIndex < 0 || slotIndex >= items.size()) {
-                            p.sendMessage(ChatColor.RED + "Slot out of range / スロット番号が不正です" + ChatColor.RESET);
-                            return true;
+                        List<Integer> orderedSlots = new ArrayList<>(slotIndices);
+                        List<String> itemKeys = new ArrayList<>();
+                        for (int slotIndex : orderedSlots) {
+                            if (slotIndex < 0 || slotIndex >= items.size()) {
+                                p.sendMessage(ChatColor.RED + "Slot out of range / スロット番号が不正です" + ChatColor.RESET);
+                                return true;
+                            }
+                            JsonObject item = items.get(slotIndex).getAsJsonObject();
+                            itemKeys.add(item.get("item_key").getAsString());
                         }
-                        JsonObject item = items.get(slotIndex).getAsJsonObject();
-                        String itemKey = item.get("item_key").getAsString();
                         String ownerUuid = p.getUniqueId().toString();
                         NamespacedKey hopperKey = new NamespacedKey(plugin, "le_shop_hopper");
                         NamespacedKey keyId = new NamespacedKey(plugin, "shop_id");
@@ -303,12 +322,13 @@ public class LeCommandExecutor implements CommandExecutor {
                         container.set(hopperKey, PersistentDataType.BYTE, (byte) 1);
                         container.set(keyId, PersistentDataType.STRING, shopId);
                         container.set(keyOwner, PersistentDataType.STRING, ownerUuid);
-                        container.set(keySlot, PersistentDataType.INTEGER, slotIndex);
-                        container.set(keyItem, PersistentDataType.STRING, itemKey);
+                        String slotList = orderedSlots.stream().map(String::valueOf).collect(Collectors.joining(","));
+                        container.set(keySlot, PersistentDataType.STRING, slotList);
+                        container.set(keyItem, PersistentDataType.STRING, String.join(",", itemKeys));
                         meta.setDisplayName(ChatColor.GOLD + "Shop Hopper" + ChatColor.RESET);
                         hopper.setItemMeta(meta);
                         p.getInventory().addItem(hopper);
-                        p.sendMessage(ChatColor.GREEN + "Issued hopper for slot " + ChatColor.YELLOW + slotIndex + ChatColor.GREEN + " / ホッパーを付与しました" + ChatColor.RESET);
+                        p.sendMessage(ChatColor.GREEN + "Issued hopper for slots " + ChatColor.YELLOW + slotList + ChatColor.GREEN + " / ホッパーを付与しました" + ChatColor.RESET);
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
                         if (!hasShopPermission(p, shopId)) {

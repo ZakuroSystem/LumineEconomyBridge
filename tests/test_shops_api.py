@@ -217,6 +217,78 @@ def test_shop_add_owner_requires_token_and_valid_owner():
         assert [row["owner_uuid"] for row in owners] == ["owner-s5", "partner-s5"]
 
 
+def test_shop_take_stock_uses_first_available_item_key():
+    with main.conn:
+        main.conn.execute("DELETE FROM shop_stock")
+        main.conn.execute("DELETE FROM shop_items")
+        main.conn.execute("DELETE FROM shop_prices")
+        main.conn.execute("DELETE FROM shop_owners")
+        main.conn.execute("DELETE FROM shops")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("hopper-shop", "owner-hop", "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("hopper-shop", "owner-hop"),
+        )
+        blob_one = b"hopper-one"
+        blob_two = b"hopper-two"
+        key_one = hashlib.sha256(blob_one).hexdigest()
+        key_two = hashlib.sha256(blob_two).hexdigest()
+        main.conn.execute(
+            "INSERT INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+            (key_one, "STONE", "One", blob_one),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+            (key_two, "STONE", "Two", blob_two),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at) VALUES(?,?,?,?,?)",
+            ("hopper-shop", key_one, "first", 0, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at) VALUES(?,?,?,?,?)",
+            ("hopper-shop", key_two, "second", 3, now),
+        )
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    payload = {
+        "owner_uuid": "owner-hop",
+        "shop_id": "hopper-shop",
+        "item_keys": [key_one, key_two],
+        "qty": 1,
+    }
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/take_stock", json=payload, headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["grant"]
+        assert data["grant"][0]["item_key"] == key_two
+        resp = client.post(
+            "/api/shop/take_stock",
+            json={
+                "owner_uuid": "owner-hop",
+                "shop_id": "hopper-shop",
+                "item_keys": [key_one],
+                "qty": 1,
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        failure = resp.json()
+        assert failure["status"] == "error"
+        assert failure["reason"] == "insufficient_stock"
+    with main.conn:
+        remaining = main.conn.execute(
+            "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+            ("hopper-shop", key_two),
+        ).fetchone()
+        assert remaining and remaining["stock"] == 2
+
+
 def test_shop_add_stock_rejects_non_local_client():
     with main.conn:
         main.conn.execute("DELETE FROM shop_stock")
