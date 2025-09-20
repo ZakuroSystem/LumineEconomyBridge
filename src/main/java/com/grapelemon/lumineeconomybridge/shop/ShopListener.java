@@ -820,6 +820,30 @@ public class ShopListener implements Listener {
     public void onMoveItem(InventoryMoveItemEvent e) {
         Inventory source = e.getSource();
         Inventory destination = e.getDestination();
+        Inventory initiator = e.getInitiator();
+
+        HopperData initiatingHopper = resolveHopper(initiator);
+        HopperData sourceHopper = resolveHopper(source);
+        HopperData destHopper = resolveHopper(destination);
+
+        if (initiatingHopper != null) {
+            if (sourceHopper != null && !matchesBoundItem(e.getItem(), initiatingHopper)) {
+                e.setCancelled(true);
+                return;
+            }
+            if (destination.getHolder() instanceof Hopper) {
+                if (destHopper == null || !sameHopperBinding(initiatingHopper, destHopper)) {
+                    e.setCancelled(true);
+                    return;
+                }
+            }
+        } else {
+            if (sourceHopper != null || destHopper != null) {
+                e.setCancelled(true);
+                return;
+            }
+        }
+
         boolean sourceShop = isShopInventory(source);
         boolean destShop = isShopInventory(destination);
         if (!sourceShop && !destShop) {
@@ -833,8 +857,7 @@ public class ShopListener implements Listener {
             e.setCancelled(true);
             return;
         }
-        Inventory initiator = e.getInitiator();
-        HopperData hopper = resolveHopper(initiator);
+        HopperData hopper = initiatingHopper;
         if (hopper == null) {
             e.setCancelled(true);
             return;
@@ -875,6 +898,38 @@ public class ShopListener implements Listener {
             return c.has(keyShop, PersistentDataType.BYTE);
         }
         return false;
+    }
+
+    private boolean matchesBoundItem(ItemStack stack, HopperData hopper) {
+        if (stack == null || hopper == null) return false;
+        if (stack.getType() == Material.AIR) return false;
+        try {
+            String blob = itemToBase64(stack);
+            byte[] raw = Base64.getDecoder().decode(blob);
+            String key = sha256(raw);
+            for (HopperBinding binding : hopper.bindings) {
+                if (binding.itemKey.equals(key)) {
+                    return true;
+                }
+            }
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
+        return false;
+    }
+
+    private boolean sameHopperBinding(HopperData a, HopperData b) {
+        if (a == null || b == null) return false;
+        if (!Objects.equals(a.shopId, b.shopId) || !Objects.equals(a.ownerUuid, b.ownerUuid)) return false;
+        if (a.bindings.size() != b.bindings.size()) return false;
+        for (int i = 0; i < a.bindings.size(); i++) {
+            HopperBinding left = a.bindings.get(i);
+            HopperBinding right = b.bindings.get(i);
+            if (left.slot != right.slot || !left.itemKey.equals(right.itemKey)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private boolean hasHopperAccess(Player player, PersistentDataContainer container) {
