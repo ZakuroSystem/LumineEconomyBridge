@@ -44,6 +44,7 @@ import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.UUID;
@@ -60,6 +61,7 @@ public class ShopListener implements Listener {
     private final NamespacedKey keyHopper;
     private final NamespacedKey keyHopperSlot;
     private final NamespacedKey keyHopperItem;
+    private final NamespacedKey keyHopperItemTag;
     private static final long CACHE_MS = 3000;
     private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
     private final Map<String, CacheEntry> itemCache = new ConcurrentHashMap<>();
@@ -125,6 +127,7 @@ public class ShopListener implements Listener {
         this.keyHopper = new NamespacedKey(plugin, "le_shop_hopper");
         this.keyHopperSlot = new NamespacedKey(plugin, "le_shop_hopper_slot");
         this.keyHopperItem = new NamespacedKey(plugin, "le_shop_hopper_item");
+        this.keyHopperItemTag = new NamespacedKey(plugin, "le_shop_item_keys");
     }
 
     private static class CacheEntry {
@@ -825,9 +828,15 @@ public class ShopListener implements Listener {
         HopperData initiatingHopper = resolveHopper(initiator);
         HopperData sourceHopper = resolveHopper(source);
         HopperData destHopper = resolveHopper(destination);
+        Set<String> itemTags = extractItemTags(e.getItem());
 
         if (initiatingHopper != null) {
-            if (sourceHopper != null && !matchesBoundItem(e.getItem(), initiatingHopper)) {
+            if (itemTags.isEmpty()) {
+                if (!isShopInventory(source)) {
+                    e.setCancelled(true);
+                    return;
+                }
+            } else if (!matchesBoundItem(e.getItem(), initiatingHopper, itemTags)) {
                 e.setCancelled(true);
                 return;
             }
@@ -838,6 +847,10 @@ public class ShopListener implements Listener {
                 }
             }
         } else {
+            if (!itemTags.isEmpty()) {
+                e.setCancelled(true);
+                return;
+            }
             if (sourceHopper != null || destHopper != null) {
                 e.setCancelled(true);
                 return;
@@ -900,20 +913,16 @@ public class ShopListener implements Listener {
         return false;
     }
 
-    private boolean matchesBoundItem(ItemStack stack, HopperData hopper) {
+    private boolean matchesBoundItem(ItemStack stack, HopperData hopper, Set<String> tags) {
         if (stack == null || hopper == null) return false;
         if (stack.getType() == Material.AIR) return false;
-        try {
-            String blob = itemToBase64(stack);
-            byte[] raw = Base64.getDecoder().decode(blob);
-            String key = sha256(raw);
-            for (HopperBinding binding : hopper.bindings) {
-                if (binding.itemKey.equals(key)) {
-                    return true;
-                }
-            }
-        } catch (IllegalArgumentException ignored) {
+        if (tags == null || tags.isEmpty()) {
             return false;
+        }
+        for (HopperBinding binding : hopper.bindings) {
+            if (tags.contains(binding.itemKey)) {
+                return true;
+            }
         }
         return false;
     }
@@ -1037,7 +1046,7 @@ public class ShopListener implements Listener {
                         });
                         hopperCooldowns.put(key, System.currentTimeMillis() + HOPPER_MIN_INTERVAL_MS);
                         if (!items.isEmpty() && hopperLoc != null) {
-                            Bukkit.getScheduler().runTask(plugin, () -> deliverToHopper(hopperLoc, items));
+                            Bukkit.getScheduler().runTask(plugin, () -> deliverToHopper(hopper, hopperLoc, items));
                         }
                     } else {
                         String reason = res.has("reason") ? res.get("reason").getAsString() : "";
@@ -1052,7 +1061,10 @@ public class ShopListener implements Listener {
         });
     }
 
-    private void deliverToHopper(Location loc, List<ItemStack> items) {
+    private void deliverToHopper(HopperData hopperData, Location loc, List<ItemStack> items) {
+        if (hopperData == null) {
+            return;
+        }
         Block block = loc.getBlock();
         if (!(block.getState() instanceof Hopper hopper)) {
             for (ItemStack stack : items) {
@@ -1060,6 +1072,7 @@ public class ShopListener implements Listener {
             }
             return;
         }
+        tagItemsForBindings(items, hopperData.bindings);
         Inventory inv = hopper.getInventory();
         for (ItemStack stack : items) {
             Map<Integer, ItemStack> leftover = inv.addItem(stack);
@@ -1067,6 +1080,57 @@ public class ShopListener implements Listener {
                 leftover.values().forEach(rem -> loc.getWorld().dropItemNaturally(loc.clone().add(0.5, 0.5, 0.5), rem));
             }
         }
+    }
+
+    private void tagItemsForBindings(List<ItemStack> items, List<HopperBinding> bindings) {
+        if (items == null || items.isEmpty() || bindings == null || bindings.isEmpty()) {
+            return;
+        }
+        String tagValue = bindings.stream()
+                .map(binding -> binding.itemKey)
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .collect(Collectors.joining(","));
+        if (tagValue.isEmpty()) {
+            return;
+        }
+        for (ItemStack stack : items) {
+            if (stack == null) {
+                continue;
+            }
+            ItemMeta meta = stack.getItemMeta();
+            if (meta == null) {
+                continue;
+            }
+            meta.getPersistentDataContainer().set(keyHopperItemTag, PersistentDataType.STRING, tagValue);
+            stack.setItemMeta(meta);
+        }
+    }
+
+    private Set<String> extractItemTags(ItemStack stack) {
+        if (stack == null || stack.getType() == Material.AIR) {
+            return Collections.emptySet();
+        }
+        ItemMeta meta = stack.getItemMeta();
+        if (meta == null) {
+            return Collections.emptySet();
+        }
+        PersistentDataContainer data = meta.getPersistentDataContainer();
+        String raw = data.get(keyHopperItemTag, PersistentDataType.STRING);
+        if (raw == null || raw.isEmpty()) {
+            return Collections.emptySet();
+        }
+        String[] parts = raw.split(",");
+        Set<String> tags = new HashSet<>();
+        for (String part : parts) {
+            String trimmed = part.trim();
+            if (!trimmed.isEmpty()) {
+                tags.add(trimmed);
+            }
+        }
+        return tags;
     }
 
     @EventHandler
