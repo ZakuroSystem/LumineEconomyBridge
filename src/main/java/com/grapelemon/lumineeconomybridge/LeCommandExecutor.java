@@ -62,7 +62,7 @@ public class LeCommandExecutor implements CommandExecutor {
         }
 
         String sub = args.length > 0 ? args[0].toLowerCase() : "";
-        if (plugin.requiresAdmin(sub) && !p.hasPermission("lumineeconomy.admin")
+        if (plugin.requiresAdmin(sub) && !p.isOp() && !p.hasPermission("lumineeconomy.admin")
                 && !sub.equalsIgnoreCase("money") && !sub.equalsIgnoreCase("currency")) {
             p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
             return true;
@@ -1007,7 +1007,7 @@ public class LeCommandExecutor implements CommandExecutor {
         if (!plugin.requiresAdmin(commandKey)) {
             return true;
         }
-        if (p.hasPermission("lumineeconomy.admin")) {
+        if (p.isOp() || p.hasPermission("lumineeconomy.admin")) {
             return true;
         }
         return commandKey.equalsIgnoreCase("money") || commandKey.equalsIgnoreCase("currency");
