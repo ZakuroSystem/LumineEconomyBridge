@@ -193,14 +193,20 @@ with conn:
             status TEXT NOT NULL DEFAULT 'active',
             created_at INTEGER NOT NULL,
             last_activity_at INTEGER NOT NULL,
-            listed INTEGER NOT NULL DEFAULT 1
+            listed INTEGER NOT NULL DEFAULT 1,
+            account_uuid TEXT
         )
         """
     )
     try:
+        conn.execute("ALTER TABLE shops ADD COLUMN account_uuid TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
         conn.execute("ALTER TABLE shops ADD COLUMN listed INTEGER NOT NULL DEFAULT 1")
     except sqlite3.OperationalError:
         pass
+    conn.execute("UPDATE shops SET account_uuid=owner_uuid WHERE account_uuid IS NULL")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS shop_locations (
@@ -708,6 +714,12 @@ class ShopRemoveOwnerPayload(BaseModel):
     owner_uuid: str
     shop_id: str
     target_uuid: str
+
+
+class ShopAccountPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    account_id: str
 
 
 class ShopVisitPayload(BaseModel):
@@ -1985,44 +1997,52 @@ async def message(payload: MessagePayload):
                                 messages.append({"target": "chat", "text": t(key, lang=exec_lang, player=target_name or payload.executor)})
                         scoreboards[target_uuid] = get_scoreboard(cur, target_uuid)
             elif action == "account" and len(cmd) >= 4 and cmd[1].lower() == "connect":
-                user_name = cmd[2].lower()
-                sys_name = cmd[3].lower()
-                user_uuid = get_uuid(user_name)
-                sys_uuid = get_uuid(sys_name)
-                if (
-                    user_uuid is None
-                    or sys_uuid is None
-                    or cur.execute(
-                        "SELECT 1 FROM system_accounts WHERE uuid=?", (sys_uuid,)
-                    ).fetchone()
-                    is None
-                ):
+                if not is_exec_admin:
                     success = False
-                    error_text = t("error.invalid_args", lang=exec_lang)
+                    error_text = t("error.no_permission", lang=exec_lang)
                 else:
-                    cur.execute(
-                        "INSERT OR REPLACE INTO account_links(user_uuid, system_uuid) VALUES (?,?)",
-                        (user_uuid, sys_uuid),
-                    )
-                    messages.append(
-                        {
-                            "target": "chat",
-                            "text": t(
-                                "account.connected",
-                                lang=exec_lang,
-                                user=user_name,
-                                system=sys_name,
-                            ),
-                        }
-                    )
+                    user_name = cmd[2].lower()
+                    sys_name = cmd[3].lower()
+                    user_uuid = get_uuid(user_name)
+                    sys_uuid = get_uuid(sys_name)
+                    if (
+                        user_uuid is None
+                        or sys_uuid is None
+                        or cur.execute(
+                            "SELECT 1 FROM system_accounts WHERE uuid=?", (sys_uuid,)
+                        ).fetchone()
+                        is None
+                    ):
+                        success = False
+                        error_text = t("error.invalid_args", lang=exec_lang)
+                    else:
+                        cur.execute(
+                            "INSERT OR REPLACE INTO account_links(user_uuid, system_uuid) VALUES (?,?)",
+                            (user_uuid, sys_uuid),
+                        )
+                        messages.append(
+                            {
+                                "target": "chat",
+                                "text": t(
+                                    "account.connected",
+                                    lang=exec_lang,
+                                    user=user_name,
+                                    system=sys_name,
+                                ),
+                            }
+                        )
             elif action == "account" and len(cmd) >= 3 and cmd[1].lower() == "create":
-                name = cmd[2].lower()
-                cur.execute("INSERT OR IGNORE INTO system_accounts(uuid) VALUES (?)", (name,))
-                cur.execute(
-                    "INSERT OR REPLACE INTO name_index(name, uuid) VALUES (?,?)",
-                    (name, name),
-                )
-                messages.append({"target": "chat", "text": t("account.created", lang=exec_lang, id=name)})
+                if not is_exec_admin:
+                    success = False
+                    error_text = t("error.no_permission", lang=exec_lang)
+                else:
+                    name = cmd[2].lower()
+                    cur.execute("INSERT OR IGNORE INTO system_accounts(uuid) VALUES (?)", (name,))
+                    cur.execute(
+                        "INSERT OR REPLACE INTO name_index(name, uuid) VALUES (?,?)",
+                        (name, name),
+                    )
+                    messages.append({"target": "chat", "text": t("account.created", lang=exec_lang, id=name)})
             elif action == "undo":
                 stack = undo_stacks.get(exec_uuid)
                 if stack:
@@ -2285,8 +2305,15 @@ async def shop_place(
             if payload.owner_uuid != payload.placer_uuid:
                 raise HTTPException(status_code=403, detail="owner mismatch")
             cur.execute(
-                "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
-                (payload.shop_id, payload.owner_uuid, "active", payload.timestamp, payload.timestamp),
+                "INSERT INTO shops(shop_id, owner_uuid, account_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?,?)",
+                (
+                    payload.shop_id,
+                    payload.owner_uuid,
+                    payload.owner_uuid,
+                    "active",
+                    payload.timestamp,
+                    payload.timestamp,
+                ),
             )
             cur.execute(
                 "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
@@ -2461,10 +2488,13 @@ async def shop_buy(payload: ShopBuyPayload):
             total_price = existing["total_price"]
             grant_token = existing["grant_token"]
             shop = cur.execute(
-                "SELECT owner_uuid FROM shops WHERE shop_id=?",
+                "SELECT owner_uuid, account_uuid FROM shops WHERE shop_id=?",
                 (existing["shop_id"],),
             ).fetchone()
             owner = shop["owner_uuid"] if shop else None
+            account = (
+                shop["account_uuid"] if shop and shop["account_uuid"] else owner
+            )
             if success and grant_token:
                 stock_row = cur.execute(
                     "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
@@ -2483,6 +2513,8 @@ async def shop_buy(payload: ShopBuyPayload):
                         cur, existing["buyer_uuid"]
                     )
                     scoreboards[owner] = get_scoreboard(cur, owner)
+                if account and account != owner:
+                    scoreboards[account] = get_scoreboard(cur, account)
                 buyer_name = get_name(existing["buyer_uuid"]) or existing["buyer_uuid"]
                 buyer_msg = {
                     "target": "chat",
@@ -2507,7 +2539,7 @@ async def shop_buy(payload: ShopBuyPayload):
                 )
         else:
             shop = cur.execute(
-                "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+                "SELECT owner_uuid, account_uuid, status FROM shops WHERE shop_id=?",
                 (payload.shop_id,),
             ).fetchone()
             location = cur.execute(
@@ -2520,6 +2552,7 @@ async def shop_buy(payload: ShopBuyPayload):
                 reason = "shop_suspended"
             else:
                 owner = shop["owner_uuid"]
+                account = shop["account_uuid"] or owner
                 stock_row = cur.execute(
                     "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
                     (payload.shop_id, payload.item_key),
@@ -2556,7 +2589,11 @@ async def shop_buy(payload: ShopBuyPayload):
                         if get_balance(cur, payload.player_uuid, payload.currency) < total_price:
                             reason = "insufficient_funds"
                         elif not transfer(
-                            cur, payload.player_uuid, owner, payload.currency, total_price
+                            cur,
+                            payload.player_uuid,
+                            account,
+                            payload.currency,
+                            total_price,
                         ):
                             reason = "transfer_failed"
                         else:
@@ -2615,6 +2652,8 @@ async def shop_buy(payload: ShopBuyPayload):
                                 cur, payload.player_uuid
                             )
                             scoreboards[owner] = get_scoreboard(cur, owner)
+                            if account and account != owner:
+                                scoreboards[account] = get_scoreboard(cur, account)
                             grant.append(
                                 {
                                     "item_key": payload.item_key,
@@ -2706,14 +2745,19 @@ async def shop_sell(payload: ShopSellPayload):
             reason = existing["reason"]
             total_price = existing["total_price"]
             shop = cur.execute(
-                "SELECT owner_uuid FROM shops WHERE shop_id=?",
+                "SELECT owner_uuid, account_uuid FROM shops WHERE shop_id=?",
                 (existing["shop_id"],),
             ).fetchone()
             owner = shop["owner_uuid"] if shop else None
+            account = (
+                shop["account_uuid"] if shop and shop["account_uuid"] else owner
+            )
             if success:
                 if owner:
                     scoreboards[payload.player_uuid] = get_scoreboard(cur, payload.player_uuid)
                     scoreboards[owner] = get_scoreboard(cur, owner)
+                if account and account != owner:
+                    scoreboards[account] = get_scoreboard(cur, account)
                 player_name = get_name(payload.player_uuid) or payload.player_uuid
                 buyer_msg = {
                     "target": "chat",
@@ -2736,7 +2780,7 @@ async def shop_sell(payload: ShopSellPayload):
                 )
         else:
             shop = cur.execute(
-                "SELECT owner_uuid, status FROM shops WHERE shop_id=?",
+                "SELECT owner_uuid, account_uuid, status FROM shops WHERE shop_id=?",
                 (payload.shop_id,),
             ).fetchone()
             location = cur.execute(
@@ -2749,6 +2793,7 @@ async def shop_sell(payload: ShopSellPayload):
                 reason = "shop_suspended"
             else:
                 owner = shop["owner_uuid"]
+                account = shop["account_uuid"] or owner
                 price_row = cur.execute(
                     "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
                     (payload.shop_id, payload.item_key, payload.currency),
@@ -2757,9 +2802,11 @@ async def shop_sell(payload: ShopSellPayload):
                     reason = "invalid_currency"
                 else:
                     total_price = price_row["price"] * payload.qty
-                    if get_balance(cur, owner, payload.currency) < total_price:
+                    if get_balance(cur, account, payload.currency) < total_price:
                         reason = "insufficient_funds"
-                    elif not transfer(cur, owner, payload.player_uuid, payload.currency, total_price):
+                    elif not transfer(
+                        cur, account, payload.player_uuid, payload.currency, total_price
+                    ):
                         reason = "transfer_failed"
                     else:
                         cur.execute(
@@ -2808,6 +2855,8 @@ async def shop_sell(payload: ShopSellPayload):
                             queue_message(cur, owner_msg)
                         scoreboards[payload.player_uuid] = get_scoreboard(cur, payload.player_uuid)
                         scoreboards[owner] = get_scoreboard(cur, owner)
+                        if account and account != owner:
+                            scoreboards[account] = get_scoreboard(cur, account)
                         complete_quest(
                             cur,
                             payload.player_uuid,
@@ -3127,6 +3176,70 @@ async def shop_remove_item(
     }
     append_log(log_entry)
     return {"status": result, "reason": reason, "grant": grants}
+
+
+@app.post("/api/shop/account")
+async def shop_account(
+    payload: ShopAccountPayload, _auth: None = Depends(ensure_plugin_request)
+):
+    start = time.time()
+    result = "success"
+    reason: Optional[str] = None
+    account_uuid = payload.owner_uuid
+    account_id = payload.account_id.strip().lower()
+    with transaction() as cur:
+        if not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
+            result = "error"
+            reason = "not_owner"
+        else:
+            if account_id and account_id not in {"self", "owner", "personal"}:
+                looked = get_uuid(account_id)
+                if looked is None:
+                    looked = account_id
+                account_uuid = looked
+            if account_uuid != payload.owner_uuid:
+                row = cur.execute(
+                    "SELECT 1 FROM system_accounts WHERE uuid=?",
+                    (account_uuid,),
+                ).fetchone()
+                if row is None:
+                    result = "error"
+                    reason = "invalid_account"
+                else:
+                    exec_name = get_name(payload.owner_uuid)
+                    is_admin = False
+                    if exec_name:
+                        is_admin = (
+                            cur.execute(
+                                "SELECT 1 FROM admin_users WHERE name=?",
+                                (exec_name.lower(),),
+                            ).fetchone()
+                            is not None
+                        )
+                    if not is_admin and not has_link(
+                        cur, payload.owner_uuid, account_uuid
+                    ):
+                        result = "error"
+                        reason = "no_access"
+            if result == "success":
+                cur.execute(
+                    "UPDATE shops SET account_uuid=? WHERE shop_id=?",
+                    (account_uuid, payload.shop_id),
+                )
+    latency_ms = int((time.time() - start) * 1000)
+    append_log(
+        {
+            "type": "shop_account",
+            "timestamp": int(time.time()),
+            "shop_id": payload.shop_id,
+            "actor": payload.owner_uuid,
+            "account": account_uuid,
+            "result": result,
+            "reason": reason,
+            "latency_ms": latency_ms,
+        }
+    )
+    return {"status": result, "reason": reason}
 
 
 @app.post("/api/shop/add_owner")

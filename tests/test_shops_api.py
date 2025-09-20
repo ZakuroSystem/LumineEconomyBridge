@@ -581,3 +581,89 @@ def test_recommended_quests_filters_completed():
         assert resp.status_code == 200
         data = resp.json()
         assert data["quests"] == []
+
+
+def test_shop_account_requires_delegate_or_admin():
+    with main.conn:
+        main.conn.execute("DELETE FROM shop_locations")
+        main.conn.execute("DELETE FROM shop_owners")
+        main.conn.execute("DELETE FROM shops")
+        main.conn.execute("DELETE FROM system_accounts")
+        main.conn.execute("DELETE FROM account_links")
+        main.conn.execute("DELETE FROM admin_users WHERE name IN ('owneradmin')")
+        main.conn.execute("DELETE FROM name_index WHERE name IN ('corpco', 'corpadmin', 'owneradmin')")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("acct-shop", "owner-uuid", "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("acct-shop", "owner-uuid"),
+        )
+        main.conn.execute("INSERT INTO system_accounts(uuid) VALUES(?)", ("corpco",))
+        main.conn.execute(
+            "INSERT OR REPLACE INTO name_index(name, uuid) VALUES(?,?)",
+            ("corpco", "corpco"),
+        )
+    payload = {"owner_uuid": "owner-uuid", "shop_id": "acct-shop", "account_id": "corpco"}
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/account", json=payload, headers=headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "error"
+        assert body["reason"] == "no_access"
+    with main.conn:
+        main.conn.execute(
+            "INSERT OR REPLACE INTO account_links(user_uuid, system_uuid) VALUES(?,?)",
+            ("owner-uuid", "corpco"),
+        )
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/account", json=payload, headers=headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+    with main.conn:
+        row = main.conn.execute(
+            "SELECT account_uuid FROM shops WHERE shop_id=?",
+            ("acct-shop",),
+        ).fetchone()
+        assert row and row["account_uuid"] == "corpco"
+
+    with main.conn:
+        main.conn.execute("DELETE FROM shop_locations")
+        main.conn.execute("DELETE FROM shop_owners")
+        main.conn.execute("DELETE FROM shops")
+        main.conn.execute("DELETE FROM account_links WHERE user_uuid='admin-uuid'")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("admin-shop", "admin-uuid", "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("admin-shop", "admin-uuid"),
+        )
+        main.conn.execute("INSERT OR IGNORE INTO system_accounts(uuid) VALUES(?)", ("corpadmin",))
+        main.conn.execute(
+            "INSERT OR REPLACE INTO name_index(name, uuid) VALUES(?,?)",
+            ("corpadmin", "corpadmin"),
+        )
+        main.conn.execute(
+            "INSERT OR REPLACE INTO name_index(name, uuid) VALUES(?,?)",
+            ("owneradmin", "admin-uuid"),
+        )
+        main.conn.execute("INSERT OR IGNORE INTO admin_users(name) VALUES(?)", ("owneradmin",))
+    admin_payload = {"owner_uuid": "admin-uuid", "shop_id": "admin-shop", "account_id": "corpadmin"}
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/account", json=admin_payload, headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+    with main.conn:
+        row = main.conn.execute(
+            "SELECT account_uuid FROM shops WHERE shop_id=?",
+            ("admin-shop",),
+        ).fetchone()
+        assert row and row["account_uuid"] == "corpadmin"

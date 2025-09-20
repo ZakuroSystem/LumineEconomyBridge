@@ -218,6 +218,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop reopen " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Reopen suspended shop / 再開");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner add " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Add co-owner / 共同オーナー追加");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner remove " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Remove co-owner / 共同オーナー削除");
+                        p.sendMessage(ChatColor.GREEN + "/le shop account " + ChatColor.YELLOW + "<id> <company> " + ChatColor.GRAY + "- Set payout account / 取引口座設定");
                         p.sendMessage(ChatColor.GREEN + "/le shop publish " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- List shop / 掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
@@ -388,6 +389,56 @@ public class LeCommandExecutor implements CommandExecutor {
                                             p.sendMessage(ChatColor.GREEN + "Done / 完了しました" + ChatColor.RESET);
                                         } else {
                                             p.sendMessage(ChatColor.RED + "Failed / 失敗しました" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else if (args.length >= 4 && args[1].equalsIgnoreCase("account")) {
+                        String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
+                        String accountId = String.join(" ", java.util.Arrays.copyOfRange(args, 3, args.length)).trim();
+                        if (accountId.isEmpty()) {
+                            p.sendMessage(ChatColor.YELLOW + "Usage: /le shop account <id> <company>" + ChatColor.RESET);
+                            return true;
+                        }
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        payload.put("account_id", accountId);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/account")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Account update failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        String status = res.has("status") ? res.get("status").getAsString() : "error";
+                                        if ("success".equalsIgnoreCase(status)) {
+                                            p.sendMessage(ChatColor.GREEN + "Shop account updated / 取引口座を更新しました" + ChatColor.RESET);
+                                        } else {
+                                            String reason = res.has("reason") && !res.get("reason").isJsonNull()
+                                                    ? res.get("reason").getAsString() : "unknown";
+                                            String display;
+                                            switch (reason) {
+                                                case "not_owner" -> display = "No permission / 権限がありません";
+                                                case "invalid_account" -> display = "Account not found / 口座が存在しません";
+                                                case "no_access" -> display = "Account access not delegated / 利用権がありません";
+                                                default -> display = "Failed / 失敗しました";
+                                            }
+                                            p.sendMessage(ChatColor.RED + display + ChatColor.RESET);
                                         }
                                     });
                                 }

@@ -138,7 +138,7 @@ public class LeTabCompleter implements TabCompleter {
                 return names;
             }
             if (first.equals("shop")) {
-                return Stream.of("create", "add", "take", "price", "remove", "partner", "reopen", "help")
+                return Stream.of("create", "add", "take", "price", "remove", "partner", "account", "reopen", "help")
                         .filter(s -> s.startsWith(args[1].toLowerCase()))
                         .toList();
             }
@@ -237,6 +237,9 @@ public class LeTabCompleter implements TabCompleter {
                             .filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase()))
                             .collect(Collectors.toList());
                 }
+            }
+            if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("account")) {
+                return Collections.singletonList("<company>");
             }
             if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("partner")) {
                 if (sender instanceof Player player) {
