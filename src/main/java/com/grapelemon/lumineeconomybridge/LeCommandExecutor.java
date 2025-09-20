@@ -1099,10 +1099,17 @@ public class LeCommandExecutor implements CommandExecutor {
     }
 
     private boolean isDirectOwner(Player p, JsonObject shopData) {
-        if (shopData == null || !shopData.has("owners")) {
+        if (shopData == null) {
             return false;
         }
         String uuid = p.getUniqueId().toString();
+        if (shopData.has("owner_uuid")) {
+            String ownerUuid = shopData.get("owner_uuid").getAsString();
+            return uuid.equalsIgnoreCase(ownerUuid);
+        }
+        if (!shopData.has("owners")) {
+            return false;
+        }
         for (JsonElement el : shopData.getAsJsonArray("owners")) {
             if (uuid.equalsIgnoreCase(el.getAsString())) {
                 return true;
