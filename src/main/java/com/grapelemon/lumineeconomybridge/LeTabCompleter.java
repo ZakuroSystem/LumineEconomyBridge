@@ -44,7 +44,7 @@ public class LeTabCompleter implements TabCompleter {
         OkHttpClient http = plugin.getHttpClient();
         if (http == null) return;
         HttpUrl.Builder url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/ids").newBuilder();
-        if (!p.isOp()) {
+        if (!p.isOp() && !p.hasPermission("lumineeconomy.admin")) {
             url.addQueryParameter("owner_uuid", p.getUniqueId().toString());
         }
         Request req = new Request.Builder().url(url.build()).build();

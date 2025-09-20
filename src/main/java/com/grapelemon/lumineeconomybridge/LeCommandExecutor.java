@@ -987,7 +987,7 @@ public class LeCommandExecutor implements CommandExecutor {
     }
 
     private boolean hasShopPermission(Player p, String shopId) {
-        if (p.isOp()) return true;
+        if (p.isOp() || p.hasPermission("lumineeconomy.admin")) return true;
         OkHttpClient http = plugin.getHttpClient();
         if (http == null) return false;
         HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
