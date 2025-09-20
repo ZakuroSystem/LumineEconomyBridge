@@ -12,6 +12,7 @@ import okhttp3.Response;
 import com.grapelemon.lumineeconomybridge.shop.ShopListener;
 import com.grapelemon.lumineeconomybridge.cash.PaperCurrencyService;
 import com.grapelemon.lumineeconomybridge.cash.PaperNoteListener;
+import com.grapelemon.lumineeconomybridge.guide.GuideBookListener;
 import com.grapelemon.lumineeconomybridge.vault.VaultEconomyBridge;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -43,6 +44,7 @@ public class LumineEconomyBridge extends JavaPlugin {
     private BukkitTask retryTask;
     private LeCommandExecutor executor;
     private VaultEconomyBridge vaultEconomy;
+    private GuideBookListener guideBookListener;
 
     private String baseUrl;
     private int timeout = 2000;
@@ -69,6 +71,9 @@ public class LumineEconomyBridge extends JavaPlugin {
         getCommand("le").setTabCompleter(new LeTabCompleter(this));
         getServer().getPluginManager().registerEvents(new PlayerListener(this), this);
         getServer().getPluginManager().registerEvents(new ShopListener(this), this);
+        guideBookListener = new GuideBookListener(this);
+        getServer().getPluginManager().registerEvents(guideBookListener, this);
+        guideBookListener.distributeToOnline();
 
         startBridge();
         startTileUpdates();

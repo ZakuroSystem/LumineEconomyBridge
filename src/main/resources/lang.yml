@@ -6,3 +6,49 @@ bridge-starting: "§7Bridge starting…§r"
 bridge-stopped: "§7Bridge stopped§r"
 bridge-reloaded: "§7Bridge reloaded§r"
 send-pending: "§7送信中…§r"
+guide:
+  book_name: "&a経済ガイドブック / Economy Guide"
+  book_lore_1: "&7右クリックでメニューを開きます / Right-click to open the menu"
+  book_lore_2: "&7/le help で詳細を確認 / Use /le help for more commands"
+  menu_title: "&9Lumine Economy メニュー"
+  menu_back: "&7戻る / Back"
+  menu_back_lore: "&7メインメニューに戻ります / Return to the main menu"
+  balance:
+    title: "&9ウォレット残高 / Wallet Balances"
+    item_name: "&e{currency}"
+    item_lore: "&7所持金: &f{amount} / Balance: {amount}"
+    none: "&7残高が見つかりません / No balances found"
+  option:
+    balance:
+      name: "&a所持金確認 / Check Balance"
+      lore_1: "&7ウォレット残高を表示 / Show your wallet balances"
+      lore_2: "&7GUIで残高を確認 / View balances in the GUI"
+    shop:
+      name: "&bショップ作成 / Create Shop"
+      lore_1: "&7チャットでショップIDを入力 / Enter a shop ID in chat"
+      lore_2: "&7cancel と入力でキャンセル / Type cancel to abort"
+    quests:
+      name: "&dおすすめクエスト / Recommended Quests"
+      lore_1: "&7未達成のクエストを表示 / Show quests you can clear next"
+      lore_2: "&7報酬でクエストポイント獲得 / Earn quest points as rewards"
+  shop:
+    prompt: "&bショップIDを入力してください (cancel で中止) / Enter a shop ID (type cancel to abort)"
+    invalid: "&cショップIDを入力してください。 / Please enter a shop ID."
+    creating: "&aショップID &e{shop}&a で作成します… / Creating shop {shop}..."
+    cancelled: "&cショップ作成をキャンセルしました。 / Shop creation cancelled."
+  quests:
+    menu_title: "&dおすすめクエスト / Recommended Quests"
+    loading: "&7読み込み中… / Loading…"
+    error: "&cクエストを取得できませんでした / Unable to fetch quests"
+    reward_line: "&b報酬: クエストポイント獲得 / Reward: Quest Points"
+    header: "&6おすすめクエスト / Recommended Quests"
+    none: "&7すべてのクエストを達成済みです！ / No quests remain!"
+    shop_create:
+      name: "&bショップを作成 / Open a shop"
+      description: "&7/le shop create <id> でショップを開店しましょう。 / Run /le shop create <id> to get your barrel."
+    shop_buy:
+      name: "&aショップで購入 / Buy from a shop"
+      description: "&7公開ショップで商品を購入しましょう。 / Purchase an item from a listed shop."
+    shop_sell:
+      name: "&d依頼を達成 / Fulfill a request"
+      description: "&7ショップにアイテムを補充して依頼を達成しましょう。 / Supply a shop's request to complete it."

@@ -8,3 +8,4 @@ deposit=user
 withdraw=user
 transfer=user
 wallet=user
+help=user
