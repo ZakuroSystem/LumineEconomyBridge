@@ -28,6 +28,9 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -55,6 +58,7 @@ public class LumineEconomyBridge extends JavaPlugin {
     private final Map<String, Long> grantTokens = new ConcurrentHashMap<>();
     private Map<String, Boolean> commandPermissions = new HashMap<>();
     private PaperCurrencyService cashService;
+    private final Set<String> bypassUsers = ConcurrentHashMap.newKeySet();
 
     @Override
     public void onEnable() {
@@ -117,6 +121,8 @@ public class LumineEconomyBridge extends JavaPlugin {
             cashService = new PaperCurrencyService(this, httpClient, baseUrl);
             getServer().getPluginManager().registerEvents(new PaperNoteListener(cashService), this);
 
+            refreshBypassUsers();
+
             if (getConfig().getBoolean("vault.enabled", false) &&
                     Bukkit.getPluginManager().getPlugin("Vault") != null) {
                 vaultEconomy = new VaultEconomyBridge(this);
@@ -173,6 +179,7 @@ public class LumineEconomyBridge extends JavaPlugin {
         }
         syncService = null;
         httpClient = null;
+        bypassUsers.clear();
         getLogger().info("LumineEconomyBridge stopped.");
     }
 
@@ -242,5 +249,47 @@ public class LumineEconomyBridge extends JavaPlugin {
 
     public boolean requiresAdmin(String cmd) {
         return commandPermissions.getOrDefault(cmd.toLowerCase(), true);
+    }
+
+    public boolean hasBypass(Player player) {
+        return player != null && hasBypass(player.getName());
+    }
+
+    public boolean hasBypass(String name) {
+        if (name == null) return false;
+        return bypassUsers.contains(name.toLowerCase(Locale.ROOT));
+    }
+
+    private void refreshBypassUsers() {
+        if (httpClient == null) {
+            return;
+        }
+        Request req = new Request.Builder().url(baseUrl + "/api/admin/bypass").build();
+        try (Response res = httpClient.newCall(req).execute()) {
+            if (!res.isSuccessful()) {
+                getLogger().warning("Failed to fetch bypass list: status " + res.code());
+                return;
+            }
+            String body = res.body() != null ? res.body().string() : "{}";
+            JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
+            if (!obj.has("users") || !obj.get("users").isJsonArray()) {
+                getLogger().warning("Bypass list missing 'users' array");
+                return;
+            }
+            Set<String> names = new HashSet<>();
+            obj.getAsJsonArray("users").forEach(el -> {
+                if (el != null && el.isJsonPrimitive()) {
+                    String entry = el.getAsString();
+                    if (entry != null && !entry.isBlank()) {
+                        names.add(entry.toLowerCase(Locale.ROOT));
+                    }
+                }
+            });
+            bypassUsers.clear();
+            bypassUsers.addAll(names);
+            getLogger().info("Loaded " + names.size() + " bypass accounts from backend");
+        } catch (IOException ex) {
+            getLogger().warning("Failed to load bypass list: " + ex.getMessage());
+        }
     }
 }

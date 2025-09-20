@@ -62,7 +62,8 @@ public class LeCommandExecutor implements CommandExecutor {
         }
 
         String sub = args.length > 0 ? args[0].toLowerCase() : "";
-        if (plugin.requiresAdmin(sub) && !p.isOp() && !p.hasPermission("lumineeconomy.admin")
+        boolean hasBypass = plugin.hasBypass(p);
+        if (plugin.requiresAdmin(sub) && !hasBypass && !p.isOp() && !p.hasPermission("lumineeconomy.admin")
                 && !sub.equalsIgnoreCase("money") && !sub.equalsIgnoreCase("currency")) {
             p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
             return true;
@@ -1010,7 +1011,7 @@ public class LeCommandExecutor implements CommandExecutor {
         if (!plugin.requiresAdmin(commandKey)) {
             return true;
         }
-        if (p.isOp() || p.hasPermission("lumineeconomy.admin")) {
+        if (plugin.hasBypass(p) || p.isOp() || p.hasPermission("lumineeconomy.admin")) {
             return true;
         }
         return commandKey.equalsIgnoreCase("money") || commandKey.equalsIgnoreCase("currency");
@@ -1053,7 +1054,7 @@ public class LeCommandExecutor implements CommandExecutor {
     }
 
     private boolean hasShopPermission(Player p, String shopId) {
-        if (p.isOp() || p.hasPermission("lumineeconomy.admin")) return true;
+        if (plugin.hasBypass(p) || p.isOp() || p.hasPermission("lumineeconomy.admin")) return true;
         OkHttpClient http = plugin.getHttpClient();
         if (http == null) return false;
         HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
@@ -1124,7 +1125,7 @@ public class LeCommandExecutor implements CommandExecutor {
     }
 
     private boolean isDirectOwner(Player p, JsonObject shopData) {
-        if (p.hasPermission("lumineeconomy.admin") || p.isOp()) {
+        if (plugin.hasBypass(p) || p.hasPermission("lumineeconomy.admin") || p.isOp()) {
             return true;
         }
         if (shopData == null) {

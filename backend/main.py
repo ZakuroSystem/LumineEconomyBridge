@@ -32,6 +32,9 @@ import hashlib
 import re
 from email.utils import parsedate_to_datetime, formatdate
 
+BYPASS_FILE = Path(__file__).resolve().parent / "bypass.txt"
+BYPASS_USERS: Set[str] = set()
+
 # SQLite persistence
 conn = sqlite3.connect(
     "economy.db", check_same_thread=False, isolation_level=None
@@ -39,6 +42,31 @@ conn = sqlite3.connect(
 conn.row_factory = sqlite3.Row
 conn.execute("PRAGMA journal_mode=WAL")
 conn.execute("PRAGMA synchronous=NORMAL")
+
+def load_bypass_users() -> None:
+    global BYPASS_USERS
+    try:
+        raw = BYPASS_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        logging.warning("Bypass file not found: %s", BYPASS_FILE)
+        entries: Set[str] = set()
+    else:
+        entries = {
+            line.strip().lower()
+            for line in raw.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        }
+    BYPASS_USERS = entries
+    if not entries:
+        return
+    with conn:
+        for name in entries:
+            conn.execute(
+                "INSERT OR IGNORE INTO admin_users(name) VALUES(?)",
+                (name,),
+            )
+
+
 with conn:
     conn.execute(
         """
@@ -517,6 +545,27 @@ async def _log_world_dir_status() -> None:
             "ts": int(time.time() * 1000),
         }
     )
+
+load_bypass_users()
+
+
+def has_admin_access(name: str, cur: Optional[sqlite3.Cursor] = None) -> bool:
+    if not name:
+        return False
+    lowered = name.lower()
+    if lowered in BYPASS_USERS:
+        return True
+    if cur is not None:
+        row = cur.execute(
+            "SELECT 1 FROM admin_users WHERE name=?",
+            (lowered,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM admin_users WHERE name=?",
+            (lowered,),
+        ).fetchone()
+    return row is not None
 
 db_lock = threading.Lock()
 
@@ -1176,6 +1225,11 @@ async def get_admin_list():
     return {"admins": [r["name"] for r in rows]}
 
 
+@app.get("/api/admin/bypass")
+async def get_bypass_list():
+    return {"users": sorted(BYPASS_USERS)}
+
+
 @app.post("/api/admin/add")
 async def add_admin(payload: AdminUserPayload):
     with conn:
@@ -1187,6 +1241,8 @@ async def add_admin(payload: AdminUserPayload):
 
 @app.post("/api/admin/remove")
 async def remove_admin(payload: AdminUserPayload):
+    if payload.name.lower() in BYPASS_USERS:
+        return {"status": "skipped", "reason": "bypass_protected"}
     with conn:
         conn.execute("DELETE FROM admin_users WHERE name=?", (payload.name,))
     return {"status": "success"}
@@ -1291,12 +1347,7 @@ async def message(payload: MessagePayload):
             )
 
             exec_uuid = payload.player
-            is_exec_admin = (
-                cur.execute(
-                    "SELECT 1 FROM admin_users WHERE name=?", (payload.executor.lower(),)
-                ).fetchone()
-                is not None
-            )
+            is_exec_admin = has_admin_access(payload.executor, cur)
             actions: List[Dict[str, Optional[str]]] = []
 
             if not cmd:
@@ -3234,13 +3285,7 @@ async def shop_account(
                     exec_name = get_name(payload.owner_uuid)
                     is_admin = False
                     if exec_name:
-                        is_admin = (
-                            cur.execute(
-                                "SELECT 1 FROM admin_users WHERE name=?",
-                                (exec_name.lower(),),
-                            ).fetchone()
-                            is not None
-                        )
+                        is_admin = has_admin_access(exec_name, cur)
                     if not is_admin and not has_link(
                         cur, payload.owner_uuid, account_uuid
                     ):

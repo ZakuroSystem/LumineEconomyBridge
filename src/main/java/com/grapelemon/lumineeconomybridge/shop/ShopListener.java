@@ -175,7 +175,7 @@ public class ShopListener implements Listener {
         String expected = c.get(keyOwner, PersistentDataType.STRING);
         String shopOwnerBound = c.get(keyHopperShopOwner, PersistentDataType.STRING);
         String placer = player.getUniqueId().toString();
-        boolean hasOverride = player.isOp() || player.hasPermission("lumineeconomy.admin");
+        boolean hasOverride = plugin.hasBypass(player) || player.isOp() || player.hasPermission("lumineeconomy.admin");
         boolean matchesIssuer = expected != null && expected.equals(placer);
         boolean matchesShopOwner = shopOwnerBound != null && shopOwnerBound.equals(placer);
         if (!hasOverride && !matchesIssuer && !matchesShopOwner) {
@@ -958,7 +958,7 @@ public class ShopListener implements Listener {
     }
 
     private boolean hasHopperAccess(Player player, PersistentDataContainer container) {
-        if (player.isOp() || player.hasPermission("lumineeconomy.admin")) {
+        if (plugin.hasBypass(player) || player.isOp() || player.hasPermission("lumineeconomy.admin")) {
             return true;
         }
         String owner = container.get(keyOwner, PersistentDataType.STRING);
