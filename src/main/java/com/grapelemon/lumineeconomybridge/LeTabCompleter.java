@@ -249,7 +249,7 @@ public class LeTabCompleter implements TabCompleter {
                 if (cache != null && !cache.itemKeys.isEmpty()) {
                     List<String> slots = new ArrayList<>();
                     for (int i = 0; i < cache.itemKeys.size(); i++) {
-                        slots.add(Integer.toString(i));
+                        slots.add(Integer.toString(i + 1));
                     }
                     String needle = args[3];
                     return slots.stream()

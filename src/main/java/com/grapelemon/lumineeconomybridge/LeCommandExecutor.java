@@ -225,7 +225,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop partner add " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Add co-owner / 共同オーナー追加");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner remove " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Remove co-owner / 共同オーナー削除");
                         p.sendMessage(ChatColor.GREEN + "/le shop account " + ChatColor.YELLOW + "<id> <company> " + ChatColor.GRAY + "- Set payout account / 取引口座設定");
-                        p.sendMessage(ChatColor.GREEN + "/le shop hopper " + ChatColor.YELLOW + "<id> <slot> " + ChatColor.GRAY + "- Issue hopper / ホッパー付与");
+                        p.sendMessage(ChatColor.GREEN + "/le shop hopper " + ChatColor.YELLOW + "<id> <slot> " + ChatColor.GRAY + "- Issue hopper (slot is 1-based) / ホッパー付与 (スロット番号は1始まり)");
                         p.sendMessage(ChatColor.GREEN + "/le shop publish " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- List shop / 掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
@@ -269,13 +269,18 @@ public class LeCommandExecutor implements CommandExecutor {
                             return true;
                         }
                         String shopId = args[2];
-                        int slotIndex;
+                        int slotNumber;
                         try {
-                            slotIndex = Integer.parseInt(args[3]);
+                            slotNumber = Integer.parseInt(args[3]);
                         } catch (NumberFormatException ex) {
                             p.sendMessage(ChatColor.RED + "Invalid slot / スロット番号が不正です" + ChatColor.RESET);
                             return true;
                         }
+                        if (slotNumber <= 0) {
+                            p.sendMessage(ChatColor.RED + "Slot out of range / スロット番号が不正です" + ChatColor.RESET);
+                            return true;
+                        }
+                        int slotIndex = slotNumber - 1;
                         JsonObject shopData = fetchShop(shopId);
                         if (shopData == null) {
                             p.sendMessage(ChatColor.RED + "Unable to fetch shop / ショップ情報を取得できません" + ChatColor.RESET);
@@ -313,7 +318,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         meta.setDisplayName(ChatColor.GOLD + "Shop Hopper" + ChatColor.RESET);
                         hopper.setItemMeta(meta);
                         p.getInventory().addItem(hopper);
-                        p.sendMessage(ChatColor.GREEN + "Issued hopper for slot " + ChatColor.YELLOW + slotIndex + ChatColor.GREEN + " / ホッパーを付与しました" + ChatColor.RESET);
+                        p.sendMessage(ChatColor.GREEN + "Issued hopper for slot " + ChatColor.YELLOW + slotNumber + ChatColor.GREEN + " / ホッパーを付与しました" + ChatColor.RESET);
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
                         if (!hasShopPermission(p, shopId)) {
