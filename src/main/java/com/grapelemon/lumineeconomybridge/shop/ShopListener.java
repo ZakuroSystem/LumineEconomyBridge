@@ -386,6 +386,9 @@ public class ShopListener implements Listener {
             int size = ((arr.size() + 8) / 9) * 9;
             if (size < 9) size = 9;
             ShopMenuHolder holder = new ShopMenuHolder(shopId);
+            if (dataObj.has("trade_mode") && !dataObj.get("trade_mode").isJsonNull()) {
+                holder.setTradeMode(dataObj.get("trade_mode").getAsString());
+            }
             if (dataObj.has("owners")) {
                 for (var o : dataObj.getAsJsonArray("owners")) {
                     holder.addOwnerUuid(o.getAsString());
@@ -408,11 +411,21 @@ public class ShopListener implements Listener {
                 lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + saleName);
                 lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + stock);
                 JsonObject prices = it.getAsJsonObject("prices");
-                Map<String, Integer> priceMap = new HashMap<>();
+                Map<String, ShopItem.ShopPrice> priceMap = new HashMap<>();
                 for (var en : prices.entrySet()) {
-                    int val = en.getValue().getAsInt();
-                    lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + formatAmount(val));
-                    priceMap.put(en.getKey(), val);
+                    String currency = en.getKey();
+                    JsonObject priceObj = en.getValue().getAsJsonObject();
+                    Integer sellPrice = priceObj.has("sell") && !priceObj.get("sell").isJsonNull()
+                            ? priceObj.get("sell").getAsInt() : null;
+                    Integer buyPrice = priceObj.has("buy") && !priceObj.get("buy").isJsonNull()
+                            ? priceObj.get("buy").getAsInt() : null;
+                    if (sellPrice != null) {
+                        lore.add(ChatColor.GREEN + currency + ChatColor.WHITE + " Sell: " + ChatColor.YELLOW + formatAmount(sellPrice));
+                    }
+                    if (buyPrice != null) {
+                        lore.add(ChatColor.AQUA + currency + ChatColor.WHITE + " Buy: " + ChatColor.YELLOW + formatAmount(buyPrice));
+                    }
+                    priceMap.put(currency, new ShopItem.ShopPrice(sellPrice, buyPrice));
                 }
                 meta.setLore(lore);
                 item.setItemMeta(meta);
@@ -432,7 +445,14 @@ public class ShopListener implements Listener {
         lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + si.getSaleName());
         lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + si.getStock());
         for (var en : si.getPrices().entrySet()) {
-            lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + formatAmount(en.getValue()));
+            ShopItem.ShopPrice price = en.getValue();
+            if (price == null) continue;
+            if (price.getSellPrice() != null) {
+                lore.add(ChatColor.GREEN + en.getKey() + ChatColor.WHITE + " Sell: " + ChatColor.YELLOW + formatAmount(price.getSellPrice()));
+            }
+            if (price.getBuyPrice() != null) {
+                lore.add(ChatColor.AQUA + en.getKey() + ChatColor.WHITE + " Buy: " + ChatColor.YELLOW + formatAmount(price.getBuyPrice()));
+            }
         }
         meta.setLore(lore);
         stack.setItemMeta(meta);
@@ -469,6 +489,10 @@ public class ShopListener implements Listener {
             if (isOwner) {
                 handleOwnerDeposit(p, holder, stack);
             } else {
+                if (!holder.canPlayerSell()) {
+                    p.sendMessage(ChatColor.RED + "This shop only sells items / このショップは販売専用です" + ChatColor.RESET);
+                    return;
+                }
                 handlePlayerSell(p, holder, stack);
             }
             return;
@@ -479,6 +503,10 @@ public class ShopListener implements Listener {
             if (isOwner) {
                 handleOwnerWithdraw(p, holder, si, e.getSlot());
             } else {
+                if (!holder.canPlayerPurchase()) {
+                    p.sendMessage(ChatColor.RED + "This shop only buys items / このショップは買取専用です" + ChatColor.RESET);
+                    return;
+                }
                 openConfirm(p, holder, e.getSlot(), si);
             }
             return;
@@ -487,9 +515,16 @@ public class ShopListener implements Listener {
     }
 
     private void handlePurchase(Player p, ConfirmMenuHolder ch) {
+        if (!ch.getOrigin().canPlayerPurchase()) {
+            p.sendMessage(ChatColor.RED + "This shop only buys items / このショップは買取専用です" + ChatColor.RESET);
+            return;
+        }
         ShopItem si = ch.getItem();
-        String currency = si.getPrices().keySet().stream().findFirst().orElse(null);
-        if (currency == null) return;
+        String currency = si.firstSellCurrency();
+        if (currency == null) {
+            p.sendMessage(ChatColor.RED + "No sale price available / 販売価格が設定されていません" + ChatColor.RESET);
+            return;
+        }
         Map<String, Object> payload = new HashMap<>();
         payload.put("player_uuid", p.getUniqueId().toString());
         payload.put("shop_id", ch.getShopId());
@@ -604,6 +639,10 @@ public class ShopListener implements Listener {
     }
 
     private void handlePlayerSell(Player p, ShopMenuHolder holder, ItemStack stack) {
+        if (!holder.canPlayerSell()) {
+            p.sendMessage(ChatColor.RED + "This shop only sells items / このショップは販売専用です" + ChatColor.RESET);
+            return;
+        }
         String blob = itemToBase64(stack);
         String key = sha256(Base64.getDecoder().decode(blob));
         for (var en : holder.getItems().entrySet()) {
@@ -616,9 +655,16 @@ public class ShopListener implements Listener {
     }
 
     private void handleSell(Player p, ConfirmMenuHolder ch) {
+        if (!ch.getOrigin().canPlayerSell()) {
+            p.sendMessage(ChatColor.RED + "This shop only sells items / このショップは販売専用です" + ChatColor.RESET);
+            return;
+        }
         ShopItem si = ch.getItem();
-        String currency = si.getPrices().keySet().stream().findFirst().orElse(null);
-        if (currency == null) return;
+        String currency = si.firstBuyCurrency();
+        if (currency == null) {
+            p.sendMessage(ChatColor.RED + "No buy price available / 買取価格が設定されていません" + ChatColor.RESET);
+            return;
+        }
         Map<String, Object> payload = new HashMap<>();
         payload.put("player_uuid", p.getUniqueId().toString());
         payload.put("shop_id", ch.getShopId());
@@ -692,10 +738,26 @@ public class ShopListener implements Listener {
             String dn = stack.getItemMeta() != null ? stack.getItemMeta().getDisplayName() : "";
             payload.put("display_name", dn);
             payload.put("sale_name", existing.getSaleName());
-            String currency = existing.getPrices().keySet().stream().findFirst().orElse(null);
+            String currency = existing.firstSellCurrency();
+            if (currency == null) {
+                currency = existing.firstBuyCurrency();
+            }
             payload.put("currency", currency);
-            int price = currency != null ? existing.getPrices().get(currency) : 0;
-            payload.put("price", price);
+            ShopItem.ShopPrice priceInfo = currency != null ? existing.getPrices().get(currency) : null;
+            int sellPrice = 0;
+            if (priceInfo != null) {
+                if (priceInfo.getSellPrice() != null) {
+                    sellPrice = priceInfo.getSellPrice();
+                } else if (priceInfo.getBuyPrice() != null) {
+                    sellPrice = priceInfo.getBuyPrice();
+                }
+            }
+            Integer buyPrice = priceInfo != null ? priceInfo.getBuyPrice() : null;
+            payload.put("price", sellPrice);
+            payload.put("sell_price", sellPrice);
+            if (buyPrice != null) {
+                payload.put("buy_price", buyPrice);
+            }
             payload.put("timestamp", System.currentTimeMillis() / 1000);
             Request req = new Request.Builder()
                     .url(plugin.getBaseUrl() + "/api/shop/add_stock")
@@ -718,7 +780,7 @@ public class ShopListener implements Listener {
             stack.setAmount(Math.max(remain, 0));
             PendingSale pending = new PendingSale(holder.getShopId(), blob, single, qty, System.currentTimeMillis() + 20000, holder);
             pendingSales.put(p.getUniqueId(), pending);
-            p.sendMessage(ChatColor.YELLOW + "Enter sale name and price (e.g. apple 100) / 販売名と金額を入力してください (例: apple 100)" + ChatColor.RESET);
+            p.sendMessage(ChatColor.YELLOW + "Enter sale name, sell price, and optional buy price (e.g. apple 100 80) / 販売名と販売価格、必要に応じて買取価格を入力してください (例: apple 100 80)" + ChatColor.RESET);
             Bukkit.getScheduler().runTaskLater(plugin, () -> {
                 PendingSale ps = pendingSales.get(p.getUniqueId());
                 if (ps != null && ps.deadline <= System.currentTimeMillis()) {
@@ -796,11 +858,26 @@ public class ShopListener implements Listener {
             return;
         }
         String saleName = parts[0];
-        int price;
-        try { price = parseAmount(parts[1]); } catch (NumberFormatException ex) {
+        int sellPrice;
+        try { sellPrice = parseAmount(parts[1]); } catch (NumberFormatException ex) {
             e.getPlayer().sendMessage(ChatColor.RED + "Cancelled / キャンセルされました" + ChatColor.RESET);
             Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
             return;
+        }
+        Integer buyPrice = null;
+        if (parts.length >= 3) {
+            try {
+                buyPrice = parseAmount(parts[2]);
+            } catch (NumberFormatException ex) {
+                e.getPlayer().sendMessage(ChatColor.RED + "Cancelled / キャンセルされました" + ChatColor.RESET);
+                Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
+                return;
+            }
+            if (buyPrice > sellPrice) {
+                e.getPlayer().sendMessage(ChatColor.RED + "Buy price cannot exceed sell price / 買取額は販売額を超えられません" + ChatColor.RESET);
+                Bukkit.getScheduler().runTask(plugin, () -> e.getPlayer().getInventory().addItem(ps.item));
+                return;
+            }
         }
         Map<String, Object> payload = new HashMap<>();
         payload.put("owner_uuid", e.getPlayer().getUniqueId().toString());
@@ -811,7 +888,11 @@ public class ShopListener implements Listener {
         String dn = ps.item.getItemMeta() != null ? ps.item.getItemMeta().getDisplayName() : "";
         payload.put("display_name", dn);
         payload.put("sale_name", saleName);
-        payload.put("price", price);
+        payload.put("price", sellPrice);
+        payload.put("sell_price", sellPrice);
+        if (buyPrice != null) {
+            payload.put("buy_price", buyPrice);
+        }
         payload.put("currency", null);
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         Request req = new Request.Builder()
@@ -832,14 +913,17 @@ public class ShopListener implements Listener {
             Inventory inv = holder.getInventory();
             int slot = inv.firstEmpty();
             if (slot >= 0) {
-                Map<String, Integer> priceMap = new HashMap<>();
-                priceMap.put("", price);
+                Map<String, ShopItem.ShopPrice> priceMap = new HashMap<>();
+                priceMap.put("", new ShopItem.ShopPrice(sellPrice, buyPrice));
                 ItemStack display = ps.item.clone();
                 ItemMeta meta = display.getItemMeta();
                 List<String> lore = new ArrayList<>();
                 lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + saleName);
                 lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + ps.qty);
-                lore.add(ChatColor.GREEN + "Price: " + ChatColor.YELLOW + formatAmount(price));
+                lore.add(ChatColor.GREEN + "Sell: " + ChatColor.YELLOW + formatAmount(sellPrice));
+                if (buyPrice != null) {
+                    lore.add(ChatColor.AQUA + "Buy: " + ChatColor.YELLOW + formatAmount(buyPrice));
+                }
                 meta.setLore(lore);
                 display.setItemMeta(meta);
                 inv.setItem(slot, display);

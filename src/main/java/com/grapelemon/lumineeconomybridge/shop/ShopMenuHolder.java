@@ -14,6 +14,7 @@ public class ShopMenuHolder implements InventoryHolder {
     private String currency;
     private int quantity = 1;
     private final java.util.Set<String> ownerUuids = new java.util.HashSet<>();
+    private String tradeMode = "both";
 
     public ShopMenuHolder(String shopId) {
         this.shopId = shopId;
@@ -54,6 +55,22 @@ public class ShopMenuHolder implements InventoryHolder {
 
     public void addOwnerUuid(String uuid) {
         ownerUuids.add(uuid);
+    }
+
+    public void setTradeMode(String mode) {
+        this.tradeMode = mode != null ? mode : "both";
+    }
+
+    public String getTradeMode() {
+        return tradeMode;
+    }
+
+    public boolean canPlayerPurchase() {
+        return !"buy".equalsIgnoreCase(tradeMode);
+    }
+
+    public boolean canPlayerSell() {
+        return !"sell".equalsIgnoreCase(tradeMode);
     }
 
     public String getCurrency() {

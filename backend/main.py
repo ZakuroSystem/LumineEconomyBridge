@@ -222,7 +222,8 @@ with conn:
             created_at INTEGER NOT NULL,
             last_activity_at INTEGER NOT NULL,
             listed INTEGER NOT NULL DEFAULT 1,
-            account_uuid TEXT
+            account_uuid TEXT,
+            trade_mode TEXT NOT NULL DEFAULT 'both'
         )
         """
     )
@@ -232,6 +233,12 @@ with conn:
         pass
     try:
         conn.execute("ALTER TABLE shops ADD COLUMN listed INTEGER NOT NULL DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute(
+            "ALTER TABLE shops ADD COLUMN trade_mode TEXT NOT NULL DEFAULT 'both'"
+        )
     except sqlite3.OperationalError:
         pass
     conn.execute("UPDATE shops SET account_uuid=owner_uuid WHERE account_uuid IS NULL")
@@ -280,11 +287,19 @@ with conn:
             item_key TEXT NOT NULL,
             currency TEXT NOT NULL,
             price INTEGER NOT NULL,
+            buy_price INTEGER,
             PRIMARY KEY(shop_id, item_key, currency),
             FOREIGN KEY(shop_id) REFERENCES shops(shop_id),
             FOREIGN KEY(item_key) REFERENCES shop_items(item_key)
         )
         """
+    )
+    try:
+        conn.execute("ALTER TABLE shop_prices ADD COLUMN buy_price INTEGER")
+    except sqlite3.OperationalError:
+        pass
+    conn.execute(
+        "UPDATE shop_prices SET buy_price=price WHERE buy_price IS NULL"
     )
     conn.execute(
         """
@@ -702,6 +717,8 @@ class ShopAddStockPayload(BaseModel):
     price: int
     sale_name: Optional[str] = None
     currency: Optional[str] = None
+    sell_price: Optional[int] = None
+    buy_price: Optional[int] = None
 
 
 class ShopTakeStockPayload(BaseModel):
@@ -719,6 +736,7 @@ class ShopSetPricePayload(BaseModel):
     sale_name: Optional[str] = None
     currency: str
     price: int
+    price_kind: str = "sell"
 
 
 class ShopPingPayload(BaseModel):
@@ -770,6 +788,12 @@ class ShopAccountPayload(BaseModel):
     owner_uuid: str
     shop_id: str
     account_id: str
+
+
+class ShopModePayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    mode: str
 
 
 class ShopVisitPayload(BaseModel):
@@ -2432,7 +2456,7 @@ async def shop_items(shop_id: str):
     start = time.time()
     with transaction() as cur:
         srow = cur.execute(
-            "SELECT owner_uuid,status,last_activity_at FROM shops WHERE shop_id=?",
+            "SELECT owner_uuid,status,last_activity_at,trade_mode FROM shops WHERE shop_id=?",
             (shop_id,),
         ).fetchone()
         owners: List[str] = []
@@ -2479,13 +2503,21 @@ async def shop_items(shop_id: str):
             ).fetchone()
             for r in rows:
                 price_rows = cur.execute(
-                    "SELECT currency, price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                    "SELECT currency, price, buy_price FROM shop_prices WHERE shop_id=? AND item_key=?",
                     (shop_id, r["item_key"]),
                 ).fetchall()
-                prices = {pr["currency"]: pr["price"] for pr in price_rows}
-                if sale:
-                    for k in list(prices.keys()):
-                        prices[k] = int(prices[k] * (100 - sale["pct"]) / 100)
+                prices = {}
+                for pr in price_rows:
+                    sell_price = pr["price"]
+                    buy_price = pr["buy_price"]
+                    if sale and sell_price is not None:
+                        sell_price = int(sell_price * (100 - sale["pct"]) / 100)
+                    price_entry = {}
+                    if sell_price is not None:
+                        price_entry["sell"] = sell_price
+                    if buy_price is not None:
+                        price_entry["buy"] = buy_price
+                    prices[pr["currency"]] = price_entry
                 items.append(
                     {
                         "item_key": r["item_key"],
@@ -2501,6 +2533,7 @@ async def shop_items(shop_id: str):
                 "status": "active",
                 "owner_uuid": srow["owner_uuid"],
                 "owners": owners,
+                "trade_mode": srow["trade_mode"] if srow["trade_mode"] else "both",
                 "items": items,
             }
             if sale:
@@ -2591,7 +2624,7 @@ async def shop_buy(payload: ShopBuyPayload):
                 )
         else:
             shop = cur.execute(
-                "SELECT owner_uuid, account_uuid, status FROM shops WHERE shop_id=?",
+                "SELECT owner_uuid, account_uuid, status, trade_mode FROM shops WHERE shop_id=?",
                 (payload.shop_id,),
             ).fetchone()
             location = cur.execute(
@@ -2602,6 +2635,8 @@ async def shop_buy(payload: ShopBuyPayload):
                 reason = "shop_not_found"
             elif shop["status"] != "active":
                 reason = "shop_suspended"
+            elif shop["trade_mode"] == "buy":
+                reason = "shop_not_selling"
             else:
                 owner = shop["owner_uuid"]
                 account = shop["account_uuid"] or owner
@@ -2616,7 +2651,9 @@ async def shop_buy(payload: ShopBuyPayload):
                         "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
                         (payload.shop_id, payload.item_key, payload.currency),
                     ).fetchone()
-                    if not price_row:
+                    if not price_row or price_row["price"] is None:
+                        reason = "invalid_currency"
+                    elif price_row["price"] <= 0:
                         reason = "invalid_currency"
                     else:
                         base_price = price_row["price"] * payload.qty
@@ -2832,7 +2869,7 @@ async def shop_sell(payload: ShopSellPayload):
                 )
         else:
             shop = cur.execute(
-                "SELECT owner_uuid, account_uuid, status FROM shops WHERE shop_id=?",
+                "SELECT owner_uuid, account_uuid, status, trade_mode FROM shops WHERE shop_id=?",
                 (payload.shop_id,),
             ).fetchone()
             location = cur.execute(
@@ -2843,17 +2880,21 @@ async def shop_sell(payload: ShopSellPayload):
                 reason = "shop_not_found"
             elif shop["status"] != "active":
                 reason = "shop_suspended"
+            elif shop["trade_mode"] == "sell":
+                reason = "shop_not_buying"
             else:
                 owner = shop["owner_uuid"]
                 account = shop["account_uuid"] or owner
                 price_row = cur.execute(
-                    "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
+                    "SELECT price, buy_price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
                     (payload.shop_id, payload.item_key, payload.currency),
                 ).fetchone()
-                if not price_row:
+                if not price_row or price_row["buy_price"] is None:
+                    reason = "invalid_currency"
+                elif price_row["buy_price"] <= 0:
                     reason = "invalid_currency"
                 else:
-                    total_price = price_row["price"] * payload.qty
+                    total_price = price_row["buy_price"] * payload.qty
                     if get_balance(cur, account, payload.currency) < total_price:
                         reason = "insufficient_funds"
                     elif not transfer(
@@ -2985,7 +3026,7 @@ async def shop_add_stock(
     sale_name = payload.sale_name or payload.display_name or payload.material
     with transaction() as cur:
         shop = cur.execute(
-            "SELECT status FROM shops WHERE shop_id=?",
+            "SELECT status, trade_mode FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
         if not shop or not is_shop_owner(cur, payload.shop_id, payload.owner_uuid) or shop["status"] != "active":
@@ -2993,11 +3034,28 @@ async def shop_add_stock(
             reason = "not_owner"
         else:
             ts = int(time.time())
-            cur.execute(
-                "INSERT OR IGNORE INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
-                (item_key, payload.material, payload.display_name, blob),
+            sell_price = (
+                payload.sell_price
+                if payload.sell_price is not None
+                else payload.price
             )
-            cur.execute(
+            buy_price = (
+                payload.buy_price
+                if payload.buy_price is not None
+                else payload.price
+            )
+            if sell_price is None or sell_price < 0 or buy_price is None or buy_price < 0:
+                result = "error"
+                reason = "invalid_price"
+            elif shop["trade_mode"] == "both" and buy_price > sell_price:
+                result = "error"
+                reason = "buy_exceeds_sell"
+            else:
+                cur.execute(
+                    "INSERT OR IGNORE INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+                    (item_key, payload.material, payload.display_name, blob),
+                )
+                cur.execute(
                 """
                 INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at)
                 VALUES(?,?,?,?,?)
@@ -3005,18 +3063,21 @@ async def shop_add_stock(
                 """,
                 (payload.shop_id, item_key, sale_name, payload.qty, ts),
             )
-            currency = payload.currency or get_default_currency(cur)
-            cur.execute(
-                """
-                INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
-                ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
-                """,
-                (payload.shop_id, item_key, currency, payload.price),
-            )
-            cur.execute(
-                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-                (ts, payload.shop_id),
-            )
+                currency = payload.currency or get_default_currency(cur)
+                cur.execute(
+                    """
+                    INSERT INTO shop_prices(shop_id, item_key, currency, price, buy_price)
+                    VALUES(?,?,?,?,?)
+                    ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET
+                        price=excluded.price,
+                        buy_price=excluded.buy_price
+                    """,
+                    (payload.shop_id, item_key, currency, sell_price, buy_price),
+                )
+                cur.execute(
+                    "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                    (ts, payload.shop_id),
+                )
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_add_stock",
@@ -3026,7 +3087,7 @@ async def shop_add_stock(
         "item_key": item_key,
         "qty": payload.qty,
         "sale_name": sale_name,
-        "price": payload.price,
+        "price": sell_price if 'sell_price' in locals() else payload.price,
         "result": result,
         "reason": reason,
         "latency_ms": latency_ms,
@@ -3134,7 +3195,7 @@ async def shop_set_price(
     reason: Optional[str] = None
     with transaction() as cur:
         shop = cur.execute(
-            "SELECT status FROM shops WHERE shop_id=?",
+            "SELECT status, trade_mode FROM shops WHERE shop_id=?",
             (payload.shop_id,),
         ).fetchone()
         if not shop or not is_shop_owner(cur, payload.shop_id, payload.owner_uuid) or shop["status"] != "active":
@@ -3157,18 +3218,79 @@ async def shop_set_price(
                     result = "error"
                     reason = "invalid_currency"
                 else:
-                    ts = int(time.time())
-                    cur.execute(
-                        """
-                        INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)
-                        ON CONFLICT(shop_id,item_key,currency) DO UPDATE SET price=excluded.price
-                        """,
-                        (payload.shop_id, item_key, payload.currency, payload.price),
-                    )
-                    cur.execute(
-                        "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-                        (ts, payload.shop_id),
-                    )
+                    kind = (payload.price_kind or "sell").lower()
+                    if kind not in {"sell", "buy"}:
+                        result = "error"
+                        reason = "invalid_price_kind"
+                    elif payload.price < 0:
+                        result = "error"
+                        reason = "invalid_price"
+                    else:
+                        existing = cur.execute(
+                            "SELECT price, buy_price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
+                            (payload.shop_id, item_key, payload.currency),
+                        ).fetchone()
+                        current_sell = existing["price"] if existing else None
+                        current_buy = existing["buy_price"] if existing else None
+                        ts = int(time.time())
+                        if kind == "buy":
+                            if shop["trade_mode"] == "sell":
+                                result = "error"
+                                reason = "shop_not_buying"
+                            elif shop["trade_mode"] == "both" and current_sell is not None and payload.price > current_sell:
+                                result = "error"
+                                reason = "buy_exceeds_sell"
+                            else:
+                                if existing:
+                                    cur.execute(
+                                        "UPDATE shop_prices SET buy_price=? WHERE shop_id=? AND item_key=? AND currency=?",
+                                        (payload.price, payload.shop_id, item_key, payload.currency),
+                                    )
+                                else:
+                                    base_sell = current_sell if current_sell is not None else payload.price
+                                    cur.execute(
+                                        "INSERT INTO shop_prices(shop_id, item_key, currency, price, buy_price) VALUES(?,?,?,?,?)",
+                                        (
+                                            payload.shop_id,
+                                            item_key,
+                                            payload.currency,
+                                            base_sell,
+                                            payload.price,
+                                        ),
+                                    )
+                                cur.execute(
+                                    "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                                    (ts, payload.shop_id),
+                                )
+                        else:
+                            if shop["trade_mode"] == "buy":
+                                result = "error"
+                                reason = "shop_not_selling"
+                            elif shop["trade_mode"] == "both" and current_buy is not None and current_buy > payload.price:
+                                result = "error"
+                                reason = "buy_exceeds_sell"
+                            else:
+                                if existing:
+                                    cur.execute(
+                                        "UPDATE shop_prices SET price=? WHERE shop_id=? AND item_key=? AND currency=?",
+                                        (payload.price, payload.shop_id, item_key, payload.currency),
+                                    )
+                                else:
+                                    initial_buy = current_buy if current_buy is not None else payload.price
+                                    cur.execute(
+                                        "INSERT INTO shop_prices(shop_id, item_key, currency, price, buy_price) VALUES(?,?,?,?,?)",
+                                        (
+                                            payload.shop_id,
+                                            item_key,
+                                            payload.currency,
+                                            payload.price,
+                                            initial_buy,
+                                        ),
+                                    )
+                                cur.execute(
+                                    "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                                    (ts, payload.shop_id),
+                                )
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_set_price",
@@ -3179,6 +3301,7 @@ async def shop_set_price(
         "sale_name": payload.sale_name,
         "currency": payload.currency,
         "price": payload.price,
+        "price_kind": payload.price_kind,
         "result": result,
         "reason": reason,
         "latency_ms": latency_ms,
@@ -3405,6 +3528,43 @@ async def shop_listing(
             "latency_ms": latency_ms,
         }
     )
+    if result == "success":
+        return {"status": "success"}
+
+
+@app.post("/api/shop/mode")
+async def shop_mode(
+    payload: ShopModePayload, _auth: None = Depends(ensure_plugin_request)
+):
+    start = time.time()
+    result = "success"
+    reason: Optional[str] = None
+    mode = payload.mode.lower()
+    with transaction() as cur:
+        if mode not in {"buy", "sell", "both"}:
+            result = "error"
+            reason = "invalid_mode"
+        elif not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
+            result = "error"
+            reason = "not_owner"
+        else:
+            ts = int(time.time())
+            cur.execute(
+                "UPDATE shops SET trade_mode=?, last_activity_at=? WHERE shop_id=?",
+                (mode, ts, payload.shop_id),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_mode",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "mode": mode,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
     if result == "success":
         return {"status": "success"}
     return {"status": "error", "reason": reason}
@@ -3790,7 +3950,7 @@ def search_shops(
         "JOIN shop_items si ON sp.item_key=si.item_key",
         "JOIN shops s ON sp.shop_id=s.shop_id",
         "JOIN shop_locations sl ON s.shop_id=sl.shop_id",
-        "WHERE s.listed=1",
+        "WHERE s.listed=1 AND s.trade_mode!='buy' AND sp.price>0",
     ]
     params: List[Any] = []
     if currency:
