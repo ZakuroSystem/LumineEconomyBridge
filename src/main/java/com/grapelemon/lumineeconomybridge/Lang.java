@@ -25,12 +25,19 @@ public class Lang {
                         new InputStreamReader(defaultsStream, StandardCharsets.UTF_8));
                 config.setDefaults(defaults);
                 config.options().copyDefaults(true);
+                try {
+                    config.save(file);
+                } catch (Exception ignored) {
+                }
             }
         } catch (Exception ignored) {
         }
     }
 
     public static String get(String key) {
+        if (config == null) {
+            return key;
+        }
         String val = config.getString(key, key);
         return ChatColor.translateAlternateColorCodes('&', val);
     }
