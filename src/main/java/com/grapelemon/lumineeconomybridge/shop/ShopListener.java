@@ -145,9 +145,27 @@ public class ShopListener implements Listener {
         return ItemStack.deserializeBytes(bytes);
     }
 
-    private String itemToBase64(ItemStack item) {
+    private ItemStack prepareForSerialization(ItemStack item) {
         ItemStack clone = item.clone();
         clone.setAmount(1);
+        ItemMeta meta = clone.getItemMeta();
+        if (meta != null) {
+            PersistentDataContainer container = meta.getPersistentDataContainer();
+            container.remove(keyHopperItemTag);
+            container.remove(keyShop);
+            container.remove(keyId);
+            container.remove(keyOwner);
+            container.remove(keyHopper);
+            container.remove(keyHopperSlot);
+            container.remove(keyHopperItem);
+            container.remove(keyHopperShopOwner);
+            clone.setItemMeta(meta);
+        }
+        return clone;
+    }
+
+    private String itemToBase64(ItemStack item) {
+        ItemStack clone = prepareForSerialization(item);
         return Base64.getEncoder().encodeToString(clone.serializeAsBytes());
     }
 
@@ -694,8 +712,7 @@ public class ShopListener implements Listener {
                 @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
             });
         } else {
-            ItemStack single = stack.clone();
-            single.setAmount(1);
+            ItemStack single = prepareForSerialization(stack);
             int qty = 1;
             int remain = stack.getAmount() - 1;
             stack.setAmount(Math.max(remain, 0));

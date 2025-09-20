@@ -49,9 +49,25 @@ public class LeCommandExecutor implements CommandExecutor {
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
+    private final NamespacedKey keyShop;
+    private final NamespacedKey keyId;
+    private final NamespacedKey keyOwner;
+    private final NamespacedKey keyHopper;
+    private final NamespacedKey keyHopperSlot;
+    private final NamespacedKey keyHopperItem;
+    private final NamespacedKey keyHopperShopOwner;
+    private final NamespacedKey keyHopperItemTag;
 
     public LeCommandExecutor(LumineEconomyBridge plugin) {
         this.plugin = plugin;
+        this.keyShop = new NamespacedKey(plugin, "le_shop");
+        this.keyId = new NamespacedKey(plugin, "shop_id");
+        this.keyOwner = new NamespacedKey(plugin, "owner_uuid");
+        this.keyHopper = new NamespacedKey(plugin, "le_shop_hopper");
+        this.keyHopperSlot = new NamespacedKey(plugin, "le_shop_hopper_slot");
+        this.keyHopperItem = new NamespacedKey(plugin, "le_shop_hopper_item");
+        this.keyHopperShopOwner = new NamespacedKey(plugin, "shop_owner_uuid");
+        this.keyHopperItemTag = new NamespacedKey(plugin, "le_shop_item_keys");
     }
 
     @Override
@@ -1176,10 +1192,28 @@ public class LeCommandExecutor implements CommandExecutor {
         return AMT_FMT.format(amount / 1000.0);
     }
 
+    private ItemStack prepareForSerialization(ItemStack item) {
+        ItemStack clone = item.clone();
+        clone.setAmount(1);
+        ItemMeta meta = clone.getItemMeta();
+        if (meta != null) {
+            PersistentDataContainer container = meta.getPersistentDataContainer();
+            container.remove(keyHopperItemTag);
+            container.remove(keyShop);
+            container.remove(keyId);
+            container.remove(keyOwner);
+            container.remove(keyHopper);
+            container.remove(keyHopperSlot);
+            container.remove(keyHopperItem);
+            container.remove(keyHopperShopOwner);
+            clone.setItemMeta(meta);
+        }
+        return clone;
+    }
+
     private String computeItemKey(ItemStack item) {
         try {
-            ItemStack clone = item.clone();
-            clone.setAmount(1);
+            ItemStack clone = prepareForSerialization(item);
             byte[] bytes = clone.serializeAsBytes();
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] digest = md.digest(bytes);
@@ -1192,8 +1226,7 @@ public class LeCommandExecutor implements CommandExecutor {
     }
 
     private String itemToBase64(ItemStack item) {
-        ItemStack clone = item.clone();
-        clone.setAmount(1);
+        ItemStack clone = prepareForSerialization(item);
         return Base64.getEncoder().encodeToString(clone.serializeAsBytes());
     }
 
