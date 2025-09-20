@@ -11,6 +11,7 @@
 §a/le shop partner add §e<id> <player> §7- Add co-owner / 共同オーナー追加
 §a/le shop partner remove §e<id> <player> §7- Remove co-owner / 共同オーナー削除
 §a/le shop account §e<id> <company> §7- Set payout account / 取引口座設定
+§a/le shop hopper §e<id> <slot> §7- Issue linked hopper / ホッパー付与
 §a/le search §e<item> [currency] [min] [max] §7- Search shops / 検索
 §a/le admin add §e<player> §7- Add dashboard admin / 管理者追加
 

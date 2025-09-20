@@ -6,6 +6,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonArray;
 import okhttp3.*;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -219,6 +220,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop partner add " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Add co-owner / 共同オーナー追加");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner remove " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Remove co-owner / 共同オーナー削除");
                         p.sendMessage(ChatColor.GREEN + "/le shop account " + ChatColor.YELLOW + "<id> <company> " + ChatColor.GRAY + "- Set payout account / 取引口座設定");
+                        p.sendMessage(ChatColor.GREEN + "/le shop hopper " + ChatColor.YELLOW + "<id> <slot> " + ChatColor.GRAY + "- Issue hopper / ホッパー付与");
                         p.sendMessage(ChatColor.GREEN + "/le shop publish " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- List shop / 掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
@@ -256,6 +258,57 @@ public class LeCommandExecutor implements CommandExecutor {
                         barrel.setItemMeta(meta);
                         p.getInventory().addItem(barrel);
                         args = new String[]{"shop", "quick", shopId};
+                    } else if (args.length >= 4 && args[1].equalsIgnoreCase("hopper")) {
+                        if (args.length != 4) {
+                            p.sendMessage(ChatColor.YELLOW + "Usage: /le shop hopper <id> <slot>" + ChatColor.RESET);
+                            return true;
+                        }
+                        String shopId = args[2];
+                        int slotIndex;
+                        try {
+                            slotIndex = Integer.parseInt(args[3]);
+                        } catch (NumberFormatException ex) {
+                            p.sendMessage(ChatColor.RED + "Invalid slot / スロット番号が不正です" + ChatColor.RESET);
+                            return true;
+                        }
+                        JsonObject shopData = fetchShop(shopId);
+                        if (shopData == null) {
+                            p.sendMessage(ChatColor.RED + "Unable to fetch shop / ショップ情報を取得できません" + ChatColor.RESET);
+                            return true;
+                        }
+                        if (!isDirectOwner(p, shopData)) {
+                            p.sendMessage(ChatColor.RED + "Not your shop / 自分のショップではありません" + ChatColor.RESET);
+                            return true;
+                        }
+                        if (!shopData.has("items")) {
+                            p.sendMessage(ChatColor.RED + "No items available / アイテムがありません" + ChatColor.RESET);
+                            return true;
+                        }
+                        JsonArray items = shopData.getAsJsonArray("items");
+                        if (slotIndex < 0 || slotIndex >= items.size()) {
+                            p.sendMessage(ChatColor.RED + "Slot out of range / スロット番号が不正です" + ChatColor.RESET);
+                            return true;
+                        }
+                        JsonObject item = items.get(slotIndex).getAsJsonObject();
+                        String itemKey = item.get("item_key").getAsString();
+                        String ownerUuid = p.getUniqueId().toString();
+                        NamespacedKey hopperKey = new NamespacedKey(plugin, "le_shop_hopper");
+                        NamespacedKey keyId = new NamespacedKey(plugin, "shop_id");
+                        NamespacedKey keyOwner = new NamespacedKey(plugin, "owner_uuid");
+                        NamespacedKey keySlot = new NamespacedKey(plugin, "le_shop_hopper_slot");
+                        NamespacedKey keyItem = new NamespacedKey(plugin, "le_shop_hopper_item");
+                        ItemStack hopper = new ItemStack(Material.HOPPER);
+                        ItemMeta meta = hopper.getItemMeta();
+                        PersistentDataContainer container = meta.getPersistentDataContainer();
+                        container.set(hopperKey, PersistentDataType.BYTE, (byte) 1);
+                        container.set(keyId, PersistentDataType.STRING, shopId);
+                        container.set(keyOwner, PersistentDataType.STRING, ownerUuid);
+                        container.set(keySlot, PersistentDataType.INTEGER, slotIndex);
+                        container.set(keyItem, PersistentDataType.STRING, itemKey);
+                        meta.setDisplayName(ChatColor.GOLD + "Shop Hopper" + ChatColor.RESET);
+                        hopper.setItemMeta(meta);
+                        p.getInventory().addItem(hopper);
+                        p.sendMessage(ChatColor.GREEN + "Issued hopper for slot " + ChatColor.YELLOW + slotIndex + ChatColor.GREEN + " / ホッパーを付与しました" + ChatColor.RESET);
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
                         if (!hasShopPermission(p, shopId)) {
@@ -1011,6 +1064,39 @@ public class LeCommandExecutor implements CommandExecutor {
             }
         } catch (IOException ex) {
             plugin.getLogger().warning("Shop permission check failed: " + ex.getMessage());
+        }
+        return false;
+    }
+
+    private JsonObject fetchShop(String shopId) {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) return null;
+        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
+                .addQueryParameter("shop_id", shopId)
+                .build();
+        Request req = new Request.Builder().url(url).build();
+        try (Response res = http.newCall(req).execute()) {
+            if (!res.isSuccessful()) {
+                plugin.getLogger().warning("Fetch shop failed with status " + res.code());
+                return null;
+            }
+            String body = res.body() != null ? res.body().string() : "{}";
+            return JsonParser.parseString(body).getAsJsonObject();
+        } catch (IOException ex) {
+            plugin.getLogger().warning("Fetch shop failed: " + ex.getMessage());
+            return null;
+        }
+    }
+
+    private boolean isDirectOwner(Player p, JsonObject shopData) {
+        if (shopData == null || !shopData.has("owners")) {
+            return false;
+        }
+        String uuid = p.getUniqueId().toString();
+        for (JsonElement el : shopData.getAsJsonArray("owners")) {
+            if (uuid.equalsIgnoreCase(el.getAsString())) {
+                return true;
+            }
         }
         return false;
     }

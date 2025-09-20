@@ -138,7 +138,7 @@ public class LeTabCompleter implements TabCompleter {
                 return names;
             }
             if (first.equals("shop")) {
-                return Stream.of("create", "add", "take", "price", "remove", "partner", "account", "reopen", "help")
+                return Stream.of("create", "add", "take", "price", "remove", "partner", "account", "reopen", "hopper", "help")
                         .filter(s -> s.startsWith(args[1].toLowerCase()))
                         .toList();
             }
@@ -237,6 +237,25 @@ public class LeTabCompleter implements TabCompleter {
                             .filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase()))
                             .collect(Collectors.toList());
                 }
+            }
+            if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("hopper")) {
+                String shopId = args[2];
+                ItemCache cache = itemCache.get(shopId);
+                long now = System.currentTimeMillis();
+                if (cache == null || now - cache.fetched > 5000) {
+                    refreshItems(shopId);
+                    cache = itemCache.get(shopId);
+                }
+                if (cache != null && !cache.itemKeys.isEmpty()) {
+                    List<String> slots = new ArrayList<>();
+                    for (int i = 0; i < cache.itemKeys.size(); i++) {
+                        slots.add(Integer.toString(i));
+                    }
+                    return slots.stream()
+                            .filter(s -> s.startsWith(args[3]))
+                            .collect(Collectors.toList());
+                }
+                return Collections.singletonList("<slot>");
             }
             if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("account")) {
                 return Collections.singletonList("<company>");
