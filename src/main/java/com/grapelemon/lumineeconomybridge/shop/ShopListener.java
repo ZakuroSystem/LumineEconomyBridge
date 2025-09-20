@@ -61,6 +61,7 @@ public class ShopListener implements Listener {
     private final NamespacedKey keyHopper;
     private final NamespacedKey keyHopperSlot;
     private final NamespacedKey keyHopperItem;
+    private final NamespacedKey keyHopperShopOwner;
     private final NamespacedKey keyHopperItemTag;
     private static final long CACHE_MS = 3000;
     private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
@@ -100,12 +101,14 @@ public class ShopListener implements Listener {
     private static class HopperData {
         final String shopId;
         final String ownerUuid;
+        final String shopOwnerUuid;
         final List<HopperBinding> bindings;
         final Location location;
 
-        HopperData(String shopId, String ownerUuid, List<HopperBinding> bindings, Location location) {
+        HopperData(String shopId, String ownerUuid, String shopOwnerUuid, List<HopperBinding> bindings, Location location) {
             this.shopId = shopId;
             this.ownerUuid = ownerUuid;
+            this.shopOwnerUuid = shopOwnerUuid;
             this.bindings = bindings;
             this.location = location;
         }
@@ -127,6 +130,7 @@ public class ShopListener implements Listener {
         this.keyHopper = new NamespacedKey(plugin, "le_shop_hopper");
         this.keyHopperSlot = new NamespacedKey(plugin, "le_shop_hopper_slot");
         this.keyHopperItem = new NamespacedKey(plugin, "le_shop_hopper_item");
+        this.keyHopperShopOwner = new NamespacedKey(plugin, "shop_owner_uuid");
         this.keyHopperItemTag = new NamespacedKey(plugin, "le_shop_item_keys");
     }
 
@@ -167,11 +171,16 @@ public class ShopListener implements Listener {
         if (meta == null) return;
         PersistentDataContainer c = meta.getPersistentDataContainer();
         if (!c.has(keyShop, PersistentDataType.BYTE) && !c.has(keyHopper, PersistentDataType.BYTE)) return;
+        Player player = e.getPlayer();
         String expected = c.get(keyOwner, PersistentDataType.STRING);
-        String placer = e.getPlayer().getUniqueId().toString();
-        if (expected == null || !placer.equals(expected)) {
+        String shopOwnerBound = c.get(keyHopperShopOwner, PersistentDataType.STRING);
+        String placer = player.getUniqueId().toString();
+        boolean hasOverride = player.isOp() || player.hasPermission("lumineeconomy.admin");
+        boolean matchesIssuer = expected != null && expected.equals(placer);
+        boolean matchesShopOwner = shopOwnerBound != null && shopOwnerBound.equals(placer);
+        if (!hasOverride && !matchesIssuer && !matchesShopOwner) {
             e.setCancelled(true);
-            e.getPlayer().sendMessage(ChatColor.RED + "You are not the owner / あなたはオーナーではありません" + ChatColor.RESET);
+            player.sendMessage(ChatColor.RED + "You are not the owner / あなたはオーナーではありません" + ChatColor.RESET);
             return;
         }
         String shopId = c.get(keyId, PersistentDataType.STRING);
@@ -193,6 +202,9 @@ public class ShopListener implements Listener {
                 String itemKeys = c.get(keyHopperItem, PersistentDataType.STRING);
                 if (itemKeys != null) {
                     tc.set(keyHopperItem, PersistentDataType.STRING, itemKeys);
+                }
+                if (shopOwnerBound != null && !shopOwnerBound.isEmpty()) {
+                    tc.set(keyHopperShopOwner, PersistentDataType.STRING, shopOwnerBound);
                 }
             }
             if (shopId != null) tc.set(keyId, PersistentDataType.STRING, shopId);
@@ -883,7 +895,11 @@ public class ShopListener implements Listener {
         PersistentDataContainer c = tile.getPersistentDataContainer();
         String shopId = c.get(keyId, PersistentDataType.STRING);
         String ownerUuid = c.get(keyOwner, PersistentDataType.STRING);
-        if (shopId == null || ownerUuid == null || !shopId.equals(hopper.shopId) || !ownerUuid.equals(hopper.ownerUuid)) {
+        if (shopId == null || ownerUuid == null || !shopId.equals(hopper.shopId)) {
+            e.setCancelled(true);
+            return;
+        }
+        if (!ownerUuid.equals(hopper.shopOwnerUuid) && !ownerUuid.equals(hopper.ownerUuid)) {
             e.setCancelled(true);
             return;
         }
@@ -946,7 +962,12 @@ public class ShopListener implements Listener {
             return true;
         }
         String owner = container.get(keyOwner, PersistentDataType.STRING);
-        return owner != null && owner.equals(player.getUniqueId().toString());
+        String playerId = player.getUniqueId().toString();
+        if (owner != null && owner.equals(playerId)) {
+            return true;
+        }
+        String shopOwner = container.get(keyHopperShopOwner, PersistentDataType.STRING);
+        return shopOwner != null && shopOwner.equals(playerId);
     }
 
     private HopperData resolveHopper(Inventory inv) {
@@ -958,6 +979,10 @@ public class ShopListener implements Listener {
         String shopId = c.get(keyId, PersistentDataType.STRING);
         String owner = c.get(keyOwner, PersistentDataType.STRING);
         if (shopId == null || owner == null) return null;
+        String shopOwner = c.get(keyHopperShopOwner, PersistentDataType.STRING);
+        if (shopOwner == null || shopOwner.isEmpty()) {
+            shopOwner = owner;
+        }
         List<HopperBinding> bindings = new ArrayList<>();
         String slotList = c.get(keyHopperSlot, PersistentDataType.STRING);
         String itemList = c.get(keyHopperItem, PersistentDataType.STRING);
@@ -991,7 +1016,7 @@ public class ShopListener implements Listener {
         }
         if (bindings.isEmpty()) return null;
         Location loc = hopper.getLocation();
-        return new HopperData(shopId, owner, bindings, loc != null ? loc.clone() : null);
+        return new HopperData(shopId, owner, shopOwner, bindings, loc != null ? loc.clone() : null);
     }
 
     private String hopperKey(Location loc) {
@@ -1011,7 +1036,9 @@ public class ShopListener implements Listener {
             return;
         }
         Map<String, Object> payload = new HashMap<>();
-        payload.put("owner_uuid", hopper.ownerUuid);
+        String apiOwner = (hopper.shopOwnerUuid != null && !hopper.shopOwnerUuid.isEmpty())
+                ? hopper.shopOwnerUuid : hopper.ownerUuid;
+        payload.put("owner_uuid", apiOwner);
         payload.put("shop_id", hopper.shopId);
         payload.put("item_keys", itemKeys);
         payload.put("qty", 1);

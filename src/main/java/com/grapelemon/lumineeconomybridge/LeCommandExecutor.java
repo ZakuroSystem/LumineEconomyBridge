@@ -302,17 +302,20 @@ public class LeCommandExecutor implements CommandExecutor {
                         JsonObject item = items.get(slotIndex).getAsJsonObject();
                         String itemKey = item.get("item_key").getAsString();
                         String ownerUuid = p.getUniqueId().toString();
+                        String shopOwnerUuid = resolveShopOwner(shopData, ownerUuid);
                         NamespacedKey hopperKey = new NamespacedKey(plugin, "le_shop_hopper");
                         NamespacedKey keyId = new NamespacedKey(plugin, "shop_id");
                         NamespacedKey keyOwner = new NamespacedKey(plugin, "owner_uuid");
                         NamespacedKey keySlot = new NamespacedKey(plugin, "le_shop_hopper_slot");
                         NamespacedKey keyItem = new NamespacedKey(plugin, "le_shop_hopper_item");
+                        NamespacedKey keyShopOwner = new NamespacedKey(plugin, "shop_owner_uuid");
                         ItemStack hopper = new ItemStack(Material.HOPPER);
                         ItemMeta meta = hopper.getItemMeta();
                         PersistentDataContainer container = meta.getPersistentDataContainer();
                         container.set(hopperKey, PersistentDataType.BYTE, (byte) 1);
                         container.set(keyId, PersistentDataType.STRING, shopId);
                         container.set(keyOwner, PersistentDataType.STRING, ownerUuid);
+                        container.set(keyShopOwner, PersistentDataType.STRING, shopOwnerUuid);
                         container.set(keySlot, PersistentDataType.INTEGER, slotIndex);
                         container.set(keyItem, PersistentDataType.STRING, itemKey);
                         meta.setDisplayName(ChatColor.GOLD + "Shop Hopper" + ChatColor.RESET);
@@ -1076,6 +1079,28 @@ public class LeCommandExecutor implements CommandExecutor {
             plugin.getLogger().warning("Shop permission check failed: " + ex.getMessage());
         }
         return false;
+    }
+
+    private String resolveShopOwner(JsonObject shopData, String fallback) {
+        if (shopData != null) {
+            if (shopData.has("owner_uuid") && !shopData.get("owner_uuid").isJsonNull()) {
+                String owner = shopData.get("owner_uuid").getAsString();
+                if (!owner.isBlank()) {
+                    return owner;
+                }
+            }
+            if (shopData.has("owners")) {
+                for (JsonElement el : shopData.getAsJsonArray("owners")) {
+                    if (!el.isJsonNull()) {
+                        String owner = el.getAsString();
+                        if (!owner.isBlank()) {
+                            return owner;
+                        }
+                    }
+                }
+            }
+        }
+        return fallback;
     }
 
     private JsonObject fetchShop(String shopId) {
