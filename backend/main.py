@@ -658,8 +658,7 @@ class ShopAddStockPayload(BaseModel):
 class ShopTakeStockPayload(BaseModel):
     owner_uuid: str
     shop_id: str
-    item_key: Optional[str] = None
-    item_keys: Optional[List[str]] = None
+    item_key: str
     qty: int
 
 
@@ -3005,57 +3004,37 @@ async def shop_take_stock(
             result = "error"
             reason = "not_owner"
         else:
-            requested: List[str] = []
-            if payload.item_keys:
-                for key in payload.item_keys:
-                    if key:
-                        requested.append(key)
-            if payload.item_key:
-                requested.append(payload.item_key)
-            seen: Set[str] = set()
-            ordered: List[str] = []
-            for key in requested:
-                if key not in seen:
-                    seen.add(key)
-                    ordered.append(key)
-            if not ordered:
+            requested_first = payload.item_key
+            row = cur.execute(
+                "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                (payload.shop_id, payload.item_key),
+            ).fetchone()
+            if not row or row["stock"] < payload.qty:
                 result = "error"
-                reason = "missing_item_key"
+                reason = "insufficient_stock"
             else:
-                requested_first = ordered[0]
-                for candidate in ordered:
-                    row = cur.execute(
-                        "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
-                        (payload.shop_id, candidate),
-                    ).fetchone()
-                    if not row or row["stock"] < payload.qty:
-                        continue
-                    ts = int(time.time())
-                    cur.execute(
-                        "UPDATE shop_stock SET stock=stock-?, updated_at=? WHERE shop_id=? AND item_key=?",
-                        (payload.qty, ts, payload.shop_id, candidate),
+                ts = int(time.time())
+                cur.execute(
+                    "UPDATE shop_stock SET stock=stock-?, updated_at=? WHERE shop_id=? AND item_key=?",
+                    (payload.qty, ts, payload.shop_id, payload.item_key),
+                )
+                cur.execute(
+                    "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                    (ts, payload.shop_id),
+                )
+                item = cur.execute(
+                    "SELECT nbt_blob FROM shop_items WHERE item_key=?", (payload.item_key,)
+                ).fetchone()
+                if item:
+                    grant.append(
+                        {
+                            "item_key": payload.item_key,
+                            "qty": payload.qty,
+                            "nbt_blob": base64.b64encode(item["nbt_blob"]).decode("ascii"),
+                            "grant_token": secrets.token_hex(8),
+                        }
                     )
-                    cur.execute(
-                        "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-                        (ts, payload.shop_id),
-                    )
-                    item = cur.execute(
-                        "SELECT nbt_blob FROM shop_items WHERE item_key=?", (candidate,)
-                    ).fetchone()
-                    if item:
-                        grant.append(
-                            {
-                                "item_key": candidate,
-                                "qty": payload.qty,
-                                "nbt_blob": base64.b64encode(item["nbt_blob"]).decode("ascii"),
-                                "grant_token": secrets.token_hex(8),
-                            }
-                        )
-                    chosen_key = candidate
-                    break
-                if chosen_key is None:
-                    result = "error"
-                    reason = "insufficient_stock"
+                chosen_key = payload.item_key
     latency_ms = int((time.time() - start) * 1000)
     log_entry = {
         "type": "shop_take_stock",

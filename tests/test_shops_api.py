@@ -217,7 +217,7 @@ def test_shop_add_owner_requires_token_and_valid_owner():
         assert [row["owner_uuid"] for row in owners] == ["owner-s5", "partner-s5"]
 
 
-def test_shop_take_stock_uses_first_available_item_key():
+def test_shop_take_stock_uses_requested_item_key():
     with main.conn:
         main.conn.execute("DELETE FROM shop_stock")
         main.conn.execute("DELETE FROM shop_items")
@@ -257,7 +257,7 @@ def test_shop_take_stock_uses_first_available_item_key():
     payload = {
         "owner_uuid": "owner-hop",
         "shop_id": "hopper-shop",
-        "item_keys": [key_one, key_two],
+        "item_key": key_two,
         "qty": 1,
     }
     with TestClient(app) as client:
@@ -272,7 +272,7 @@ def test_shop_take_stock_uses_first_available_item_key():
             json={
                 "owner_uuid": "owner-hop",
                 "shop_id": "hopper-shop",
-                "item_keys": [key_one],
+                "item_key": key_one,
                 "qty": 1,
             },
             headers=headers,

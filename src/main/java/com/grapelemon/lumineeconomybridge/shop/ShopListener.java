@@ -84,35 +84,19 @@ public class ShopListener implements Listener {
         }
     }
 
-    private static class HopperBinding {
-        final int slot;
-        final String itemKey;
-
-        HopperBinding(int slot, String itemKey) {
-            this.slot = slot;
-            this.itemKey = itemKey;
-        }
-    }
-
     private static class HopperData {
         final String shopId;
         final String ownerUuid;
-        final List<HopperBinding> bindings;
+        final int slot;
+        final String itemKey;
         final Location location;
 
-        HopperData(String shopId, String ownerUuid, List<HopperBinding> bindings, Location location) {
+        HopperData(String shopId, String ownerUuid, int slot, String itemKey, Location location) {
             this.shopId = shopId;
             this.ownerUuid = ownerUuid;
-            this.bindings = bindings;
+            this.slot = slot;
+            this.itemKey = itemKey;
             this.location = location;
-        }
-
-        List<String> itemKeys() {
-            List<String> keys = new ArrayList<>();
-            for (HopperBinding binding : bindings) {
-                keys.add(binding.itemKey);
-            }
-            return keys;
         }
     }
 
@@ -179,16 +163,18 @@ public class ShopListener implements Listener {
             }
             if (c.has(keyHopper, PersistentDataType.BYTE)) {
                 tc.set(keyHopper, PersistentDataType.BYTE, (byte)1);
-                String slotList = c.get(keyHopperSlot, PersistentDataType.STRING);
-                if (slotList != null && !slotList.isEmpty()) {
-                    tc.set(keyHopperSlot, PersistentDataType.STRING, slotList);
+                Integer slot = c.get(keyHopperSlot, PersistentDataType.INTEGER);
+                if (slot != null) {
+                    tc.set(keyHopperSlot, PersistentDataType.INTEGER, slot);
                 } else {
-                    Integer slot = c.get(keyHopperSlot, PersistentDataType.INTEGER);
-                    if (slot != null) tc.set(keyHopperSlot, PersistentDataType.INTEGER, slot);
+                    String legacy = c.get(keyHopperSlot, PersistentDataType.STRING);
+                    if (legacy != null && !legacy.isEmpty()) {
+                        tc.set(keyHopperSlot, PersistentDataType.STRING, legacy);
+                    }
                 }
-                String itemKeys = c.get(keyHopperItem, PersistentDataType.STRING);
-                if (itemKeys != null) {
-                    tc.set(keyHopperItem, PersistentDataType.STRING, itemKeys);
+                String itemKey = c.get(keyHopperItem, PersistentDataType.STRING);
+                if (itemKey != null && !itemKey.isEmpty()) {
+                    tc.set(keyHopperItem, PersistentDataType.STRING, itemKey);
                 }
             }
             if (shopId != null) tc.set(keyId, PersistentDataType.STRING, shopId);
@@ -861,40 +847,30 @@ public class ShopListener implements Listener {
         String shopId = c.get(keyId, PersistentDataType.STRING);
         String owner = c.get(keyOwner, PersistentDataType.STRING);
         if (shopId == null || owner == null) return null;
-        List<HopperBinding> bindings = new ArrayList<>();
-        String slotList = c.get(keyHopperSlot, PersistentDataType.STRING);
-        String itemList = c.get(keyHopperItem, PersistentDataType.STRING);
-        if (slotList != null && itemList != null) {
-            String[] slotParts = slotList.split(",");
-            String[] itemParts = itemList.split(",");
-            if (slotParts.length == itemParts.length) {
-                for (int i = 0; i < slotParts.length; i++) {
-                    String sPart = slotParts[i].trim();
-                    String iPart = itemParts[i].trim();
-                    if (sPart.isEmpty() || iPart.isEmpty()) continue;
+        Integer slot = c.get(keyHopperSlot, PersistentDataType.INTEGER);
+        if (slot == null) {
+            String slotString = c.get(keyHopperSlot, PersistentDataType.STRING);
+            if (slotString != null && !slotString.isEmpty()) {
+                String[] parts = slotString.split(",");
+                for (String part : parts) {
+                    String trimmed = part.trim();
+                    if (trimmed.isEmpty()) continue;
                     try {
-                        int slot = Integer.parseInt(sPart);
-                        bindings.add(new HopperBinding(slot, iPart));
+                        slot = Integer.parseInt(trimmed);
+                        break;
                     } catch (NumberFormatException ignored) {
-                        // skip invalid slot entry
                     }
                 }
             }
         }
-        if (bindings.isEmpty()) {
-            Integer slot = c.get(keyHopperSlot, PersistentDataType.INTEGER);
-            String singleKey = c.get(keyHopperItem, PersistentDataType.STRING);
-            if (singleKey != null && singleKey.contains(",")) {
-                String[] parts = singleKey.split(",");
-                singleKey = parts.length > 0 ? parts[0].trim() : null;
-            }
-            if (slot != null && singleKey != null && !singleKey.isEmpty()) {
-                bindings.add(new HopperBinding(slot, singleKey));
-            }
+        String itemKey = c.get(keyHopperItem, PersistentDataType.STRING);
+        if (itemKey != null && itemKey.contains(",")) {
+            String[] parts = itemKey.split(",");
+            itemKey = parts.length > 0 ? parts[0].trim() : itemKey;
         }
-        if (bindings.isEmpty()) return null;
+        if (slot == null || itemKey == null || itemKey.isEmpty()) return null;
         Location loc = hopper.getLocation();
-        return new HopperData(shopId, owner, bindings, loc != null ? loc.clone() : null);
+        return new HopperData(shopId, owner, slot, itemKey, loc != null ? loc.clone() : null);
     }
 
     private String hopperKey(Location loc) {
@@ -908,15 +884,14 @@ public class ShopListener implements Listener {
             hopperCooldowns.put(key, System.currentTimeMillis() + HOPPER_EMPTY_INTERVAL_MS);
             return;
         }
-        List<String> itemKeys = hopper.itemKeys();
-        if (itemKeys.isEmpty()) {
+        if (hopper.itemKey == null || hopper.itemKey.isEmpty()) {
             hopperCooldowns.put(key, System.currentTimeMillis() + HOPPER_EMPTY_INTERVAL_MS);
             return;
         }
         Map<String, Object> payload = new HashMap<>();
         payload.put("owner_uuid", hopper.ownerUuid);
         payload.put("shop_id", hopper.shopId);
-        payload.put("item_keys", itemKeys);
+        payload.put("item_key", hopper.itemKey);
         payload.put("qty", 1);
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         Request req = new Request.Builder()
