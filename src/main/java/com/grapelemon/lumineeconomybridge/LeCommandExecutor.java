@@ -1099,6 +1099,9 @@ public class LeCommandExecutor implements CommandExecutor {
     }
 
     private boolean isDirectOwner(Player p, JsonObject shopData) {
+        if (p.hasPermission("lumineeconomy.admin") || p.isOp()) {
+            return true;
+        }
         if (shopData == null) {
             return false;
         }
