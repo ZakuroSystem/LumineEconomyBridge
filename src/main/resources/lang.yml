@@ -31,6 +31,10 @@ guide:
       name: "&dおすすめクエスト / Recommended Quests"
       lore_1: "&7未達成のクエストを表示 / Show quests you can clear next"
       lore_2: "&7報酬でクエストポイント獲得 / Earn quest points as rewards"
+    recommended_shops:
+      name: "&6おすすめショップ / Recommended Shops"
+      lore_1: "&7注目の販売・買取情報を表示 / View featured shop offers"
+      lore_2: "&7座標と取引内容を確認 / Check trade details and locations"
   shop:
     prompt: "&bショップIDを入力してください (cancel で中止) / Enter a shop ID (type cancel to abort)"
     invalid: "&cショップIDを入力してください。 / Please enter a shop ID."
@@ -52,3 +56,18 @@ guide:
     shop_sell:
       name: "&d依頼を達成 / Fulfill a request"
       description: "&7ショップにアイテムを補充して依頼を達成しましょう。 / Supply a shop's request to complete it."
+  shops:
+    menu_title: "&6おすすめショップ / Recommended Shops"
+    loading: "&7ショップ情報を取得中… / Loading shop data..."
+    error: "&cショップ情報を取得できませんでした / Unable to fetch shop recommendations"
+    none: "&7現在おすすめできるショップはありません / No shop recommendations available"
+    item_title: "&eショップ {shop} / Shop {shop}"
+    mode_sell: "&a取引形態: 販売のみ / Mode: Sell only"
+    mode_buy: "&b取引形態: 買取のみ / Mode: Buy only"
+    mode_both: "&6取引形態: 販売・買取 / Mode: Buy & Sell"
+    location: "&7座標: &f{world} {x} {y} {z} / Location: {world} {x} {y} {z}"
+    location_unknown: "&7座標: &c未登録 / Location: Unlisted"
+    no_listings: "&7取引情報が登録されていません / No trade listings available"
+    sell_line: "&a販売: &f{name} &7({prices}) / Sell {name}: {prices}"
+    buy_line: "&b買取: &f{name} &7({prices}) / Buy {name}: {prices}"
+    more_items: "&7…その他の取引あり / …additional trades available"

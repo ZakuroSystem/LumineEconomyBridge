@@ -22,6 +22,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.conversations.Conversation;
@@ -205,6 +206,12 @@ public class GuideBookListener implements Listener {
                 Lang.get("guide.option.quests.lore_2")));
         holder.bind(6, GuideAction.RECOMMENDED_QUESTS);
 
+        inv.setItem(8, buildMenuItem(Material.CHEST,
+                Lang.get("guide.option.recommended_shops.name"),
+                Lang.get("guide.option.recommended_shops.lore_1"),
+                Lang.get("guide.option.recommended_shops.lore_2")));
+        holder.bind(8, GuideAction.RECOMMENDED_SHOPS);
+
         player.openInventory(inv);
     }
 
@@ -248,6 +255,7 @@ public class GuideBookListener implements Listener {
                 promptForShopId(player);
             }
             case RECOMMENDED_QUESTS -> openQuestMenu(player);
+            case RECOMMENDED_SHOPS -> openRecommendedShopMenu(player);
             case BACK_TO_MAIN -> openMainMenu(player);
             default -> {
             }
@@ -407,7 +415,7 @@ public class GuideBookListener implements Listener {
         if (!isHolderOpen(player, inv)) {
             return;
         }
-        clearQuestSlots(holder, inv);
+        clearContentSlots(holder, inv);
         inv.setItem(13, buildMenuItem(Material.BARRIER, message));
     }
 
@@ -416,7 +424,7 @@ public class GuideBookListener implements Listener {
         if (!isHolderOpen(player, inv)) {
             return;
         }
-        clearQuestSlots(holder, inv);
+        clearContentSlots(holder, inv);
         if (questIds == null || questIds.isEmpty()) {
             inv.setItem(13, buildMenuItem(Material.PAPER, Lang.get("guide.quests.none")));
             return;
@@ -435,12 +443,253 @@ public class GuideBookListener implements Listener {
         }
     }
 
+    private void openRecommendedShopMenu(Player player) {
+        GuideBookMenuHolder holder = new GuideBookMenuHolder(MenuType.SHOPS);
+        Inventory inv = Bukkit.createInventory(holder, 27, Lang.get("guide.shops.menu_title"));
+        holder.setInventory(inv);
+        addBackButton(holder, inv);
+
+        inv.setItem(13, buildMenuItem(Material.PAPER, Lang.get("guide.shops.loading")));
+        player.openInventory(inv);
+        fetchRecommendedShops(player, holder);
+    }
+
+    private void fetchRecommendedShops(Player player, GuideBookMenuHolder holder) {
+        if (!plugin.isActive() || plugin.getHttpClient() == null) {
+            renderShopError(player, holder, Lang.get("guide.shops.error"));
+            return;
+        }
+        OkHttpClient client = plugin.getHttpClient();
+        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shops/recommended").newBuilder()
+                .addQueryParameter("limit", "5")
+                .build();
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                .get()
+                .build();
+        client.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException ex) {
+                plugin.getLogger().warning("Failed to fetch shops: " + ex.getMessage());
+                Bukkit.getScheduler().runTask(plugin, () ->
+                        renderShopError(player, holder, Lang.get("guide.shops.error")));
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    if (!response.isSuccessful()) {
+                        plugin.getLogger().warning("Shop API failed with status " + response.code());
+                        Bukkit.getScheduler().runTask(plugin, () ->
+                                renderShopError(player, holder, Lang.get("guide.shops.error")));
+                        return;
+                    }
+                    String body = response.body() != null ? response.body().string() : "{}";
+                    JsonObject obj = gson.fromJson(body, JsonObject.class);
+                    List<RecommendedShop> shops = new ArrayList<>();
+                    if (obj != null && obj.has("shops") && obj.get("shops").isJsonArray()) {
+                        JsonArray arr = obj.getAsJsonArray("shops");
+                        for (JsonElement element : arr) {
+                            if (!element.isJsonObject()) {
+                                continue;
+                            }
+                            JsonObject shopObj = element.getAsJsonObject();
+                            RecommendedShop shopInfo = new RecommendedShop();
+                            String shopId = safeString(shopObj, "shop_id");
+                            if (!shopId.isEmpty()) {
+                                shopInfo.shopId = shopId;
+                            }
+                            String mode = safeString(shopObj, "trade_mode");
+                            if (!mode.isEmpty()) {
+                                shopInfo.tradeMode = mode;
+                            }
+                            if (shopObj.has("location") && shopObj.get("location").isJsonObject()) {
+                                JsonObject locObj = shopObj.getAsJsonObject("location");
+                                ShopLocation location = new ShopLocation();
+                                String world = safeString(locObj, "world");
+                                if (!world.isEmpty()) {
+                                    location.world = world;
+                                }
+                                location.x = safeDouble(locObj, "x");
+                                location.y = safeDouble(locObj, "y");
+                                location.z = safeDouble(locObj, "z");
+                                if (location.world != null) {
+                                    shopInfo.location = location;
+                                }
+                            }
+                            if (shopObj.has("listings") && shopObj.get("listings").isJsonArray()) {
+                                JsonArray listingsArr = shopObj.getAsJsonArray("listings");
+                                for (JsonElement listingElement : listingsArr) {
+                                    if (!listingElement.isJsonObject()) {
+                                        continue;
+                                    }
+                                    JsonObject listingObj = listingElement.getAsJsonObject();
+                                    TradeListing listing = new TradeListing();
+                                    listing.name = safeString(listingObj, "name");
+                                    if (listingObj.has("sell") && listingObj.get("sell").isJsonArray()) {
+                                        JsonArray sellArr = listingObj.getAsJsonArray("sell");
+                                        for (JsonElement priceElement : sellArr) {
+                                            if (!priceElement.isJsonObject()) {
+                                                continue;
+                                            }
+                                            JsonObject priceObj = priceElement.getAsJsonObject();
+                                            String currency = safeString(priceObj, "currency");
+                                            Integer amount = safeInt(priceObj, "amount");
+                                            if (!currency.isEmpty() && amount != null) {
+                                                listing.sellPrices.add(new PriceInfo(currency, amount));
+                                            }
+                                        }
+                                    }
+                                    if (listingObj.has("buy") && listingObj.get("buy").isJsonArray()) {
+                                        JsonArray buyArr = listingObj.getAsJsonArray("buy");
+                                        for (JsonElement priceElement : buyArr) {
+                                            if (!priceElement.isJsonObject()) {
+                                                continue;
+                                            }
+                                            JsonObject priceObj = priceElement.getAsJsonObject();
+                                            String currency = safeString(priceObj, "currency");
+                                            Integer amount = safeInt(priceObj, "amount");
+                                            if (!currency.isEmpty() && amount != null) {
+                                                listing.buyPrices.add(new PriceInfo(currency, amount));
+                                            }
+                                        }
+                                    }
+                                    if (!listing.sellPrices.isEmpty() || !listing.buyPrices.isEmpty()) {
+                                        shopInfo.listings.add(listing);
+                                    }
+                                }
+                            }
+                            shops.add(shopInfo);
+                        }
+                    }
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            renderShopList(player, holder, shops));
+                }
+            }
+        });
+    }
+
+    private void renderShopError(Player player, GuideBookMenuHolder holder, String message) {
+        Inventory inv = holder.getInventory();
+        if (!isHolderOpen(player, inv)) {
+            return;
+        }
+        clearContentSlots(holder, inv);
+        inv.setItem(13, buildMenuItem(Material.BARRIER, message));
+    }
+
+    private void renderShopList(Player player, GuideBookMenuHolder holder, List<RecommendedShop> shops) {
+        Inventory inv = holder.getInventory();
+        if (!isHolderOpen(player, inv)) {
+            return;
+        }
+        clearContentSlots(holder, inv);
+        if (shops == null || shops.isEmpty()) {
+            inv.setItem(13, buildMenuItem(Material.PAPER, Lang.get("guide.shops.none")));
+            return;
+        }
+        int[] slots = {10, 12, 14, 16, 19, 21, 23};
+        int index = 0;
+        for (RecommendedShop shop : shops) {
+            if (index >= slots.length) {
+                break;
+            }
+            int slot = slots[index++];
+            if (slot >= inv.getSize()) {
+                continue;
+            }
+            inv.setItem(slot, createShopRecommendationItem(shop));
+        }
+    }
+
+    private ItemStack createShopRecommendationItem(RecommendedShop shop) {
+        ItemStack item = new ItemStack(Material.CHEST);
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return item;
+        }
+        String name = Lang.get("guide.shops.item_title").replace("{shop}", shop.shopId);
+        meta.setDisplayName(name);
+        List<String> lore = new ArrayList<>();
+        String mode = shop.tradeMode == null ? "both" : shop.tradeMode.toLowerCase(Locale.ROOT);
+        String modeKey = switch (mode) {
+            case "sell" -> "guide.shops.mode_sell";
+            case "buy" -> "guide.shops.mode_buy";
+            default -> "guide.shops.mode_both";
+        };
+        lore.add(Lang.get(modeKey));
+        if (shop.location != null && shop.location.isComplete()) {
+            String line = Lang.get("guide.shops.location")
+                    .replace("{world}", shop.location.world)
+                    .replace("{x}", formatCoordinate(shop.location.x))
+                    .replace("{y}", formatCoordinate(shop.location.y))
+                    .replace("{z}", formatCoordinate(shop.location.z));
+            lore.add(line);
+        } else {
+            lore.add(Lang.get("guide.shops.location_unknown"));
+        }
+        if (shop.listings.isEmpty()) {
+            lore.add(Lang.get("guide.shops.no_listings"));
+        } else {
+            int shown = 0;
+            for (TradeListing listing : shop.listings) {
+                if (shown >= 3) {
+                    lore.add(Lang.get("guide.shops.more_items"));
+                    break;
+                }
+                if (!listing.sellPrices.isEmpty()) {
+                    String prices = formatPriceList(listing.sellPrices);
+                    lore.add(Lang.get("guide.shops.sell_line")
+                            .replace("{name}", listing.name)
+                            .replace("{prices}", prices));
+                }
+                if (!listing.buyPrices.isEmpty()) {
+                    String prices = formatPriceList(listing.buyPrices);
+                    lore.add(Lang.get("guide.shops.buy_line")
+                            .replace("{name}", listing.name)
+                            .replace("{prices}", prices));
+                }
+                shown++;
+            }
+        }
+        meta.setLore(lore);
+        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private String formatCoordinate(Double value) {
+        if (value == null) {
+            return "-";
+        }
+        double rounded = Math.rint(value);
+        if (Math.abs(value - rounded) < 0.05) {
+            return String.format(Locale.US, "%.0f", rounded);
+        }
+        DecimalFormatSymbols symbols = new DecimalFormatSymbols(Locale.US);
+        DecimalFormat format = new DecimalFormat("#,##0.##", symbols);
+        format.setRoundingMode(RoundingMode.HALF_UP);
+        return format.format(value);
+    }
+
+    private String formatPriceList(List<PriceInfo> prices) {
+        List<String> parts = new ArrayList<>();
+        for (PriceInfo price : prices) {
+            String amount = formatAmount(price.amount);
+            String entry = ChatColor.WHITE + price.currency + ChatColor.GRAY + ": "
+                    + ChatColor.YELLOW + amount + ChatColor.RESET;
+            parts.add(entry);
+        }
+        return String.join(ChatColor.GRAY + ", ", parts);
+    }
+
     private boolean isHolderOpen(Player player, Inventory inv) {
         return inv != null && player.getOpenInventory() != null
                 && player.getOpenInventory().getTopInventory().equals(inv);
     }
 
-    private void clearQuestSlots(GuideBookMenuHolder holder, Inventory inv) {
+    private void clearContentSlots(GuideBookMenuHolder holder, Inventory inv) {
         if (inv == null) {
             return;
         }
@@ -456,5 +705,84 @@ public class GuideBookListener implements Listener {
         String desc = Lang.get("guide.quests." + questId + ".description");
         String reward = Lang.get("guide.quests.reward_line");
         return buildMenuItem(Material.ENCHANTED_BOOK, name, desc, reward);
+    }
+
+    private String safeString(JsonObject obj, String member) {
+        if (obj == null || member == null || !obj.has(member)) {
+            return "";
+        }
+        JsonElement element = obj.get(member);
+        if (element != null && element.isJsonPrimitive()) {
+            try {
+                return element.getAsString();
+            } catch (UnsupportedOperationException ignored) {
+                return "";
+            }
+        }
+        return "";
+    }
+
+    private Double safeDouble(JsonObject obj, String member) {
+        if (obj == null || member == null || !obj.has(member)) {
+            return null;
+        }
+        JsonElement element = obj.get(member);
+        if (element != null && element.isJsonPrimitive()) {
+            try {
+                return element.getAsDouble();
+            } catch (NumberFormatException | UnsupportedOperationException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Integer safeInt(JsonObject obj, String member) {
+        if (obj == null || member == null || !obj.has(member)) {
+            return null;
+        }
+        JsonElement element = obj.get(member);
+        if (element != null && element.isJsonPrimitive()) {
+            try {
+                return element.getAsInt();
+            } catch (NumberFormatException | UnsupportedOperationException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static class RecommendedShop {
+        private String shopId = "?";
+        private String tradeMode = "both";
+        private ShopLocation location;
+        private final List<TradeListing> listings = new ArrayList<>();
+    }
+
+    private static class ShopLocation {
+        private String world;
+        private Double x;
+        private Double y;
+        private Double z;
+
+        private boolean isComplete() {
+            return world != null && !world.isEmpty() && x != null && y != null && z != null;
+        }
+    }
+
+    private static class TradeListing {
+        private String name = "";
+        private final List<PriceInfo> sellPrices = new ArrayList<>();
+        private final List<PriceInfo> buyPrices = new ArrayList<>();
+    }
+
+    private static class PriceInfo {
+        private final String currency;
+        private final int amount;
+
+        private PriceInfo(String currency, int amount) {
+            this.currency = currency;
+            this.amount = amount;
+        }
     }
 }

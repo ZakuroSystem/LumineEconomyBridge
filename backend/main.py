@@ -1070,6 +1070,87 @@ def recommended_quests(
     return {"quests": quests}
 
 
+@app.get("/api/shops/recommended")
+def recommended_shops(
+    limit: int = 5,
+    _auth: None = Depends(ensure_plugin_request),
+):
+    capped_limit = max(1, min(limit, 7))
+    shop_rows = conn.execute(
+        """
+        SELECT shop_id, trade_mode
+        FROM shops
+        WHERE status='active' AND listed=1
+        ORDER BY RANDOM()
+        LIMIT ?
+        """,
+        (capped_limit,),
+    ).fetchall()
+    shops: List[Dict[str, object]] = []
+    for shop in shop_rows:
+        shop_id = shop["shop_id"]
+        trade_mode = (shop["trade_mode"] or "both").lower()
+        location_row = conn.execute(
+            """
+            SELECT world, x, y, z
+            FROM shop_locations
+            WHERE shop_id=?
+            ORDER BY rowid
+            LIMIT 1
+            """,
+            (shop_id,),
+        ).fetchone()
+        location = None
+        if location_row:
+            location = {
+                "world": location_row["world"],
+                "x": location_row["x"],
+                "y": location_row["y"],
+                "z": location_row["z"],
+            }
+        price_rows = conn.execute(
+            """
+            SELECT ss.sale_name, sp.currency, sp.price, sp.buy_price
+            FROM shop_stock ss
+            JOIN shop_prices sp
+              ON sp.shop_id = ss.shop_id AND sp.item_key = ss.item_key
+            WHERE ss.shop_id = ?
+            ORDER BY ss.sale_name COLLATE NOCASE, sp.currency COLLATE NOCASE
+            """,
+            (shop_id,),
+        ).fetchall()
+        grouped: Dict[str, Dict[str, object]] = {}
+        for row in price_rows:
+            sale_name = row["sale_name"]
+            entry = grouped.setdefault(
+                sale_name,
+                {"name": sale_name, "sell": [], "buy": []},
+            )
+            price = row["price"]
+            buy_price = row["buy_price"]
+            currency = row["currency"]
+            if price is not None and price > 0 and trade_mode in ("sell", "both"):
+                entry["sell"].append({"currency": currency, "amount": int(price)})
+            if buy_price is not None and buy_price > 0 and trade_mode in ("buy", "both"):
+                entry["buy"].append({"currency": currency, "amount": int(buy_price)})
+        listings: List[Dict[str, object]] = []
+        for listing in grouped.values():
+            if listing["sell"] or listing["buy"]:
+                listings.append(listing)
+        listings.sort(key=lambda item: str(item.get("name", "")).lower())
+        if listings:
+            listings = listings[:5]
+        shops.append(
+            {
+                "shop_id": shop_id,
+                "trade_mode": trade_mode,
+                "location": location,
+                "listings": listings,
+            }
+        )
+    return {"shops": shops}
+
+
 LOG_PATH = "economy_commands.log"
 
 
