@@ -1273,16 +1273,15 @@ public class LeCommandExecutor implements CommandExecutor {
     }
 
     private boolean isDirectOwner(Player p, JsonObject shopData) {
-        if (plugin.hasBypass(p) || p.hasPermission("lumineeconomy.admin") || p.isOp()) {
-            return true;
-        }
         if (shopData == null) {
             return false;
         }
         String uuid = p.getUniqueId().toString();
         if (shopData.has("owner_uuid")) {
             String ownerUuid = shopData.get("owner_uuid").getAsString();
-            return uuid.equalsIgnoreCase(ownerUuid);
+            if (uuid.equalsIgnoreCase(ownerUuid)) {
+                return true;
+            }
         }
         if (!shopData.has("owners")) {
             return false;
