@@ -20,6 +20,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -504,18 +505,24 @@ public class GuideBookListener implements Listener {
                             if (!mode.isEmpty()) {
                                 shopInfo.tradeMode = mode;
                             }
-                            if (shopObj.has("location") && shopObj.get("location").isJsonObject()) {
-                                JsonObject locObj = shopObj.getAsJsonObject("location");
-                                ShopLocation location = new ShopLocation();
-                                String world = safeString(locObj, "world");
-                                if (!world.isEmpty()) {
-                                    location.world = world;
+                            if (shopObj.has("locations") && shopObj.get("locations").isJsonArray()) {
+                                JsonArray locArray = shopObj.getAsJsonArray("locations");
+                                for (JsonElement locElement : locArray) {
+                                    if (!locElement.isJsonObject()) {
+                                        continue;
+                                    }
+                                    ShopLocation parsed = parseLocation(locElement.getAsJsonObject());
+                                    if (parsed != null) {
+                                        shopInfo.addLocation(parsed);
+                                    }
                                 }
-                                location.x = safeDouble(locObj, "x");
-                                location.y = safeDouble(locObj, "y");
-                                location.z = safeDouble(locObj, "z");
-                                if (location.world != null) {
-                                    shopInfo.location = location;
+                            }
+                            if (shopInfo.locations.isEmpty()
+                                    && shopObj.has("location")
+                                    && shopObj.get("location").isJsonObject()) {
+                                ShopLocation parsed = parseLocation(shopObj.getAsJsonObject("location"));
+                                if (parsed != null) {
+                                    shopInfo.addLocation(parsed);
                                 }
                             }
                             if (shopObj.has("listings") && shopObj.get("listings").isJsonArray()) {
@@ -619,15 +626,24 @@ public class GuideBookListener implements Listener {
             default -> "guide.shops.mode_both";
         };
         lore.add(Lang.get(modeKey));
-        if (shop.location != null && shop.location.isComplete()) {
-            String line = Lang.get("guide.shops.location")
-                    .replace("{world}", shop.location.world)
-                    .replace("{x}", formatCoordinate(shop.location.x))
-                    .replace("{y}", formatCoordinate(shop.location.y))
-                    .replace("{z}", formatCoordinate(shop.location.z));
-            lore.add(line);
-        } else {
+        if (shop.locations.isEmpty()) {
             lore.add(Lang.get("guide.shops.location_unknown"));
+        } else if (shop.locations.size() == 1) {
+            lore.add(formatLocationLine("guide.shops.location", shop.locations.get(0)));
+        } else {
+            lore.add(Lang.get("guide.shops.locations_header"));
+            int shown = 0;
+            for (ShopLocation location : shop.locations) {
+                if (shown >= 3) {
+                    lore.add(Lang.get("guide.shops.more_locations"));
+                    break;
+                }
+                lore.add(formatLocationLine("guide.shops.location_entry", location));
+                shown++;
+            }
+            if (shown == 0) {
+                lore.add(Lang.get("guide.shops.location_unknown"));
+            }
         }
         if (shop.listings.isEmpty()) {
             lore.add(Lang.get("guide.shops.no_listings"));
@@ -657,6 +673,14 @@ public class GuideBookListener implements Listener {
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
         item.setItemMeta(meta);
         return item;
+    }
+
+    private String formatLocationLine(String key, ShopLocation location) {
+        return Lang.get(key)
+                .replace("{world}", location.world)
+                .replace("{x}", formatCoordinate(location.x))
+                .replace("{y}", formatCoordinate(location.y))
+                .replace("{z}", formatCoordinate(location.z));
     }
 
     private String formatCoordinate(Double value) {
@@ -752,11 +776,42 @@ public class GuideBookListener implements Listener {
         return null;
     }
 
+    private ShopLocation parseLocation(JsonObject locObj) {
+        if (locObj == null) {
+            return null;
+        }
+        ShopLocation location = new ShopLocation();
+        String world = safeString(locObj, "world");
+        if (!world.isEmpty()) {
+            location.world = world;
+        }
+        location.x = safeDouble(locObj, "x");
+        location.y = safeDouble(locObj, "y");
+        location.z = safeDouble(locObj, "z");
+        if (location.isComplete()) {
+            return location;
+        }
+        return null;
+    }
+
     private static class RecommendedShop {
         private String shopId = "?";
         private String tradeMode = "both";
-        private ShopLocation location;
+        private final List<ShopLocation> locations = new ArrayList<>();
         private final List<TradeListing> listings = new ArrayList<>();
+
+        private void addLocation(ShopLocation location) {
+            if (location == null) {
+                return;
+            }
+            for (ShopLocation existing : locations) {
+                if (existing.sameLocation(location)) {
+                    return;
+                }
+            }
+            locations.add(location);
+        }
+
     }
 
     private static class ShopLocation {
@@ -767,6 +822,14 @@ public class GuideBookListener implements Listener {
 
         private boolean isComplete() {
             return world != null && !world.isEmpty() && x != null && y != null && z != null;
+        }
+
+        private boolean sameLocation(ShopLocation other) {
+            return other != null
+                    && Objects.equals(world, other.world)
+                    && Objects.equals(x, other.x)
+                    && Objects.equals(y, other.y)
+                    && Objects.equals(z, other.z);
         }
     }
 

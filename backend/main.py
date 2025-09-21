@@ -1090,24 +1090,27 @@ def recommended_shops(
     for shop in shop_rows:
         shop_id = shop["shop_id"]
         trade_mode = (shop["trade_mode"] or "both").lower()
-        location_row = conn.execute(
+        location_rows = conn.execute(
             """
             SELECT world, x, y, z
             FROM shop_locations
             WHERE shop_id=?
             ORDER BY rowid
-            LIMIT 1
             """,
             (shop_id,),
-        ).fetchone()
-        location = None
-        if location_row:
-            location = {
+        ).fetchall()
+        locations: List[Dict[str, object]] = []
+        for location_row in location_rows:
+            if not location_row:
+                continue
+            location_entry = {
                 "world": location_row["world"],
                 "x": location_row["x"],
                 "y": location_row["y"],
                 "z": location_row["z"],
             }
+            locations.append(location_entry)
+        location = locations[0] if locations else None
         price_rows = conn.execute(
             """
             SELECT ss.sale_name, sp.currency, sp.price, sp.buy_price
@@ -1145,6 +1148,7 @@ def recommended_shops(
                 "shop_id": shop_id,
                 "trade_mode": trade_mode,
                 "location": location,
+                "locations": locations,
                 "listings": listings,
             }
         )

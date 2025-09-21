@@ -79,18 +79,76 @@ def test_recommended_shops_includes_location_and_prices():
         entry = shops[0]
         assert entry["shop_id"] == "rec-shop"
         assert entry["trade_mode"] == "both"
-        assert entry["location"] == {
+        expected_location = {
             "world": "overworld",
             "x": 123.4,
             "y": 65.0,
             "z": -87.6,
         }
+        assert entry["location"] == expected_location
+        assert entry["locations"] == [expected_location]
         listings = entry["listings"]
         assert listings and listings[0]["name"] == "Diamond"
         sell_prices = listings[0]["sell"]
         buy_prices = listings[0]["buy"]
         assert sell_prices == [{"currency": "coin", "amount": 150}]
         assert buy_prices == [{"currency": "coin", "amount": 75}]
+
+
+def test_recommended_shops_reports_multiple_locations():
+    with main.conn:
+        main.conn.execute("DELETE FROM shop_prices")
+        main.conn.execute("DELETE FROM shop_stock")
+        main.conn.execute("DELETE FROM shop_items")
+        main.conn.execute("DELETE FROM shop_locations")
+        main.conn.execute("DELETE FROM shops")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("multi-shop", "owner-multi", "active", now, now),
+        )
+        locations = [
+            ("multi-shop", "overworld", 10.0, 64.0, -5.0),
+            ("multi-shop", "nether", 20.0, 65.0, 30.0),
+        ]
+        for record in locations:
+            main.conn.execute(
+                "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
+                record,
+            )
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    with TestClient(app) as client:
+        resp = client.get("/api/shops/recommended", headers=headers, params={"limit": 5})
+        assert resp.status_code == 200
+        data = resp.json()
+        shops = data.get("shops", [])
+        assert shops
+        located = None
+        for entry in shops:
+            if entry.get("shop_id") == "multi-shop":
+                located = entry
+                break
+        assert located is not None
+        assert located["location"] == {
+            "world": "overworld",
+            "x": 10.0,
+            "y": 64.0,
+            "z": -5.0,
+        }
+        assert located["locations"] == [
+            {
+                "world": "overworld",
+                "x": 10.0,
+                "y": 64.0,
+                "z": -5.0,
+            },
+            {
+                "world": "nether",
+                "x": 20.0,
+                "y": 65.0,
+                "z": 30.0,
+            },
+        ]
 
 
 def test_shop_items_includes_owners_when_suspended():
