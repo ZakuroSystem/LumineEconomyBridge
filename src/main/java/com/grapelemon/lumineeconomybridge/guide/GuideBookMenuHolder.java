@@ -11,13 +11,15 @@ public class GuideBookMenuHolder implements InventoryHolder {
     public enum MenuType {
         MAIN,
         BALANCE,
-        QUESTS
+        QUESTS,
+        SHOPS
     }
 
     public enum GuideAction {
         CHECK_BALANCE,
         CREATE_SHOP,
         RECOMMENDED_QUESTS,
+        RECOMMENDED_SHOPS,
         BACK_TO_MAIN
     }
 

@@ -49,9 +49,25 @@ public class LeCommandExecutor implements CommandExecutor {
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
+    private final NamespacedKey keyShop;
+    private final NamespacedKey keyId;
+    private final NamespacedKey keyOwner;
+    private final NamespacedKey keyHopper;
+    private final NamespacedKey keyHopperSlot;
+    private final NamespacedKey keyHopperItem;
+    private final NamespacedKey keyHopperShopOwner;
+    private final NamespacedKey keyHopperItemTag;
 
     public LeCommandExecutor(LumineEconomyBridge plugin) {
         this.plugin = plugin;
+        this.keyShop = new NamespacedKey(plugin, "le_shop");
+        this.keyId = new NamespacedKey(plugin, "shop_id");
+        this.keyOwner = new NamespacedKey(plugin, "owner_uuid");
+        this.keyHopper = new NamespacedKey(plugin, "le_shop_hopper");
+        this.keyHopperSlot = new NamespacedKey(plugin, "le_shop_hopper_slot");
+        this.keyHopperItem = new NamespacedKey(plugin, "le_shop_hopper_item");
+        this.keyHopperShopOwner = new NamespacedKey(plugin, "shop_owner_uuid");
+        this.keyHopperItemTag = new NamespacedKey(plugin, "le_shop_item_keys");
     }
 
     @Override
@@ -62,7 +78,8 @@ public class LeCommandExecutor implements CommandExecutor {
         }
 
         String sub = args.length > 0 ? args[0].toLowerCase() : "";
-        if (plugin.requiresAdmin(sub) && !p.hasPermission("lumineeconomy.admin")
+        boolean hasBypass = plugin.hasBypass(p);
+        if (plugin.requiresAdmin(sub) && !hasBypass && !p.isOp() && !p.hasPermission("lumineeconomy.admin")
                 && !sub.equalsIgnoreCase("money") && !sub.equalsIgnoreCase("currency")) {
             p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
             return true;
@@ -219,13 +236,15 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop add " + ChatColor.YELLOW + "<id> <qty> <price> <name> " + ChatColor.GRAY + "- Deposit item / 在庫追加");
                         p.sendMessage(ChatColor.GREEN + "/le shop take " + ChatColor.YELLOW + "<id> <item> <qty> " + ChatColor.GRAY + "- Withdraw stock / 在庫回収");
                         p.sendMessage(ChatColor.GREEN + "/le shop price " + ChatColor.YELLOW + "<id> <name> <currency> <amount> [<currency> <amount>...] " + ChatColor.GRAY + "- Set price / 価格設定");
+                        p.sendMessage(ChatColor.GREEN + "/le shop buyprice " + ChatColor.YELLOW + "<id> <name> <currency> <amount> [<currency> <amount>...] " + ChatColor.GRAY + "- Set buy price / 買取価格設定");
                         p.sendMessage(ChatColor.GREEN + "/le shop remove " + ChatColor.YELLOW + "<id> <name> [refund] " + ChatColor.GRAY + "- Remove item / 在庫削除");
                         p.sendMessage(ChatColor.GREEN + "/le shop remove " + ChatColor.YELLOW + "<id> [refund] " + ChatColor.GRAY + "- Remove shop / 撤去");
                         p.sendMessage(ChatColor.GREEN + "/le shop reopen " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Reopen suspended shop / 再開");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner add " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Add co-owner / 共同オーナー追加");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner remove " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Remove co-owner / 共同オーナー削除");
                         p.sendMessage(ChatColor.GREEN + "/le shop account " + ChatColor.YELLOW + "<id> <company> " + ChatColor.GRAY + "- Set payout account / 取引口座設定");
-                        p.sendMessage(ChatColor.GREEN + "/le shop hopper " + ChatColor.YELLOW + "<id> <slot> " + ChatColor.GRAY + "- Issue hopper / ホッパー付与");
+                        p.sendMessage(ChatColor.GREEN + "/le shop mode " + ChatColor.YELLOW + "<id> <buy|sell|both> " + ChatColor.GRAY + "- Set shop mode / ショップ種別設定");
+                        p.sendMessage(ChatColor.GREEN + "/le shop hopper " + ChatColor.YELLOW + "<id> <slot> " + ChatColor.GRAY + "- Issue hopper (slot is 1-based) / ホッパー付与 (スロット番号は1始まり)");
                         p.sendMessage(ChatColor.GREEN + "/le shop publish " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- List shop / 掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
@@ -269,13 +288,18 @@ public class LeCommandExecutor implements CommandExecutor {
                             return true;
                         }
                         String shopId = args[2];
-                        int slotIndex;
+                        int slotNumber;
                         try {
-                            slotIndex = Integer.parseInt(args[3]);
+                            slotNumber = Integer.parseInt(args[3]);
                         } catch (NumberFormatException ex) {
                             p.sendMessage(ChatColor.RED + "Invalid slot / スロット番号が不正です" + ChatColor.RESET);
                             return true;
                         }
+                        if (slotNumber <= 0) {
+                            p.sendMessage(ChatColor.RED + "Slot out of range / スロット番号が不正です" + ChatColor.RESET);
+                            return true;
+                        }
+                        int slotIndex = slotNumber - 1;
                         JsonObject shopData = fetchShop(shopId);
                         if (shopData == null) {
                             p.sendMessage(ChatColor.RED + "Unable to fetch shop / ショップ情報を取得できません" + ChatColor.RESET);
@@ -297,23 +321,26 @@ public class LeCommandExecutor implements CommandExecutor {
                         JsonObject item = items.get(slotIndex).getAsJsonObject();
                         String itemKey = item.get("item_key").getAsString();
                         String ownerUuid = p.getUniqueId().toString();
+                        String shopOwnerUuid = resolveShopOwner(shopData, ownerUuid);
                         NamespacedKey hopperKey = new NamespacedKey(plugin, "le_shop_hopper");
                         NamespacedKey keyId = new NamespacedKey(plugin, "shop_id");
                         NamespacedKey keyOwner = new NamespacedKey(plugin, "owner_uuid");
                         NamespacedKey keySlot = new NamespacedKey(plugin, "le_shop_hopper_slot");
                         NamespacedKey keyItem = new NamespacedKey(plugin, "le_shop_hopper_item");
+                        NamespacedKey keyShopOwner = new NamespacedKey(plugin, "shop_owner_uuid");
                         ItemStack hopper = new ItemStack(Material.HOPPER);
                         ItemMeta meta = hopper.getItemMeta();
                         PersistentDataContainer container = meta.getPersistentDataContainer();
                         container.set(hopperKey, PersistentDataType.BYTE, (byte) 1);
                         container.set(keyId, PersistentDataType.STRING, shopId);
                         container.set(keyOwner, PersistentDataType.STRING, ownerUuid);
+                        container.set(keyShopOwner, PersistentDataType.STRING, shopOwnerUuid);
                         container.set(keySlot, PersistentDataType.INTEGER, slotIndex);
                         container.set(keyItem, PersistentDataType.STRING, itemKey);
                         meta.setDisplayName(ChatColor.GOLD + "Shop Hopper" + ChatColor.RESET);
                         hopper.setItemMeta(meta);
                         p.getInventory().addItem(hopper);
-                        p.sendMessage(ChatColor.GREEN + "Issued hopper for slot " + ChatColor.YELLOW + slotIndex + ChatColor.GREEN + " / ホッパーを付与しました" + ChatColor.RESET);
+                        p.sendMessage(ChatColor.GREEN + "Issued hopper for slot " + ChatColor.YELLOW + slotNumber + ChatColor.GREEN + " / ホッパーを付与しました" + ChatColor.RESET);
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
                         if (!hasShopPermission(p, shopId)) {
@@ -447,6 +474,50 @@ public class LeCommandExecutor implements CommandExecutor {
                                             p.sendMessage(ChatColor.GREEN + "Done / 完了しました" + ChatColor.RESET);
                                         } else {
                                             p.sendMessage(ChatColor.RED + "Failed / 失敗しました" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else if (args.length >= 4 && args[1].equalsIgnoreCase("mode")) {
+                        String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
+                        String mode = args[3].toLowerCase(java.util.Locale.ROOT);
+                        if (!mode.equals("buy") && !mode.equals("sell") && !mode.equals("both")) {
+                            p.sendMessage(ChatColor.RED + "Usage: /le shop mode <id> <buy|sell|both> / 使い方: /le shop mode <id> <buy|sell|both>" + ChatColor.RESET);
+                            return true;
+                        }
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        payload.put("mode", mode);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/mode")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Mode update failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equals(res.get("status").getAsString())) {
+                                            p.sendMessage(ChatColor.GREEN + "Shop mode updated / ショップ種別を更新しました" + ChatColor.RESET);
+                                            Inventory top = p.getOpenInventory().getTopInventory();
+                                            if (top.getHolder() instanceof com.grapelemon.lumineeconomybridge.shop.ShopMenuHolder holder && holder.getShopId().equals(shopId)) {
+                                                holder.setTradeMode(mode);
+                                            }
+                                        } else {
+                                            p.sendMessage(ChatColor.RED + "Failed: " + ChatColor.YELLOW + res.get("reason").getAsString() + ChatColor.RED + " / 失敗しました" + ChatColor.RESET);
                                         }
                                     });
                                 }
@@ -762,6 +833,7 @@ public class LeCommandExecutor implements CommandExecutor {
                             payload.put("sale_name", saleName);
                             payload.put("currency", currency);
                             payload.put("price", amount);
+                            payload.put("price_kind", "sell");
                             Request req = new Request.Builder()
                                     .url(plugin.getBaseUrl() + "/api/shop/set_price")
                                     .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
@@ -785,15 +857,100 @@ public class LeCommandExecutor implements CommandExecutor {
                                                 if (top.getHolder() instanceof com.grapelemon.lumineeconomybridge.shop.ShopMenuHolder holder && holder.getShopId().equals(shopId)) {
                                                     for (Map.Entry<Integer, com.grapelemon.lumineeconomybridge.shop.ShopItem> en : holder.getItems().entrySet()) {
                                                         if (en.getValue().getSaleName().equals(saleName)) {
-                                                            en.getValue().getPrices().put(fCurrency, fAmount);
+                                                            com.grapelemon.lumineeconomybridge.shop.ShopItem.ShopPrice price = en.getValue().getOrCreatePrice(fCurrency);
+                                                            price.setSellPrice(fAmount);
                                                             ItemStack stack = top.getItem(en.getKey());
                                                             if (stack != null) {
                                                                 ItemMeta meta = stack.getItemMeta();
                                                                 java.util.List<String> lore = new java.util.ArrayList<>();
                                                                 lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + en.getValue().getSaleName());
                                                                 lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + en.getValue().getStock());
-                                                                for (Map.Entry<String, Integer> pp : en.getValue().getPrices().entrySet()) {
-                                                                    lore.add(ChatColor.GREEN + pp.getKey() + ChatColor.WHITE + ": " + ChatColor.YELLOW + formatAmount(pp.getValue()));
+                                                                for (Map.Entry<String, com.grapelemon.lumineeconomybridge.shop.ShopItem.ShopPrice> pp : en.getValue().getPrices().entrySet()) {
+                                                                    com.grapelemon.lumineeconomybridge.shop.ShopItem.ShopPrice info = pp.getValue();
+                                                                    if (info == null) continue;
+                                                                    if (info.getSellPrice() != null) {
+                                                                        lore.add(ChatColor.GREEN + pp.getKey() + ChatColor.WHITE + " Sell: " + ChatColor.YELLOW + formatAmount(info.getSellPrice()));
+                                                                    }
+                                                                    if (info.getBuyPrice() != null) {
+                                                                        lore.add(ChatColor.AQUA + pp.getKey() + ChatColor.WHITE + " Buy: " + ChatColor.YELLOW + formatAmount(info.getBuyPrice()));
+                                                                    }
+                                                                }
+                                                                meta.setLore(lore);
+                                                                stack.setItemMeta(meta);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                p.sendMessage(ChatColor.RED + "Failed: " + ChatColor.YELLOW + res.get("reason").getAsString() + ChatColor.RED + " / 失敗しました" + ChatColor.RESET);
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    } else if (args.length >= 6 && args[1].equalsIgnoreCase("buyprice")) {
+                        String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
+                        String saleName = args[3];
+                        if ((args.length - 4) % 2 != 0) {
+                            p.sendMessage(ChatColor.RED + "Usage: /le shop buyprice <id> <name> <currency> <amount> [<currency> <amount>...] / 使い方: /le shop buyprice <id> <name> <currency> <amount> [<currency> <amount>...]" + ChatColor.RESET);
+                            return true;
+                        }
+                        for (int i = 4; i < args.length; i += 2) {
+                            String currency = args[i];
+                            int amount;
+                            try { amount = parseAmount(args[i + 1]); } catch (NumberFormatException ex) { p.sendMessage(ChatColor.RED + "Invalid amount / 無効な金額です" + ChatColor.RESET); return true; }
+                            Map<String, Object> payload = new HashMap<>();
+                            payload.put("owner_uuid", p.getUniqueId().toString());
+                            payload.put("shop_id", shopId);
+                            payload.put("sale_name", saleName);
+                            payload.put("currency", currency);
+                            payload.put("price", amount);
+                            payload.put("price_kind", "buy");
+                            Request req = new Request.Builder()
+                                    .url(plugin.getBaseUrl() + "/api/shop/set_price")
+                                    .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                                    .post(RequestBody.create(gson.toJson(payload), JSON))
+                                    .build();
+                            final String fCurrency = currency;
+                            final int fAmount = amount;
+                            plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                                @Override public void onFailure(Call call, IOException ex) {
+                                    plugin.getLogger().warning("Set buy price failed: " + ex.getMessage());
+                                    Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                                }
+                                @Override public void onResponse(Call call, Response response) throws IOException {
+                                    try (response) {
+                                        String body = response.body() != null ? response.body().string() : "{}";
+                                        JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                        Bukkit.getScheduler().runTask(plugin, () -> {
+                                            if ("success".equals(res.get("status").getAsString())) {
+                                                p.sendMessage(ChatColor.GREEN + "Buy price updated / 買取価格を更新しました" + ChatColor.RESET);
+                                            Inventory top = p.getOpenInventory().getTopInventory();
+                                                if (top.getHolder() instanceof com.grapelemon.lumineeconomybridge.shop.ShopMenuHolder holder && holder.getShopId().equals(shopId)) {
+                                                    for (Map.Entry<Integer, com.grapelemon.lumineeconomybridge.shop.ShopItem> en : holder.getItems().entrySet()) {
+                                                        if (en.getValue().getSaleName().equals(saleName)) {
+                                                            com.grapelemon.lumineeconomybridge.shop.ShopItem.ShopPrice price = en.getValue().getOrCreatePrice(fCurrency);
+                                                            price.setBuyPrice(fAmount);
+                                                            ItemStack stack = top.getItem(en.getKey());
+                                                            if (stack != null) {
+                                                                ItemMeta meta = stack.getItemMeta();
+                                                                java.util.List<String> lore = new java.util.ArrayList<>();
+                                                                lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + en.getValue().getSaleName());
+                                                                lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + en.getValue().getStock());
+                                                                for (Map.Entry<String, com.grapelemon.lumineeconomybridge.shop.ShopItem.ShopPrice> pp : en.getValue().getPrices().entrySet()) {
+                                                                    com.grapelemon.lumineeconomybridge.shop.ShopItem.ShopPrice info = pp.getValue();
+                                                                    if (info == null) continue;
+                                                                    if (info.getSellPrice() != null) {
+                                                                        lore.add(ChatColor.GREEN + pp.getKey() + ChatColor.WHITE + " Sell: " + ChatColor.YELLOW + formatAmount(info.getSellPrice()));
+                                                                    }
+                                                                    if (info.getBuyPrice() != null) {
+                                                                        lore.add(ChatColor.AQUA + pp.getKey() + ChatColor.WHITE + " Buy: " + ChatColor.YELLOW + formatAmount(info.getBuyPrice()));
+                                                                    }
                                                                 }
                                                                 meta.setLore(lore);
                                                                 stack.setItemMeta(meta);
@@ -810,7 +967,7 @@ public class LeCommandExecutor implements CommandExecutor {
                             });
                         }
                     } else {
-                        p.sendMessage(ChatColor.YELLOW + "Usage: /le shop <create|add|take|price|remove|reopen|help> ... / 使い方: /le shop <create|add|take|price|remove|reopen|help> ..." + ChatColor.RESET);
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le shop <create|add|take|price|buyprice|mode|remove|reopen|help> ... / 使い方: /le shop <create|add|take|price|buyprice|mode|remove|reopen|help> ..." + ChatColor.RESET);
                     }
                     return true;
                 }
@@ -1002,7 +1159,7 @@ public class LeCommandExecutor implements CommandExecutor {
         if (!plugin.requiresAdmin(commandKey)) {
             return true;
         }
-        if (p.hasPermission("lumineeconomy.admin")) {
+        if (plugin.hasBypass(p) || p.isOp() || p.hasPermission("lumineeconomy.admin")) {
             return true;
         }
         return commandKey.equalsIgnoreCase("money") || commandKey.equalsIgnoreCase("currency");
@@ -1045,7 +1202,7 @@ public class LeCommandExecutor implements CommandExecutor {
     }
 
     private boolean hasShopPermission(Player p, String shopId) {
-        if (p.isOp() || p.hasPermission("lumineeconomy.admin")) return true;
+        if (plugin.hasBypass(p) || p.isOp() || p.hasPermission("lumineeconomy.admin")) return true;
         OkHttpClient http = plugin.getHttpClient();
         if (http == null) return false;
         HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
@@ -1073,6 +1230,28 @@ public class LeCommandExecutor implements CommandExecutor {
         return false;
     }
 
+    private String resolveShopOwner(JsonObject shopData, String fallback) {
+        if (shopData != null) {
+            if (shopData.has("owner_uuid") && !shopData.get("owner_uuid").isJsonNull()) {
+                String owner = shopData.get("owner_uuid").getAsString();
+                if (!owner.isBlank()) {
+                    return owner;
+                }
+            }
+            if (shopData.has("owners")) {
+                for (JsonElement el : shopData.getAsJsonArray("owners")) {
+                    if (!el.isJsonNull()) {
+                        String owner = el.getAsString();
+                        if (!owner.isBlank()) {
+                            return owner;
+                        }
+                    }
+                }
+            }
+        }
+        return fallback;
+    }
+
     private JsonObject fetchShop(String shopId) {
         OkHttpClient http = plugin.getHttpClient();
         if (http == null) return null;
@@ -1094,10 +1273,19 @@ public class LeCommandExecutor implements CommandExecutor {
     }
 
     private boolean isDirectOwner(Player p, JsonObject shopData) {
-        if (shopData == null || !shopData.has("owners")) {
+        if (shopData == null) {
             return false;
         }
         String uuid = p.getUniqueId().toString();
+        if (shopData.has("owner_uuid")) {
+            String ownerUuid = shopData.get("owner_uuid").getAsString();
+            if (uuid.equalsIgnoreCase(ownerUuid)) {
+                return true;
+            }
+        }
+        if (!shopData.has("owners")) {
+            return false;
+        }
         for (JsonElement el : shopData.getAsJsonArray("owners")) {
             if (uuid.equalsIgnoreCase(el.getAsString())) {
                 return true;
@@ -1135,10 +1323,28 @@ public class LeCommandExecutor implements CommandExecutor {
         return AMT_FMT.format(amount / 1000.0);
     }
 
+    private ItemStack prepareForSerialization(ItemStack item) {
+        ItemStack clone = item.clone();
+        clone.setAmount(1);
+        ItemMeta meta = clone.getItemMeta();
+        if (meta != null) {
+            PersistentDataContainer container = meta.getPersistentDataContainer();
+            container.remove(keyHopperItemTag);
+            container.remove(keyShop);
+            container.remove(keyId);
+            container.remove(keyOwner);
+            container.remove(keyHopper);
+            container.remove(keyHopperSlot);
+            container.remove(keyHopperItem);
+            container.remove(keyHopperShopOwner);
+            clone.setItemMeta(meta);
+        }
+        return clone;
+    }
+
     private String computeItemKey(ItemStack item) {
         try {
-            ItemStack clone = item.clone();
-            clone.setAmount(1);
+            ItemStack clone = prepareForSerialization(item);
             byte[] bytes = clone.serializeAsBytes();
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] digest = md.digest(bytes);
@@ -1151,8 +1357,7 @@ public class LeCommandExecutor implements CommandExecutor {
     }
 
     private String itemToBase64(ItemStack item) {
-        ItemStack clone = item.clone();
-        clone.setAmount(1);
+        ItemStack clone = prepareForSerialization(item);
         return Base64.getEncoder().encodeToString(clone.serializeAsBytes());
     }
 
