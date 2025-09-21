@@ -2729,7 +2729,11 @@ async def shop_buy(payload: ShopBuyPayload):
                     "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
                     (payload.shop_id, payload.item_key),
                 ).fetchone()
-                if not stock_row or stock_row["stock"] < payload.qty:
+                if (
+                    not stock_row
+                    or stock_row["stock"] < payload.qty
+                    or stock_row["stock"] - payload.qty < 1
+                ):
                     reason = "insufficient_stock"
                 else:
                     price_row = cur.execute(
@@ -3239,6 +3243,19 @@ async def shop_take_stock(
                     item = cur.execute(
                         "SELECT nbt_blob FROM shop_items WHERE item_key=?", (candidate,)
                     ).fetchone()
+                    remaining_row = cur.execute(
+                        "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                        (payload.shop_id, candidate),
+                    ).fetchone()
+                    if remaining_row and remaining_row["stock"] <= 0:
+                        cur.execute(
+                            "DELETE FROM shop_stock WHERE shop_id=? AND item_key=?",
+                            (payload.shop_id, candidate),
+                        )
+                        cur.execute(
+                            "DELETE FROM shop_prices WHERE shop_id=? AND item_key=?",
+                            (payload.shop_id, candidate),
+                        )
                     if item:
                         grant.append(
                             {
