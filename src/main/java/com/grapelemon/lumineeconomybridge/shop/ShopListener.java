@@ -464,13 +464,16 @@ public class ShopListener implements Listener {
         if (holderObj instanceof ConfirmMenuHolder ch) {
             e.setCancelled(true);
             Player p = (Player) e.getWhoClicked();
-            if (e.getSlot() == 2) {
-                if (ch.isSelling()) {
-                    handleSell(p, ch);
+            ConfirmMenuHolder.ConfirmAction action = ch.getAction(e.getSlot());
+            if (action != null) {
+                if (action.getType() == ConfirmMenuHolder.ActionType.BUY) {
+                    handlePurchase(p, ch, action.getQuantity());
                 } else {
-                    handlePurchase(p, ch);
+                    handleSell(p, ch, action.getQuantity());
                 }
-            } else if (e.getSlot() == 6) {
+                return;
+            }
+            if (ch.isBackSlot(e.getSlot())) {
                 p.openInventory(ch.getOrigin().getInventory());
             }
             return;
@@ -507,19 +510,23 @@ public class ShopListener implements Listener {
                     p.sendMessage(ChatColor.RED + "This shop only buys items / このショップは買取専用です" + ChatColor.RESET);
                     return;
                 }
-                openConfirm(p, holder, e.getSlot(), si);
+                openTradeMenu(p, holder, e.getSlot(), si);
             }
             return;
         }
         e.setCancelled(true);
     }
 
-    private void handlePurchase(Player p, ConfirmMenuHolder ch) {
+    private void handlePurchase(Player p, ConfirmMenuHolder ch, int qty) {
         if (!ch.getOrigin().canPlayerPurchase()) {
             p.sendMessage(ChatColor.RED + "This shop only buys items / このショップは買取専用です" + ChatColor.RESET);
             return;
         }
         ShopItem si = ch.getItem();
+        if (si.getStock() < qty) {
+            p.sendMessage(ChatColor.RED + "Not enough stock / 在庫が不足しています" + ChatColor.RESET);
+            return;
+        }
         String currency = si.firstSellCurrency();
         if (currency == null) {
             p.sendMessage(ChatColor.RED + "No sale price available / 販売価格が設定されていません" + ChatColor.RESET);
@@ -529,7 +536,7 @@ public class ShopListener implements Listener {
         payload.put("player_uuid", p.getUniqueId().toString());
         payload.put("shop_id", ch.getShopId());
         payload.put("item_key", si.getItemKey());
-        payload.put("qty", 1);
+        payload.put("qty", qty);
         payload.put("currency", currency);
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         payload.put("client_tx_id", UUID.randomUUID().toString());
@@ -563,7 +570,7 @@ public class ShopListener implements Listener {
                                 recv.sendMessage(text);
                             });
                         }
-                        if ("success".equals(res.get("status").getAsString())) {
+                        if (res.has("status") && "success".equals(res.get("status").getAsString())) {
                             if (res.has("grant")) {
                                 res.getAsJsonArray("grant").forEach(g -> {
                                     JsonObject gg = g.getAsJsonObject();
@@ -596,46 +603,115 @@ public class ShopListener implements Listener {
                                     });
                                 }
                             }
+                            si.setStock(Math.max(0, si.getStock() - qty));
+                            refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
+                            p.openInventory(ch.getOrigin().getInventory());
                         }
-                        si.setStock(si.getStock() - 1);
-                        refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
-                        p.openInventory(ch.getOrigin().getInventory());
                     });
                 }
             }
         });
     }
 
-    private void openConfirm(Player p, ShopMenuHolder holder, int slot, ShopItem si) {
-        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(holder.getShopId(), holder, slot, si, false), 9, "Confirm");
-        inv.setItem(4, si.getRawItem());
-        ItemStack ok = new ItemStack(Material.GREEN_STAINED_GLASS_PANE);
-        ItemMeta om = ok.getItemMeta();
-        om.setDisplayName(ChatColor.GREEN + "Buy");
-        ok.setItemMeta(om);
-        inv.setItem(2, ok);
-        ItemStack cancel = new ItemStack(Material.RED_STAINED_GLASS_PANE);
-        ItemMeta cm = cancel.getItemMeta();
-        cm.setDisplayName(ChatColor.RED + "Cancel");
-        cancel.setItemMeta(cm);
-        inv.setItem(6, cancel);
+    private void openTradeMenu(Player p, ShopMenuHolder holder, int slot, ShopItem si) {
+        ConfirmMenuHolder menu = new ConfirmMenuHolder(holder.getShopId(), holder, slot, si);
+        Inventory inv = Bukkit.createInventory(menu, 27, "Confirm");
+        ItemStack preview = si.getRawItem().clone();
+        inv.setItem(13, preview);
+
+        int[] amounts = {1, 10, 100};
+        int[] buySlots = {10, 11, 12};
+        int[] sellSlots = {14, 15, 16};
+
+        for (int i = 0; i < amounts.length; i++) {
+            addBuyButton(inv, menu, holder, si, buySlots[i], amounts[i]);
+            addSellButton(inv, menu, holder, si, sellSlots[i], amounts[i], p);
+        }
+
+        ItemStack back = new ItemStack(Material.BARRIER);
+        ItemMeta bm = back.getItemMeta();
+        bm.setDisplayName(ChatColor.RED + "Back / 戻る");
+        bm.setLore(Collections.singletonList(ChatColor.GRAY + "Return to listings / 一覧に戻ります"));
+        back.setItemMeta(bm);
+        int backSlot = 22;
+        inv.setItem(backSlot, back);
+        menu.setBackSlot(backSlot);
+
         p.openInventory(inv);
     }
 
-    private void openSellConfirm(Player p, ShopMenuHolder holder, int slot, ShopItem si) {
-        Inventory inv = Bukkit.createInventory(new ConfirmMenuHolder(holder.getShopId(), holder, slot, si, true), 9, "Confirm");
-        inv.setItem(4, si.getRawItem());
-        ItemStack ok = new ItemStack(Material.GREEN_STAINED_GLASS_PANE);
-        ItemMeta om = ok.getItemMeta();
-        om.setDisplayName(ChatColor.GREEN + "Sell");
-        ok.setItemMeta(om);
-        inv.setItem(2, ok);
-        ItemStack cancel = new ItemStack(Material.RED_STAINED_GLASS_PANE);
-        ItemMeta cm = cancel.getItemMeta();
-        cm.setDisplayName(ChatColor.RED + "Cancel");
-        cancel.setItemMeta(cm);
-        inv.setItem(6, cancel);
-        p.openInventory(inv);
+    private void addBuyButton(Inventory inv, ConfirmMenuHolder menu, ShopMenuHolder holder, ShopItem si, int slot, int qty) {
+        String currency = si.firstSellCurrency();
+        ShopItem.ShopPrice price = currency != null ? si.getPrices().get(currency) : null;
+        Integer sellPrice = price != null ? price.getSellPrice() : null;
+        List<String> errors = new ArrayList<>();
+        if (!holder.canPlayerPurchase()) {
+            errors.add("This shop only buys items / このショップは買取専用です");
+        }
+        if (currency == null || sellPrice == null || sellPrice <= 0) {
+            errors.add("No sell price available / 販売価格が設定されていません");
+        }
+        if (si.getStock() < qty) {
+            errors.add("Not enough stock / 在庫が不足しています");
+        }
+
+        boolean enabled = errors.isEmpty();
+        ItemStack button = new ItemStack(enabled ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE);
+        ItemMeta meta = button.getItemMeta();
+        meta.setDisplayName(ChatColor.GREEN + "Buy ×" + qty);
+        List<String> lore = new ArrayList<>();
+        if (enabled) {
+            int total = multiplyPrice(sellPrice, qty);
+            String currencyLabel = currency != null && !currency.isEmpty() ? " " + currency : "";
+            lore.add(ChatColor.GREEN + "Cost: " + ChatColor.YELLOW + formatAmount(total) + currencyLabel);
+            lore.add(ChatColor.DARK_GRAY + "Stock: " + ChatColor.GRAY + si.getStock());
+            menu.registerAction(slot, ConfirmMenuHolder.ActionType.BUY, qty);
+        } else {
+            for (String err : errors) {
+                lore.add(ChatColor.RED + err);
+            }
+        }
+        meta.setLore(lore);
+        button.setItemMeta(meta);
+        inv.setItem(slot, button);
+    }
+
+    private void addSellButton(Inventory inv, ConfirmMenuHolder menu, ShopMenuHolder holder, ShopItem si, int slot, int qty, Player p) {
+        String currency = si.firstBuyCurrency();
+        ShopItem.ShopPrice price = currency != null ? si.getPrices().get(currency) : null;
+        Integer buyPrice = price != null ? price.getBuyPrice() : null;
+        List<String> errors = new ArrayList<>();
+        if (!holder.canPlayerSell()) {
+            errors.add("This shop only sells items / このショップは販売専用です");
+        }
+        if (currency == null || buyPrice == null || buyPrice <= 0) {
+            errors.add("No buy price available / 買取価格が設定されていません");
+        }
+        int available = countMatchingItems(p, si);
+        if (available < qty) {
+            errors.add("Not enough matching items / 手持ちの対象アイテムが不足しています");
+        }
+
+        boolean enabled = errors.isEmpty();
+        ItemStack button = new ItemStack(enabled ? Material.LIGHT_BLUE_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE);
+        ItemMeta meta = button.getItemMeta();
+        meta.setDisplayName(ChatColor.AQUA + "Sell ×" + qty);
+        List<String> lore = new ArrayList<>();
+        if (enabled) {
+            int total = multiplyPrice(buyPrice, qty);
+            String currencyLabel = currency != null && !currency.isEmpty() ? " " + currency : "";
+            lore.add(ChatColor.AQUA + "Payout: " + ChatColor.YELLOW + formatAmount(total) + currencyLabel);
+            lore.add(ChatColor.DARK_GRAY + "You have: " + ChatColor.GRAY + available);
+            menu.registerAction(slot, ConfirmMenuHolder.ActionType.SELL, qty);
+        } else {
+            for (String err : errors) {
+                lore.add(ChatColor.RED + err);
+            }
+            lore.add(ChatColor.DARK_GRAY + "You have: " + ChatColor.GRAY + available);
+        }
+        meta.setLore(lore);
+        button.setItemMeta(meta);
+        inv.setItem(slot, button);
     }
 
     private void handlePlayerSell(Player p, ShopMenuHolder holder, ItemStack stack) {
@@ -647,19 +723,24 @@ public class ShopListener implements Listener {
         String key = sha256(Base64.getDecoder().decode(blob));
         for (var en : holder.getItems().entrySet()) {
             if (en.getValue().getItemKey().equals(key)) {
-                openSellConfirm(p, holder, en.getKey(), en.getValue());
+                openTradeMenu(p, holder, en.getKey(), en.getValue());
                 return;
             }
         }
         p.sendMessage(ChatColor.RED + "This item cannot be sold here / このアイテムはここでは売れません" + ChatColor.RESET);
     }
 
-    private void handleSell(Player p, ConfirmMenuHolder ch) {
+    private void handleSell(Player p, ConfirmMenuHolder ch, int qty) {
         if (!ch.getOrigin().canPlayerSell()) {
             p.sendMessage(ChatColor.RED + "This shop only sells items / このショップは販売専用です" + ChatColor.RESET);
             return;
         }
         ShopItem si = ch.getItem();
+        int available = countMatchingItems(p, si);
+        if (available < qty) {
+            p.sendMessage(ChatColor.RED + "Not enough matching items / 手持ちの対象アイテムが不足しています" + ChatColor.RESET);
+            return;
+        }
         String currency = si.firstBuyCurrency();
         if (currency == null) {
             p.sendMessage(ChatColor.RED + "No buy price available / 買取価格が設定されていません" + ChatColor.RESET);
@@ -669,7 +750,7 @@ public class ShopListener implements Listener {
         payload.put("player_uuid", p.getUniqueId().toString());
         payload.put("shop_id", ch.getShopId());
         payload.put("item_key", si.getItemKey());
-        payload.put("qty", 1);
+        payload.put("qty", qty);
         payload.put("currency", currency);
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         payload.put("client_tx_id", UUID.randomUUID().toString());
@@ -677,8 +758,6 @@ public class ShopListener implements Listener {
                 .url(plugin.getBaseUrl() + "/api/shop/sell")
                 .post(RequestBody.create(gson.toJson(payload), JSON))
                 .build();
-        ItemStack remove = si.getRawItem().clone();
-        remove.setAmount(1);
         plugin.getHttpClient().newCall(req).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException ex) {
                 plugin.getLogger().warning("Sell failed: " + ex.getMessage());
@@ -705,9 +784,9 @@ public class ShopListener implements Listener {
                                 recv.sendMessage(text);
                             });
                         }
-                        if ("success".equals(res.get("status").getAsString())) {
-                            p.getInventory().removeItem(remove);
-                            si.setStock(si.getStock() + 1);
+                        if (res.has("status") && "success".equals(res.get("status").getAsString())) {
+                            removeMatchingItems(p, si, qty);
+                            si.setStock(si.getStock() + qty);
                             refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
                             p.openInventory(ch.getOrigin().getInventory());
                         }
@@ -715,6 +794,54 @@ public class ShopListener implements Listener {
                 }
             }
         });
+    }
+
+    private int countMatchingItems(Player p, ShopItem si) {
+        String key = si.getItemKey();
+        int total = 0;
+        for (ItemStack content : p.getInventory().getContents()) {
+            if (content == null) continue;
+            if (matchesShopItem(content, key)) {
+                total += content.getAmount();
+            }
+        }
+        return total;
+    }
+
+    private boolean matchesShopItem(ItemStack stack, String key) {
+        if (stack == null || stack.getType() == Material.AIR) return false;
+        ItemStack sanitized = prepareForSerialization(stack);
+        String other = sha256(sanitized.serializeAsBytes());
+        return key.equals(other);
+    }
+
+    private void removeMatchingItems(Player p, ShopItem si, int qty) {
+        String key = si.getItemKey();
+        int remaining = qty;
+        for (int i = 0; i < p.getInventory().getSize() && remaining > 0; i++) {
+            ItemStack stack = p.getInventory().getItem(i);
+            if (stack == null) continue;
+            if (!matchesShopItem(stack, key)) continue;
+            int take = Math.min(remaining, stack.getAmount());
+            stack.setAmount(stack.getAmount() - take);
+            if (stack.getAmount() <= 0) {
+                p.getInventory().setItem(i, null);
+            } else {
+                p.getInventory().setItem(i, stack);
+            }
+            remaining -= take;
+        }
+    }
+
+    private int multiplyPrice(int unitPrice, int qty) {
+        long result = (long) unitPrice * qty;
+        if (result > Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        if (result < Integer.MIN_VALUE) {
+            return Integer.MIN_VALUE;
+        }
+        return (int) result;
     }
 
 
