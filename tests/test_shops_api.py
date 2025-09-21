@@ -40,6 +40,59 @@ def test_shops_endpoint():
         assert data[0]["world"] == "world"
 
 
+def test_recommended_shops_includes_location_and_prices():
+    with main.conn:
+        main.conn.execute("DELETE FROM shop_prices")
+        main.conn.execute("DELETE FROM shop_stock")
+        main.conn.execute("DELETE FROM shop_items")
+        main.conn.execute("DELETE FROM shop_locations")
+        main.conn.execute("DELETE FROM shops")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("rec-shop", "owner-rec", "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
+            ("rec-shop", "overworld", 123.4, 65.0, -87.6),
+        )
+        item_key = "rec-item"
+        main.conn.execute(
+            "INSERT INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+            (item_key, "DIAMOND", "Diamond", b"nbt"),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at) VALUES(?,?,?,?,?)",
+            ("rec-shop", item_key, "Diamond", 10, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_prices(shop_id, item_key, currency, price, buy_price) VALUES(?,?,?,?,?)",
+            ("rec-shop", item_key, "coin", 150, 75),
+        )
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    with TestClient(app) as client:
+        resp = client.get("/api/shops/recommended", headers=headers, params={"limit": 3})
+        assert resp.status_code == 200
+        data = resp.json()
+        shops = data.get("shops", [])
+        assert shops
+        entry = shops[0]
+        assert entry["shop_id"] == "rec-shop"
+        assert entry["trade_mode"] == "both"
+        assert entry["location"] == {
+            "world": "overworld",
+            "x": 123.4,
+            "y": 65.0,
+            "z": -87.6,
+        }
+        listings = entry["listings"]
+        assert listings and listings[0]["name"] == "Diamond"
+        sell_prices = listings[0]["sell"]
+        buy_prices = listings[0]["buy"]
+        assert sell_prices == [{"currency": "coin", "amount": 150}]
+        assert buy_prices == [{"currency": "coin", "amount": 75}]
+
+
 def test_shop_items_includes_owners_when_suspended():
     with main.conn:
         main.conn.execute("DELETE FROM shop_locations")
