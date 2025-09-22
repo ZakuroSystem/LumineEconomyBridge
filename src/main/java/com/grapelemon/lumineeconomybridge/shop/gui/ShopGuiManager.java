@@ -52,6 +52,8 @@ public class ShopGuiManager {
     private static final int PAGE_SIZE = 36;
     private static final long PROMPT_TIMEOUT_TICKS = 20L * 60;
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+    private static final double TITLE_WIDTH_LIMIT = 26.0D;
+    private static final double LORE_WIDTH_LIMIT = 26.0D;
 
     private final LumineEconomyBridge plugin;
     private final Map<UUID, ShopGuiSession> sessions = new HashMap<>();
@@ -236,17 +238,143 @@ public class ShopGuiManager {
         ItemStack stack = new ItemStack(material);
         ItemMeta meta = stack.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(title);
+            meta.setDisplayName(fitTitle(title));
             if (lore.length > 0) {
                 List<String> lines = new ArrayList<>();
                 for (String line : lore) {
-                    lines.add(line);
+                    lines.addAll(wrapLoreLines(line));
                 }
-                meta.setLore(lines);
+                if (!lines.isEmpty()) {
+                    meta.setLore(lines);
+                }
             }
             stack.setItemMeta(meta);
         }
         return stack;
+    }
+
+    private String fitTitle(String title) {
+        if (title == null || title.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        List<Double> widthStack = new ArrayList<>();
+        List<Integer> indexStack = new ArrayList<>();
+        double width = 0;
+        for (int i = 0; i < title.length(); i++) {
+            char c = title.charAt(i);
+            if (c == ChatColor.COLOR_CHAR && i + 1 < title.length()) {
+                builder.append(c).append(title.charAt(i + 1));
+                i++;
+                continue;
+            }
+            double glyph = glyphWidth(c);
+            if (width + glyph > TITLE_WIDTH_LIMIT) {
+                double ellipsisWidth = glyphWidth('…');
+                if (widthStack.isEmpty()) {
+                    String colors = ChatColor.getLastColors(builder.toString());
+                    if (!colors.isEmpty()) {
+                        builder.append(colors);
+                    }
+                    builder.append('…');
+                    return builder.toString();
+                }
+                while (!widthStack.isEmpty() && width + ellipsisWidth > TITLE_WIDTH_LIMIT) {
+                    width -= widthStack.remove(widthStack.size() - 1);
+                    int removeIndex = indexStack.remove(indexStack.size() - 1);
+                    builder.setLength(removeIndex);
+                }
+                String colors = ChatColor.getLastColors(builder.toString());
+                if (!colors.isEmpty()) {
+                    builder.append(colors);
+                }
+                builder.append('…');
+                return builder.toString();
+            }
+            int indexBeforeChar = builder.length();
+            builder.append(c);
+            width += glyph;
+            widthStack.add(glyph);
+            indexStack.add(indexBeforeChar);
+        }
+        return builder.toString();
+    }
+
+    private List<String> wrapLoreLines(List<String> lines) {
+        List<String> wrapped = new ArrayList<>();
+        if (lines == null) {
+            return wrapped;
+        }
+        for (String line : lines) {
+            wrapped.addAll(wrapLoreLines(line));
+        }
+        return wrapped;
+    }
+
+    private List<String> wrapLoreLines(String line) {
+        List<String> result = new ArrayList<>();
+        if (line == null) {
+            return result;
+        }
+        if (line.isEmpty()) {
+            result.add("");
+            return result;
+        }
+        StringBuilder current = new StringBuilder();
+        double width = 0;
+        String activeColors = "";
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == ChatColor.COLOR_CHAR && i + 1 < line.length()) {
+                current.append(c).append(line.charAt(i + 1));
+                i++;
+                activeColors = ChatColor.getLastColors(current.toString());
+                continue;
+            }
+            double glyph = glyphWidth(c);
+            if (width + glyph > LORE_WIDTH_LIMIT && current.length() > 0) {
+                result.add(current.toString());
+                current = new StringBuilder(activeColors);
+                width = 0;
+            }
+            current.append(c);
+            width += glyph;
+        }
+        if (current.length() > 0) {
+            result.add(current.toString());
+        } else if (result.isEmpty()) {
+            result.add("");
+        }
+        return result;
+    }
+
+    private double glyphWidth(char c) {
+        if (Character.isISOControl(c) || c == '\n' || c == '\r') {
+            return 0;
+        }
+        return isWideGlyph(c) ? 1.5D : 1.0D;
+    }
+
+    private boolean isWideGlyph(char c) {
+        Character.UnicodeBlock block = Character.UnicodeBlock.of(c);
+        return block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_C
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_D
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_E
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_F
+                || block == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS
+                || block == Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION
+                || block == Character.UnicodeBlock.HALFWIDTH_AND_FULLWIDTH_FORMS
+                || block == Character.UnicodeBlock.HIRAGANA
+                || block == Character.UnicodeBlock.KATAKANA
+                || block == Character.UnicodeBlock.KATAKANA_PHONETIC_EXTENSIONS
+                || block == Character.UnicodeBlock.HANGUL_SYLLABLES
+                || block == Character.UnicodeBlock.HANGUL_JAMO
+                || block == Character.UnicodeBlock.HANGUL_JAMO_EXTENDED_A
+                || block == Character.UnicodeBlock.HANGUL_JAMO_EXTENDED_B
+                || block == Character.UnicodeBlock.HANGUL_COMPATIBILITY_JAMO;
     }
 
     private void requestOwnedShops(Player player, Consumer<List<String>> success, Consumer<String> error) {
@@ -387,7 +515,7 @@ public class ShopGuiManager {
                             }
                             ItemMeta meta = stack.getItemMeta();
                             if (meta != null) {
-                                meta.setLore(lore);
+                                meta.setLore(wrapLoreLines(lore));
                                 stack.setItemMeta(meta);
                             }
                             ShopItem item = new ShopItem(itemKey, saleName, stack, raw, stock, priceMap);
@@ -861,8 +989,8 @@ public class ShopGuiManager {
                             }
                         } catch (IllegalArgumentException ignored) {
                         }
-                        skull.setDisplayName(ChatColor.YELLOW + displayName(partner));
-                        skull.setLore(List.of(ChatColor.RED + "Click to remove / 削除"));
+                        skull.setDisplayName(fitTitle(ChatColor.YELLOW + displayName(partner)));
+                        skull.setLore(wrapLoreLines(List.of(ChatColor.RED + "Click to remove / 削除")));
                         head.setItemMeta(skull);
                     }
                     inv.setItem(slot, head);
