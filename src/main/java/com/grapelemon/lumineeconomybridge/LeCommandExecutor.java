@@ -242,6 +242,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop take " + ChatColor.YELLOW + "<id> <item> <qty> " + ChatColor.GRAY + "- Withdraw stock / 在庫回収");
                         p.sendMessage(ChatColor.GREEN + "/le shop price " + ChatColor.YELLOW + "<id> <name> <currency> <amount> [<currency> <amount>...] " + ChatColor.GRAY + "- Set price / 価格設定");
                         p.sendMessage(ChatColor.GREEN + "/le shop buyprice " + ChatColor.YELLOW + "<id> <name> <currency> <amount> [<currency> <amount>...] " + ChatColor.GRAY + "- Set buy price / 買取価格設定");
+                        p.sendMessage(ChatColor.GREEN + "/le shop autoprice " + ChatColor.YELLOW + "<id> <name> <low-stock> <max> <high-stock> <min>" + ChatColor.GRAY + " - Configure auto pricing / 自動価格調整");
                         p.sendMessage(ChatColor.GREEN + "/le shop remove " + ChatColor.YELLOW + "<id> <name> [refund] " + ChatColor.GRAY + "- Remove item / 在庫削除");
                         p.sendMessage(ChatColor.GREEN + "/le shop remove " + ChatColor.YELLOW + "<id> [refund] " + ChatColor.GRAY + "- Remove shop / 撤去");
                         p.sendMessage(ChatColor.GREEN + "/le shop reopen " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Reopen suspended shop / 再開");
@@ -971,8 +972,103 @@ public class LeCommandExecutor implements CommandExecutor {
                                 }
                             });
                         }
+                    } else if (args.length >= 8 && args[1].equalsIgnoreCase("autoprice")) {
+                        String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
+                        String saleName = args[3];
+                        int lowStock;
+                        int highPrice;
+                        int highStock;
+                        int lowPrice;
+                        try {
+                            lowStock = Integer.parseInt(args[4]);
+                            highPrice = parseAmount(args[5]);
+                            highStock = Integer.parseInt(args[6]);
+                            lowPrice = parseAmount(args[7]);
+                        } catch (NumberFormatException ex) {
+                            p.sendMessage(ChatColor.RED + "Usage: /le shop autoprice <id> <name> <low-stock> <max> <high-stock> <min>" + ChatColor.RESET);
+                            return true;
+                        }
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        payload.put("sale_name", saleName);
+                        payload.put("lower_threshold", lowStock);
+                        payload.put("high_price", highPrice);
+                        payload.put("upper_threshold", highStock);
+                        payload.put("low_price", lowPrice);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/autoprice")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Set autoprice failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equals(res.get("status").getAsString())) {
+                                            Integer newSell = res.has("price") && !res.get("price").isJsonNull() ? res.get("price").getAsInt() : null;
+                                            Integer newBuy = res.has("buy_price") && !res.get("buy_price").isJsonNull() ? res.get("buy_price").getAsInt() : null;
+                                            String currency = res.has("currency") && !res.get("currency").isJsonNull() ? res.get("currency").getAsString() : "";
+                                            StringBuilder msg = new StringBuilder();
+                                            msg.append(ChatColor.GREEN).append("Autoprice updated");
+                                            if (newSell != null) {
+                                                msg.append(ChatColor.GRAY).append(" (sell ").append(ChatColor.YELLOW).append(formatAmount(newSell)).append(ChatColor.GRAY);
+                                                if (newBuy != null) {
+                                                    msg.append(", buy ").append(ChatColor.AQUA).append(formatAmount(newBuy)).append(ChatColor.GRAY);
+                                                }
+                                                msg.append(")");
+                                            }
+                                            msg.append(ChatColor.RESET);
+                                            p.sendMessage(msg.toString());
+                                            Inventory top = p.getOpenInventory().getTopInventory();
+                                            if (top.getHolder() instanceof com.grapelemon.lumineeconomybridge.shop.ShopMenuHolder holder && holder.getShopId().equals(shopId)) {
+                                                for (Map.Entry<Integer, com.grapelemon.lumineeconomybridge.shop.ShopItem> en : holder.getItems().entrySet()) {
+                                                    if (en.getValue().getSaleName().equals(saleName)) {
+                                                        com.grapelemon.lumineeconomybridge.shop.ShopItem.ShopPrice price = en.getValue().getOrCreatePrice(currency);
+                                                        if (newSell != null) price.setSellPrice(newSell);
+                                                        if (newBuy != null) price.setBuyPrice(newBuy);
+                                                        ItemStack stack = top.getItem(en.getKey());
+                                                        if (stack != null) {
+                                                            ItemMeta meta = stack.getItemMeta();
+                                                            java.util.List<String> lore = new java.util.ArrayList<>();
+                                                            lore.add(ChatColor.GREEN + "Name: " + ChatColor.YELLOW + en.getValue().getSaleName());
+                                                            lore.add(ChatColor.GREEN + "Stock: " + ChatColor.YELLOW + en.getValue().getStock());
+                                                            for (Map.Entry<String, com.grapelemon.lumineeconomybridge.shop.ShopItem.ShopPrice> pp : en.getValue().getPrices().entrySet()) {
+                                                                com.grapelemon.lumineeconomybridge.shop.ShopItem.ShopPrice info = pp.getValue();
+                                                                if (info == null) continue;
+                                                                if (info.getSellPrice() != null) {
+                                                                    lore.add(ChatColor.GREEN + pp.getKey() + ChatColor.WHITE + " Sell: " + ChatColor.YELLOW + formatAmount(info.getSellPrice()));
+                                                                }
+                                                                if (info.getBuyPrice() != null) {
+                                                                    lore.add(ChatColor.AQUA + pp.getKey() + ChatColor.WHITE + " Buy: " + ChatColor.YELLOW + formatAmount(info.getBuyPrice()));
+                                                                }
+                                                            }
+                                                            meta.setLore(lore);
+                                                            stack.setItemMeta(meta);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            p.sendMessage(ChatColor.RED + "Failed: " + ChatColor.YELLOW + res.get("reason").getAsString() + ChatColor.RED + " / 失敗しました" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
                     } else {
-                        p.sendMessage(ChatColor.YELLOW + "Usage: /le shop <create|add|take|price|buyprice|mode|remove|reopen|help> ... / 使い方: /le shop <create|add|take|price|buyprice|mode|remove|reopen|help> ..." + ChatColor.RESET);
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le shop <create|add|take|price|buyprice|autoprice|mode|remove|reopen|help> ... / 使い方: /le shop <create|add|take|price|buyprice|autoprice|mode|remove|reopen|help> ..." + ChatColor.RESET);
                     }
                     return true;
                 }

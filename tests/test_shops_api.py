@@ -1001,3 +1001,268 @@ def test_shop_account_requires_delegate_or_admin():
             ("admin-shop",),
         ).fetchone()
         assert row and row["account_uuid"] == "corpadmin"
+
+
+def test_shop_autoprice_updates_price_and_buy_price():
+    with main.conn:
+        for table in [
+            "shop_autoprice",
+            "shop_prices",
+            "shop_stock",
+            "shop_items",
+            "shop_locations",
+            "shop_owners",
+            "shops",
+            "currencies",
+        ]:
+            main.conn.execute(f"DELETE FROM {table}")
+        main.conn.execute(
+            "INSERT OR IGNORE INTO currencies(name, symbol) VALUES(?, ?)",
+            ("coin", "c"),
+        )
+        main.conn.execute(
+            "INSERT OR REPLACE INTO settings(key, value) VALUES('default_currency', ?)",
+            ("coin",),
+        )
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("auto-shop", "owner-auto", "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("auto-shop", "owner-auto"),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
+            ("auto-shop", "overworld", 0.0, 64.0, 0.0),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+            ("auto-item", "DIAMOND", "Diamond", b"blob"),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at) VALUES(?,?,?,?,?)",
+            ("auto-shop", "auto-item", "diamond", 250, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_prices(shop_id, item_key, currency, price, buy_price) VALUES(?,?,?,?,?)",
+            ("auto-shop", "auto-item", "coin", 20, 20),
+        )
+    payload = {
+        "owner_uuid": "owner-auto",
+        "shop_id": "auto-shop",
+        "sale_name": "diamond",
+        "lower_threshold": 5,
+        "high_price": 50,
+        "upper_threshold": 505,
+        "low_price": 10,
+    }
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/autoprice", headers=headers, json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["price"] == 30
+        assert data["buy_price"] == 30
+        assert data["currency"] == "coin"
+    with main.conn:
+        row = main.conn.execute(
+            "SELECT price, buy_price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
+            ("auto-shop", "auto-item", "coin"),
+        ).fetchone()
+        assert row["price"] == 30
+        assert row["buy_price"] == 30
+
+
+def test_shop_buy_uses_autoprice_totals():
+    with main.conn:
+        for table in [
+            "shop_tx",
+            "shop_autoprice",
+            "shop_prices",
+            "shop_stock",
+            "shop_items",
+            "shop_locations",
+            "shop_owners",
+            "shops",
+            "accounts",
+            "currencies",
+        ]:
+            main.conn.execute(f"DELETE FROM {table}")
+        main.conn.execute(
+            "INSERT OR IGNORE INTO currencies(name, symbol) VALUES(?, ?)",
+            ("coin", "c"),
+        )
+        main.conn.execute(
+            "INSERT OR REPLACE INTO settings(key, value) VALUES('default_currency', ?)",
+            ("coin",),
+        )
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("auto-buy-shop", "owner-buy", "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("auto-buy-shop", "owner-buy"),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
+            ("auto-buy-shop", "overworld", 0.0, 64.0, 0.0),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+            ("auto-buy-item", "DIAMOND", "Diamond", b"blob"),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at) VALUES(?,?,?,?,?)",
+            ("auto-buy-shop", "auto-buy-item", "diamond", 505, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_prices(shop_id, item_key, currency, price, buy_price) VALUES(?,?,?,?,?)",
+            ("auto-buy-shop", "auto-buy-item", "coin", 20, 20),
+        )
+        main.conn.execute(
+            "INSERT INTO accounts(uuid, currency, balance, frozen) VALUES(?,?,?,0)",
+            ("buyer-uuid", "coin", 1000),
+        )
+        main.conn.execute(
+            "INSERT INTO accounts(uuid, currency, balance, frozen) VALUES(?,?,?,0)",
+            ("owner-buy", "coin", 0),
+        )
+    payload = {
+        "owner_uuid": "owner-buy",
+        "shop_id": "auto-buy-shop",
+        "sale_name": "diamond",
+        "lower_threshold": 5,
+        "high_price": 50,
+        "upper_threshold": 505,
+        "low_price": 10,
+    }
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/autoprice", headers=headers, json=payload)
+        assert resp.status_code == 200
+        buy_payload = {
+            "player_uuid": "buyer-uuid",
+            "shop_id": "auto-buy-shop",
+            "item_key": "auto-buy-item",
+            "qty": 10,
+            "currency": "coin",
+            "timestamp": int(time.time()),
+            "client_tx_id": "auto-buy-tx",
+        }
+        buy_resp = client.post("/api/shop/buy", headers=headers, json=buy_payload)
+        assert buy_resp.status_code == 200
+        buy_data = buy_resp.json()
+        assert buy_data["status"] == "success"
+    with main.conn:
+        tx = main.conn.execute(
+            "SELECT total_price FROM shop_tx WHERE client_tx_id=?",
+            ("auto-buy-tx",),
+        ).fetchone()
+        assert tx is not None
+        assert tx["total_price"] == 103
+        price_row = main.conn.execute(
+            "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
+            ("auto-buy-shop", "auto-buy-item", "coin"),
+        ).fetchone()
+        assert price_row["price"] == 11
+
+
+def test_shop_sell_uses_autoprice_totals():
+    with main.conn:
+        for table in [
+            "shop_tx",
+            "shop_autoprice",
+            "shop_prices",
+            "shop_stock",
+            "shop_items",
+            "shop_locations",
+            "shop_owners",
+            "shops",
+            "accounts",
+            "currencies",
+        ]:
+            main.conn.execute(f"DELETE FROM {table}")
+        main.conn.execute(
+            "INSERT OR IGNORE INTO currencies(name, symbol) VALUES(?, ?)",
+            ("coin", "c"),
+        )
+        main.conn.execute(
+            "INSERT OR REPLACE INTO settings(key, value) VALUES('default_currency', ?)",
+            ("coin",),
+        )
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("auto-sell-shop", "owner-sell", "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("auto-sell-shop", "owner-sell"),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_locations(shop_id, world, x, y, z) VALUES(?,?,?,?,?)",
+            ("auto-sell-shop", "overworld", 0.0, 64.0, 0.0),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+            ("auto-sell-item", "DIAMOND", "Diamond", b"blob"),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at) VALUES(?,?,?,?,?)",
+            ("auto-sell-shop", "auto-sell-item", "diamond", 250, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_prices(shop_id, item_key, currency, price, buy_price) VALUES(?,?,?,?,?)",
+            ("auto-sell-shop", "auto-sell-item", "coin", 20, 20),
+        )
+        main.conn.execute(
+            "INSERT INTO accounts(uuid, currency, balance, frozen) VALUES(?,?,?,0)",
+            ("owner-sell", "coin", 1000),
+        )
+        main.conn.execute(
+            "INSERT INTO accounts(uuid, currency, balance, frozen) VALUES(?,?,?,0)",
+            ("seller-uuid", "coin", 0),
+        )
+    payload = {
+        "owner_uuid": "owner-sell",
+        "shop_id": "auto-sell-shop",
+        "sale_name": "diamond",
+        "lower_threshold": 5,
+        "high_price": 50,
+        "upper_threshold": 505,
+        "low_price": 10,
+    }
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/autoprice", headers=headers, json=payload)
+        assert resp.status_code == 200
+        sell_payload = {
+            "player_uuid": "seller-uuid",
+            "shop_id": "auto-sell-shop",
+            "item_key": "auto-sell-item",
+            "qty": 5,
+            "currency": "coin",
+            "timestamp": int(time.time()),
+            "client_tx_id": "auto-sell-tx",
+        }
+        sell_resp = client.post("/api/shop/sell", headers=headers, json=sell_payload)
+        assert sell_resp.status_code == 200
+        sell_data = sell_resp.json()
+        assert sell_data["status"] == "success"
+    with main.conn:
+        tx = main.conn.execute(
+            "SELECT total_price FROM shop_tx WHERE client_tx_id=?",
+            ("auto-sell-tx",),
+        ).fetchone()
+        assert tx is not None
+        assert tx["total_price"] == 150
+        price_row = main.conn.execute(
+            "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
+            ("auto-sell-shop", "auto-sell-item", "coin"),
+        ).fetchone()
+        assert price_row["price"] == 30
