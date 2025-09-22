@@ -13,3 +13,6 @@ cash:
 vault:
   enabled: false
   currency: "thy"
+
+currency:
+  decimal_places: 2

@@ -31,6 +31,12 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from tile_store import TileStore
 from tile_format import PIXEL_COUNT
+from decimal_config import (
+    DECIMAL_PLACES_KEY,
+    DEFAULT_DECIMAL_PLACES,
+    clamp_decimal_places,
+    compute_scale,
+)
 
 # ``flask_sock`` (and its dependency ``simple_websocket``) are only required
 # when running the live dashboard with websocket support.  The unit tests in
@@ -191,12 +197,32 @@ def get_db():
     return conn
 
 
+def get_configured_decimal_places(db: sqlite3.Connection) -> int:
+    row = db.execute(
+        "SELECT value FROM settings WHERE key=?", (DECIMAL_PLACES_KEY,)
+    ).fetchone()
+    if not row:
+        return DEFAULT_DECIMAL_PLACES
+    try:
+        return clamp_decimal_places(int(row["value"]))
+    except (TypeError, ValueError):
+        return DEFAULT_DECIMAL_PLACES
+
+
+def current_decimal_places() -> int:
+    with get_db() as db:
+        return get_configured_decimal_places(db)
+
+
 def parse_amount_field(value: str) -> int:
     try:
         dec = Decimal(value)
     except (InvalidOperation, ValueError):
         raise ValueError
-    return int((dec * 1000).to_integral_value(rounding=ROUND_HALF_UP))
+    places = current_decimal_places()
+    scale = Decimal(compute_scale(places))
+    scaled = (dec * scale).to_integral_value(rounding=ROUND_HALF_UP)
+    return int(scaled)
 
 
 def is_currency_manager(db: sqlite3.Connection, uuid: str, currency: str) -> bool:
@@ -1047,6 +1073,8 @@ def shops():
 @admin_required
 def shop_detail(shop_id: str):
     with get_db() as db:
+        decimal_places = get_configured_decimal_places(db)
+        scale = compute_scale(decimal_places)
         if request.method == "POST":
             action = request.form.get("action")
             cur = db.cursor()
@@ -1110,7 +1138,7 @@ def shop_detail(shop_id: str):
                     "material": r["material"],
                     "display_name": r["display_name"],
                     "stock": r["stock"],
-                    "prices": {p["currency"]: p["price"] / 1000 for p in price_rows},
+                    "prices": {p["currency"]: p["price"] / scale for p in price_rows},
                 }
             )
         sales = db.execute(
@@ -1122,7 +1150,7 @@ def shop_detail(shop_id: str):
             (shop_id,),
         ).fetchall()
     sales_fmt = [
-        {**dict(r), "total_price": r["total_price"] / 1000} for r in sales
+        {**dict(r), "total_price": r["total_price"] / scale} for r in sales
     ]
     return render_template("shop_detail.html", shop=shop, items=items, sales=sales_fmt)
 
@@ -1218,6 +1246,8 @@ def portal_shop(shop_id: str):
         flash("Link your account first")
         return redirect(url_for("portal_index"))
     with get_db() as db:
+        decimal_places = get_configured_decimal_places(db)
+        scale = compute_scale(decimal_places)
         shop = db.execute(
             "SELECT shop_id, status, last_activity_at, listed FROM shops WHERE shop_id=?",
             (shop_id,),
@@ -1290,7 +1320,7 @@ def portal_shop(shop_id: str):
                     "material": r["material"],
                     "display_name": r["display_name"],
                     "stock": r["stock"],
-                    "prices": {p["currency"]: p["price"] / 1000 for p in price_rows},
+                    "prices": {p["currency"]: p["price"] / scale for p in price_rows},
                 }
             )
         sales = db.execute(
@@ -1301,7 +1331,7 @@ def portal_shop(shop_id: str):
             """,
             (shop_id,),
         ).fetchall()
-        sales = [{**dict(r), "total_price": r["total_price"] / 1000} for r in sales]
+        sales = [{**dict(r), "total_price": r["total_price"] / scale} for r in sales]
         series = db.execute(
             """
             SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch') AS day, SUM(total_price) total
@@ -1311,7 +1341,7 @@ def portal_shop(shop_id: str):
             (shop_id,),
         ).fetchall()
     labels = [r["day"] for r in series]
-    data = [r["total"] / 1000 for r in series]
+    data = [r["total"] / scale for r in series]
     return render_template(
         "my_shop_detail.html",
         shop=shop,

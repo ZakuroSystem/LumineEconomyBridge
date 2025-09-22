@@ -48,8 +48,6 @@ import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.UUID;
-import java.math.BigDecimal;
-import java.text.DecimalFormat;
 
 public class ShopListener implements Listener {
     private final LumineEconomyBridge plugin;
@@ -64,7 +62,6 @@ public class ShopListener implements Listener {
     private final NamespacedKey keyHopperShopOwner;
     private final NamespacedKey keyHopperItemTag;
     private static final long CACHE_MS = 3000;
-    private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
     private final Map<String, CacheEntry> itemCache = new ConcurrentHashMap<>();
     private final Map<UUID, PendingSale> pendingSales = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> hopperCooldowns = new ConcurrentHashMap<>();
@@ -1446,12 +1443,10 @@ public class ShopListener implements Listener {
     }
 
     private int parseAmount(String s) throws NumberFormatException {
-        BigDecimal bd = new BigDecimal(s);
-        bd = bd.movePointRight(3);
-        return bd.intValueExact();
+        return plugin.parseAmount(s);
     }
 
     private String formatAmount(int amount) {
-        return AMT_FMT.format(amount / 1000.0);
+        return plugin.formatAmountPlain(amount);
     }
 }

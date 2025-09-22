@@ -40,14 +40,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
-import java.math.BigDecimal;
-import java.text.DecimalFormat;
 
 public class LeCommandExecutor implements CommandExecutor {
 
     private final LumineEconomyBridge plugin;
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-    private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     private final NamespacedKey keyShop;
     private final NamespacedKey keyId;
@@ -1314,13 +1311,11 @@ public class LeCommandExecutor implements CommandExecutor {
     }
 
     private int parseAmount(String s) throws NumberFormatException {
-        BigDecimal bd = new BigDecimal(s);
-        bd = bd.movePointRight(3);
-        return bd.intValueExact();
+        return plugin.parseAmount(s);
     }
 
     private String formatAmount(int amount) {
-        return AMT_FMT.format(amount / 1000.0);
+        return plugin.formatAmountPlain(amount);
     }
 
     private ItemStack prepareForSerialization(ItemStack item) {
