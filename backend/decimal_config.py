@@ -41,7 +41,13 @@ def rescale_value(value: int, old_places: int, new_places: int) -> int:
     old_scale = compute_scale(old_places)
     new_scale = compute_scale(new_places)
     dec_value = (Decimal(value) * Decimal(new_scale)) / Decimal(old_scale)
-    return int(dec_value.to_integral_value(rounding=ROUND_HALF_UP))
+    scaled = dec_value.to_integral_value(rounding=ROUND_HALF_UP)
+    if scaled == 0:
+        if value > 0:
+            return 1
+        if value < 0:
+            return -1
+    return int(scaled)
 
 
 __all__ = [

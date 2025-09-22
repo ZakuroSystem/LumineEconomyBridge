@@ -1078,23 +1078,7 @@ def shop_detail(shop_id: str):
         if request.method == "POST":
             action = request.form.get("action")
             cur = db.cursor()
-            if action == "set_stock":
-                item_key = request.form["item_key"]
-                try:
-                    stock = int(request.form["stock"])
-                except ValueError:
-                    stock = 0
-                ts = int(time.time())
-                cur.execute(
-                    """
-                    INSERT INTO shop_stock(shop_id,item_key,stock,updated_at)
-                    VALUES (?,?,?,?)
-                    ON CONFLICT(shop_id,item_key)
-                    DO UPDATE SET stock=excluded.stock, updated_at=excluded.updated_at
-                    """,
-                    (shop_id, item_key, stock, ts),
-                )
-            elif action == "set_price":
+            if action == "set_price":
                 item_key = request.form["item_key"]
                 currency = request.form["currency"].strip()
                 try:

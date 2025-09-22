@@ -1003,6 +1003,75 @@ def test_shop_account_requires_delegate_or_admin():
         assert row and row["account_uuid"] == "corpadmin"
 
 
+def test_decimal_rescale_updates_shop_values():
+    with main.conn:
+        main.conn.execute("DELETE FROM transactions")
+        main.conn.execute("DELETE FROM accounts")
+        main.conn.execute("DELETE FROM shop_tx")
+        main.conn.execute("DELETE FROM shop_autoprice")
+        main.conn.execute("DELETE FROM shop_prices")
+        main.conn.execute(
+            "INSERT OR REPLACE INTO settings(key,value) VALUES(?, ?)",
+            (main.DECIMAL_PLACES_KEY, "3"),
+        )
+        main.conn.execute(
+            "INSERT INTO accounts(uuid,currency,balance) VALUES(?,?,?)",
+            ("player", "coin", 123450),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_prices(shop_id,item_key,currency,price,buy_price) VALUES(?,?,?,?,?)",
+            ("shop", "item", "coin", 100000, 50000),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_prices(shop_id,item_key,currency,price,buy_price) VALUES(?,?,?,?,?)",
+            ("shop", "cheap", "coin", 1, 1),
+        )
+        main.conn.execute(
+            """
+            INSERT INTO shop_autoprice(shop_id,item_key,currency,lower_threshold,upper_threshold,high_price,low_price)
+            VALUES(?,?,?,?,?,?,?)
+            """,
+            ("shop", "item", "coin", 5, 10, 20000, 10000),
+        )
+    try:
+        main._update_decimal_places(2)
+        with main.conn:
+            balance = main.conn.execute(
+                "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
+                ("player", "coin"),
+            ).fetchone()["balance"]
+            assert balance == 12345
+            price_row = main.conn.execute(
+                "SELECT price,buy_price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                ("shop", "item"),
+            ).fetchone()
+            assert price_row["price"] == 10000
+            assert price_row["buy_price"] == 5000
+            cheap_row = main.conn.execute(
+                "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=?",
+                ("shop", "cheap"),
+            ).fetchone()
+            assert cheap_row["price"] == 1
+            auto_row = main.conn.execute(
+                "SELECT high_price,low_price FROM shop_autoprice WHERE shop_id=? AND item_key=?",
+                ("shop", "item"),
+            ).fetchone()
+            assert auto_row["high_price"] == 2000
+            assert auto_row["low_price"] == 1000
+    finally:
+        main._update_decimal_places(main.DEFAULT_DECIMAL_PLACES)
+        with main.conn:
+            main.conn.execute("DELETE FROM shop_autoprice")
+            main.conn.execute("DELETE FROM shop_prices")
+            main.conn.execute("DELETE FROM shop_tx")
+            main.conn.execute("DELETE FROM accounts")
+            main.conn.execute("DELETE FROM transactions")
+            main.conn.execute(
+                "INSERT OR REPLACE INTO settings(key,value) VALUES(?, ?)",
+                (main.DECIMAL_PLACES_KEY, str(main.DEFAULT_DECIMAL_PLACES)),
+            )
+
+
 def test_shop_autoprice_updates_price_and_buy_price():
     with main.conn:
         for table in [

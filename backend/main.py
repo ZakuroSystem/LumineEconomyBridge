@@ -723,7 +723,7 @@ def _fetch_decimal_places(cur: sqlite3.Cursor) -> Optional[int]:
     if not row:
         return None
     try:
-        return clamp_decimal_places(int(row["value"]))
+        return int(row["value"])
     except (TypeError, ValueError):
         return None
 
@@ -801,6 +801,14 @@ def _update_decimal_places(desired_places: int) -> int:
                 "shop_prices",
                 ("shop_id", "item_key", "currency"),
                 ("price", "buy_price"),
+                stored,
+                desired,
+            )
+            _rescale_table(
+                cur,
+                "shop_autoprice",
+                ("shop_id", "item_key", "currency"),
+                ("high_price", "low_price"),
                 stored,
                 desired,
             )
