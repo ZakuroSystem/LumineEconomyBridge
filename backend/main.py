@@ -2718,7 +2718,7 @@ async def shop_items(shop_id: str):
     start = time.time()
     with transaction() as cur:
         srow = cur.execute(
-            "SELECT owner_uuid,status,last_activity_at,trade_mode FROM shops WHERE shop_id=?",
+            "SELECT owner_uuid,status,last_activity_at,trade_mode,listed,account_uuid FROM shops WHERE shop_id=?",
             (shop_id,),
         ).fetchone()
         owners: List[str] = []
@@ -2752,6 +2752,8 @@ async def shop_items(shop_id: str):
                 "last_activity_at": srow["last_activity_at"],
                 "owner_uuid": srow["owner_uuid"],
                 "owners": owners,
+                "listed": bool(srow["listed"]),
+                "account_uuid": srow["account_uuid"],
             }
         else:
             rows = cur.execute(
@@ -2796,6 +2798,8 @@ async def shop_items(shop_id: str):
                 "owner_uuid": srow["owner_uuid"],
                 "owners": owners,
                 "trade_mode": srow["trade_mode"] if srow["trade_mode"] else "both",
+                "listed": bool(srow["listed"]),
+                "account_uuid": srow["account_uuid"],
                 "items": items,
             }
             if sale:

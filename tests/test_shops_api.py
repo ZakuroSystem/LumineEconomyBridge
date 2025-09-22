@@ -171,6 +171,8 @@ def test_shop_items_includes_owners_when_suspended():
         data = resp.json()
         assert data["status"] == "suspended"
         assert data["owners"] == ["u2"]
+        assert data["listed"] is True
+        assert "account_uuid" in data
 
 
 def test_shop_add_stock_requires_token():
@@ -242,6 +244,8 @@ def test_suspended_shop_without_owner_row_can_be_reclaimed():
         assert data["status"] == "suspended"
         assert data["owner_uuid"] == "owner-s4"
         assert data["owners"] == ["owner-s4"]
+        assert data["listed"] is True
+        assert "account_uuid" in data
     with main.conn:
         owners = main.conn.execute(
             "SELECT owner_uuid FROM shop_owners WHERE shop_id=?",
