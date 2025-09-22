@@ -322,23 +322,77 @@ public class ShopGuiManager {
         }
         StringBuilder current = new StringBuilder();
         double width = 0;
-        String activeColors = "";
+        int lastBreakPos = -1;
+        boolean lastBreakWasSpace = false;
+        CharCategory previousCategory = null;
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
             if (c == ChatColor.COLOR_CHAR && i + 1 < line.length()) {
-                current.append(c).append(line.charAt(i + 1));
+                char code = line.charAt(i + 1);
+                current.append(c).append(code);
                 i++;
-                activeColors = ChatColor.getLastColors(current.toString());
                 continue;
+            }
+            CharCategory category = categorize(c);
+            if (category == CharCategory.SPACE && current.length() == 0) {
+                continue;
+            }
+            if (category == CharCategory.SPACE) {
+                lastBreakPos = current.length();
+                lastBreakWasSpace = true;
+                previousCategory = null;
+            } else if (previousCategory != null && previousCategory != category) {
+                lastBreakPos = current.length();
+                lastBreakWasSpace = false;
             }
             double glyph = glyphWidth(c);
             if (width + glyph > LORE_WIDTH_LIMIT && current.length() > 0) {
+                if (lastBreakPos >= 0) {
+                    String lineText = current.substring(0, lastBreakPos);
+                    result.add(lineText);
+                    String remainder = current.substring(lastBreakPos);
+                    if (lastBreakWasSpace) {
+                        remainder = dropLeadingSpacesPreserveColors(remainder);
+                    }
+                    String carryColors = ChatColor.getLastColors(lineText);
+                    current = new StringBuilder();
+                    if (!carryColors.isEmpty()) {
+                        current.append(carryColors);
+                    }
+                    if (!remainder.isEmpty()) {
+                        current.append(remainder);
+                    }
+                    width = calculateWidth(remainder);
+                    previousCategory = getLastCategory(remainder);
+                    lastBreakPos = -1;
+                    lastBreakWasSpace = false;
+                    i--;
+                    continue;
+                }
+                if (current.length() == 0) {
+                    current.append(c);
+                    width += glyph;
+                    previousCategory = category == CharCategory.SPACE ? null : category;
+                    continue;
+                }
                 result.add(current.toString());
-                current = new StringBuilder(activeColors);
+                String carryColors = ChatColor.getLastColors(current.toString());
+                current = new StringBuilder();
+                if (!carryColors.isEmpty()) {
+                    current.append(carryColors);
+                }
                 width = 0;
+                previousCategory = null;
+                lastBreakPos = -1;
+                lastBreakWasSpace = false;
+                i--;
+                continue;
             }
             current.append(c);
             width += glyph;
+            if (category != CharCategory.SPACE) {
+                previousCategory = category;
+            }
         }
         if (current.length() > 0) {
             result.add(current.toString());
@@ -346,6 +400,102 @@ public class ShopGuiManager {
             result.add("");
         }
         return result;
+    }
+
+    private String dropLeadingSpacesPreserveColors(String text) {
+        if (text.isEmpty()) {
+            return text;
+        }
+        StringBuilder builder = new StringBuilder();
+        int index = 0;
+        while (index < text.length()) {
+            char c = text.charAt(index);
+            if (c == ChatColor.COLOR_CHAR && index + 1 < text.length()) {
+                builder.append(c).append(text.charAt(index + 1));
+                index += 2;
+                continue;
+            }
+            if (c == ' ') {
+                index++;
+                continue;
+            }
+            builder.append(text.substring(index));
+            break;
+        }
+        return builder.toString();
+    }
+
+    private double calculateWidth(String text) {
+        double value = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == ChatColor.COLOR_CHAR && i + 1 < text.length()) {
+                i++;
+                continue;
+            }
+            value += glyphWidth(c);
+        }
+        return value;
+    }
+
+    private CharCategory getLastCategory(String text) {
+        for (int i = text.length() - 1; i >= 0; i--) {
+            char c = text.charAt(i);
+            if (c == ChatColor.COLOR_CHAR && i - 1 >= 0) {
+                i--;
+                continue;
+            }
+            CharCategory category = categorize(c);
+            if (category == CharCategory.SPACE) {
+                return null;
+            }
+            return category;
+        }
+        return null;
+    }
+
+    private CharCategory categorize(char c) {
+        if (c == ' ') {
+            return CharCategory.SPACE;
+        }
+        if (c >= '0' && c <= '9') {
+            return CharCategory.DIGIT;
+        }
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+            return CharCategory.LATIN;
+        }
+        Character.UnicodeBlock block = Character.UnicodeBlock.of(c);
+        if (block == Character.UnicodeBlock.HIRAGANA) {
+            return CharCategory.HIRAGANA;
+        }
+        if (block == Character.UnicodeBlock.KATAKANA || block == Character.UnicodeBlock.KATAKANA_PHONETIC_EXTENSIONS) {
+            return CharCategory.KATAKANA;
+        }
+        if (isKanjiBlock(block)) {
+            return CharCategory.KANJI;
+        }
+        return CharCategory.OTHER;
+    }
+
+    private boolean isKanjiBlock(Character.UnicodeBlock block) {
+        return block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_C
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_D
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_E
+                || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_F
+                || block == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS;
+    }
+
+    private enum CharCategory {
+        SPACE,
+        LATIN,
+        DIGIT,
+        HIRAGANA,
+        KATAKANA,
+        KANJI,
+        OTHER
     }
 
     private double glyphWidth(char c) {
