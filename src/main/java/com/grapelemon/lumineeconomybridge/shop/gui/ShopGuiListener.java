@@ -25,8 +25,12 @@ public class ShopGuiListener implements Listener {
         if (!(event.getInventory().getHolder() instanceof ShopGuiSessionHolder)) {
             return;
         }
+        if (event.getRawSlot() < 0 || event.getRawSlot() >= event.getInventory().getSize()) {
+            event.setCancelled(true);
+            return;
+        }
         event.setCancelled(true);
-        // TODO: delegate to the relevant controller when the layout is implemented.
+        manager.handleClick(player, event.getRawSlot());
     }
 
     @EventHandler

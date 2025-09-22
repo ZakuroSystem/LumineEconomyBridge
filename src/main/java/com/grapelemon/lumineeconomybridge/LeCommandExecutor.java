@@ -220,6 +220,14 @@ public class LeCommandExecutor implements CommandExecutor {
                     return true;
                 }
                 case "shop" -> {
+                    if (args.length == 1 || args[1].equalsIgnoreCase("gui")) {
+                        if (!plugin.isActive() || plugin.getHttpClient() == null) {
+                            p.sendMessage(Lang.get("error-unavailable"));
+                            return true;
+                        }
+                        plugin.getShopGuiManager().openMainMenu(p);
+                        return true;
+                    }
                     if (!plugin.isActive() || plugin.getHttpClient() == null) {
                         p.sendMessage(Lang.get("error-unavailable"));
                         return true;
