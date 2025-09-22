@@ -556,7 +556,10 @@ public class ShopGuiManager {
         HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/ids").newBuilder()
                 .addQueryParameter("owner_uuid", player.getUniqueId().toString())
                 .build();
-        Request request = new Request.Builder().url(url).build();
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                .build();
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
@@ -599,7 +602,10 @@ public class ShopGuiManager {
         HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
                 .addQueryParameter("shop_id", shopId)
                 .build();
-        Request request = new Request.Builder().url(url).build();
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                .build();
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
@@ -742,7 +748,10 @@ public class ShopGuiManager {
         HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
                 .addQueryParameter("shop_id", shopId)
                 .build();
-        Request request = new Request.Builder().url(url).build();
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                .build();
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
