@@ -45,7 +45,7 @@ public class ShopGuiListener implements Listener {
         if (!(event.getInventory().getHolder() instanceof ShopGuiSessionHolder)) {
             return;
         }
-        manager.close(player);
+        manager.close(player, false);
     }
 
     @EventHandler
@@ -67,6 +67,6 @@ public class ShopGuiListener implements Listener {
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
-        manager.close(event.getPlayer());
+        manager.close(event.getPlayer(), true);
     }
 }

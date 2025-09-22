@@ -78,14 +78,28 @@ public class ShopGuiManager {
     }
 
     private static final class ChatPrompt {
+        private final ShopGuiSession session;
         private final Consumer<String> handler;
         private final Runnable cancelAction;
         private final BukkitTask timeout;
 
-        private ChatPrompt(Consumer<String> handler, Runnable cancelAction, BukkitTask timeout) {
+        private ChatPrompt(ShopGuiSession session, Consumer<String> handler, Runnable cancelAction, BukkitTask timeout) {
+            this.session = session;
             this.handler = handler;
             this.cancelAction = cancelAction;
             this.timeout = timeout;
+        }
+
+        private void handleInput(String input) {
+            session.finishPrompt(false);
+            handler.accept(input);
+        }
+
+        private void cancelAndResume() {
+            session.finishPrompt(true);
+            if (cancelAction != null) {
+                cancelAction.run();
+            }
         }
     }
 
@@ -150,12 +164,20 @@ public class ShopGuiManager {
         }
     }
 
-    public void close(Player player) {
-        ShopGuiSession session = sessions.remove(player.getUniqueId());
-        if (session != null) {
-            session.clear();
+    public void close(Player player, boolean force) {
+        UUID playerId = player.getUniqueId();
+        ShopGuiSession session = sessions.get(playerId);
+        if (session == null) {
+            cancelPrompt(playerId, true);
+            return;
         }
-        cancelPrompt(player.getUniqueId(), true);
+        if (!force && session.isAwaitingPrompt()) {
+            session.dropInventoryReference();
+            return;
+        }
+        sessions.remove(playerId);
+        session.clear();
+        cancelPrompt(playerId, true);
     }
 
     public boolean isTracking(Player player) {
@@ -174,13 +196,11 @@ public class ShopGuiManager {
         String trimmed = message.trim();
         if (trimmed.equalsIgnoreCase("cancel")) {
             Bukkit.getScheduler().runTask(plugin, () -> {
-                if (prompt.cancelAction != null) {
-                    prompt.cancelAction.run();
-                }
+                prompt.cancelAndResume();
                 player.sendMessage(ChatColor.RED + "Cancelled / キャンセルしました" + ChatColor.RESET);
             });
         } else {
-            Bukkit.getScheduler().runTask(plugin, () -> prompt.handler.accept(trimmed));
+            Bukkit.getScheduler().runTask(plugin, () -> prompt.handleInput(trimmed));
         }
         return true;
     }
@@ -208,30 +228,30 @@ public class ShopGuiManager {
             if (prompt.timeout != null) {
                 prompt.timeout.cancel();
             }
-            if (runCancel && prompt.cancelAction != null) {
-                Bukkit.getScheduler().runTask(plugin, prompt.cancelAction);
+            Runnable task = runCancel ? prompt::cancelAndResume : () -> prompt.session.finishPrompt(false);
+            if (Bukkit.isPrimaryThread()) {
+                task.run();
+            } else {
+                Bukkit.getScheduler().runTask(plugin, task);
             }
         }
     }
 
-    private void beginPrompt(Player player, String instruction, Consumer<String> handler, Runnable cancelAction) {
+    private void beginPrompt(ShopGuiSession session, Player player, String instruction, Consumer<String> handler, Runnable cancelAction) {
         UUID playerId = player.getUniqueId();
-        cancelPrompt(playerId, false);
         player.closeInventory();
         player.sendMessage(ChatColor.YELLOW + instruction + ChatColor.GRAY + " (type cancel to abort / キャンセルはcancel)" + ChatColor.RESET);
         BukkitTask timeout = Bukkit.getScheduler().runTaskLater(plugin, () -> {
             ChatPrompt prompt = prompts.remove(playerId);
             if (prompt != null) {
-                if (prompt.cancelAction != null) {
-                    prompt.cancelAction.run();
-                }
+                prompt.cancelAndResume();
                 Player target = Bukkit.getPlayer(playerId);
                 if (target != null) {
                     target.sendMessage(ChatColor.RED + "Timed out / タイムアウトしました" + ChatColor.RESET);
                 }
             }
         }, PROMPT_TIMEOUT_TICKS);
-        prompts.put(playerId, new ChatPrompt(handler, cancelAction, timeout));
+        prompts.put(playerId, new ChatPrompt(session, handler, cancelAction, timeout));
     }
 
     private ItemStack button(Material material, String title, String... lore) {
@@ -828,10 +848,12 @@ public class ShopGuiManager {
         private ShopData currentShop;
         private Runnable reopenAction;
         private boolean closed;
+        private boolean awaitingPrompt;
 
         private ShopGuiSession(Player player) {
             this.playerId = player.getUniqueId();
             this.closed = false;
+            this.awaitingPrompt = false;
         }
 
         private Player player() {
@@ -874,6 +896,9 @@ public class ShopGuiManager {
             if (closed) {
                 return;
             }
+            if (awaitingPrompt) {
+                return;
+            }
             Player player = player();
             if (player == null) return;
             if (inventory != null) {
@@ -893,6 +918,36 @@ public class ShopGuiManager {
             if (action != null) {
                 action.run();
             }
+        }
+
+        private boolean startPrompt() {
+            if (closed || awaitingPrompt) {
+                return false;
+            }
+            ShopGuiManager.this.cancelPrompt(playerId, false);
+            awaitingPrompt = true;
+            return true;
+        }
+
+        private void finishPrompt(boolean reopen) {
+            if (!awaitingPrompt) {
+                if (reopen && !closed) {
+                    reopen();
+                }
+                return;
+            }
+            awaitingPrompt = false;
+            if (reopen && !closed) {
+                reopen();
+            }
+        }
+
+        private boolean isAwaitingPrompt() {
+            return awaitingPrompt;
+        }
+
+        private void dropInventoryReference() {
+            inventory = null;
         }
 
         private void handleShopLoaded(ShopData data) {
@@ -1022,7 +1077,10 @@ public class ShopGuiManager {
         private void promptCreateShop() {
             Player player = player();
             if (player == null) return;
-            beginPrompt(player,
+            if (!startPrompt()) {
+                return;
+            }
+            beginPrompt(this, player,
                     "Enter a unique shop ID / ショップIDを入力してください",
                     input -> {
                         Player p = player();
@@ -1047,7 +1105,7 @@ public class ShopGuiManager {
                             showMainMenu();
                         });
                     },
-                    this::showMainMenu);
+                    null);
         }
 
         private void toggleListing(ShopData data) {
@@ -1104,7 +1162,10 @@ public class ShopGuiManager {
         private void promptAccount(ShopData data) {
             Player player = player();
             if (player == null) return;
-            beginPrompt(player,
+            if (!startPrompt()) {
+                return;
+            }
+            beginPrompt(this, player,
                     "Enter payout account (player name, UUID, or self) / 入金先口座を入力してください",
                     input -> {
                         Player p = player();
@@ -1131,7 +1192,7 @@ public class ShopGuiManager {
                             showShopDetails(data);
                         });
                     },
-                    () -> showShopDetails(data));
+                    null);
         }
 
         private void openPartnerManager(ShopData data) {
@@ -1185,7 +1246,10 @@ public class ShopGuiManager {
         private void promptAddPartner(ShopData data) {
             Player player = player();
             if (player == null) return;
-            beginPrompt(player,
+            if (!startPrompt()) {
+                return;
+            }
+            beginPrompt(this, player,
                     "Enter partner name or UUID / 追加するプレイヤー名またはUUIDを入力",
                     input -> {
                         Player p = player();
@@ -1223,7 +1287,7 @@ public class ShopGuiManager {
                             openPartnerManager(data);
                         });
                     },
-                    () -> openPartnerManager(data));
+                    null);
         }
 
         private void removePartner(ShopData data, String partnerUuid) {
@@ -1447,6 +1511,7 @@ public class ShopGuiManager {
             reopenAction = null;
             currentShop = null;
             closed = true;
+            awaitingPrompt = false;
         }
     }
 }
