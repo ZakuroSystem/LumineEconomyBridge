@@ -145,18 +145,22 @@ public class ShopListener implements Listener {
     private ItemStack prepareForSerialization(ItemStack item) {
         ItemStack clone = item.clone();
         clone.setAmount(1);
-        ItemMeta meta = clone.getItemMeta();
-        if (meta != null) {
-            PersistentDataContainer container = meta.getPersistentDataContainer();
-            container.remove(keyHopperItemTag);
-            container.remove(keyShop);
-            container.remove(keyId);
-            container.remove(keyOwner);
-            container.remove(keyHopper);
-            container.remove(keyHopperSlot);
-            container.remove(keyHopperItem);
-            container.remove(keyHopperShopOwner);
-            clone.setItemMeta(meta);
+        try {
+            ItemMeta meta = clone.getItemMeta();
+            if (meta != null) {
+                PersistentDataContainer container = meta.getPersistentDataContainer();
+                container.remove(keyHopperItemTag);
+                container.remove(keyShop);
+                container.remove(keyId);
+                container.remove(keyOwner);
+                container.remove(keyHopper);
+                container.remove(keyHopperSlot);
+                container.remove(keyHopperItem);
+                container.remove(keyHopperShopOwner);
+                clone.setItemMeta(meta);
+            }
+        } catch (IllegalArgumentException ex) {
+            plugin.getLogger().fine("Skipping meta cleanup for item due to invalid attribute data: " + ex.getMessage());
         }
         return clone;
     }
