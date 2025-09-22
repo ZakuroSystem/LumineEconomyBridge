@@ -36,6 +36,8 @@ import java.util.function.Consumer;
  */
 public class ShopGuiManager {
 
+    private static final int PAGE_SIZE = 36;
+
     private final LumineEconomyBridge plugin;
     private final Map<UUID, ShopGuiSession> sessions = new HashMap<>();
 
@@ -71,6 +73,20 @@ public class ShopGuiManager {
 
     public boolean isTracking(Player player) {
         return sessions.containsKey(player.getUniqueId());
+    }
+
+    public void shutdown() {
+        for (ShopGuiSession session : new ArrayList<>(sessions.values())) {
+            Player player = session.player();
+            if (player != null && player.isOnline()) {
+                var view = player.getOpenInventory();
+                if (view != null && view.getTopInventory().getHolder() instanceof ShopGuiSessionHolder) {
+                    player.closeInventory();
+                }
+            }
+            session.clear();
+        }
+        sessions.clear();
     }
 
     private ItemStack button(Material material, String title, String... lore) {
@@ -267,7 +283,14 @@ public class ShopGuiManager {
             actions.clear();
             actions.put(11, this::openShopList);
             menu.setItem(15, button(Material.BOOK, ChatColor.GREEN + "Help",
-                    ChatColor.GRAY + "Use /le shop help for details"));
+                    ChatColor.GRAY + "Click to view shop commands"));
+            actions.put(15, () -> {
+                Player pl = player();
+                if (pl != null) {
+                    pl.closeInventory();
+                    pl.performCommand("le shop help");
+                }
+            });
             this.inventory = menu;
             player.openInventory(menu);
         }
@@ -299,6 +322,7 @@ public class ShopGuiManager {
             this.inventory = loading;
             actions.clear();
             requestOwnedShops(player, ids -> Bukkit.getScheduler().runTask(plugin, () -> {
+                ids.sort(String.CASE_INSENSITIVE_ORDER);
                 shopIds = ids;
                 page = 0;
                 renderShopList();
@@ -318,23 +342,30 @@ public class ShopGuiManager {
             actions.put(45, this::showMainMenu);
             listInv.setItem(53, button(Material.CLOCK, ChatColor.GREEN + "Refresh"));
             actions.put(53, this::openShopList);
-            int start = page * 36;
-            int end = Math.min(start + 36, shopIds.size());
-            int slot = 0;
+            int maxPage = shopIds.isEmpty() ? 0 : (shopIds.size() - 1) / PAGE_SIZE;
+            if (page > maxPage) {
+                page = maxPage;
+            }
+            if (page < 0) {
+                page = 0;
+            }
+            int start = page * PAGE_SIZE;
+            int end = Math.min(start + PAGE_SIZE, shopIds.size());
+            int index = 0;
             if (shopIds.isEmpty()) {
                 listInv.setItem(22, button(Material.BARRIER, ChatColor.RED + "No shops",
                         ChatColor.GRAY + "Create a shop with /le shop create"));
             } else {
                 for (int i = start; i < end; i++) {
                     String id = shopIds.get(i);
-                    listInv.setItem(slot, button(Material.CHEST, ChatColor.GOLD + id,
+                    int row = index / 9;
+                    int col = index % 9;
+                    int displaySlot = row * 9 + col;
+                    listInv.setItem(displaySlot, button(Material.CHEST, ChatColor.GOLD + id,
                             ChatColor.GRAY + "Click to open"));
                     final String shopId = id;
-                    actions.put(slot, () -> openShop(shopId));
-                    slot++;
-                    if (slot % 9 == 0) {
-                        slot += 9;
-                    }
+                    actions.put(displaySlot, () -> openShop(shopId));
+                    index++;
                 }
             }
             if (start > 0) {
@@ -343,6 +374,9 @@ public class ShopGuiManager {
                     page = Math.max(0, page - 1);
                     renderShopList();
                 });
+            } else {
+                listInv.setItem(48, button(Material.GRAY_STAINED_GLASS_PANE,
+                        ChatColor.DARK_GRAY + "Previous"));
             }
             if (end < shopIds.size()) {
                 listInv.setItem(50, button(Material.ARROW, ChatColor.YELLOW + "Next"));
@@ -350,7 +384,14 @@ public class ShopGuiManager {
                     page = page + 1;
                     renderShopList();
                 });
+            } else {
+                listInv.setItem(50, button(Material.GRAY_STAINED_GLASS_PANE,
+                        ChatColor.DARK_GRAY + "Next"));
             }
+            listInv.setItem(49, button(Material.NAME_TAG,
+                    ChatColor.AQUA + "Page " + (page + 1),
+                    ChatColor.GRAY + "Shops " + (shopIds.isEmpty() ? 0 : start + 1) + "-" + end,
+                    ChatColor.GRAY + "Total: " + shopIds.size()));
             this.inventory = listInv;
             player.openInventory(listInv);
         }

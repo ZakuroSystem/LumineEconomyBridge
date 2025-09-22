@@ -5,6 +5,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 
 /**
  * Listener skeleton for the inventory GUI interactions.
@@ -42,5 +43,15 @@ public class ShopGuiListener implements Listener {
             return;
         }
         manager.close(player);
+    }
+
+    @EventHandler
+    public void onInventoryDrag(InventoryDragEvent event) {
+        if (!(event.getWhoClicked() instanceof Player)) {
+            return;
+        }
+        if (event.getInventory().getHolder() instanceof ShopGuiSessionHolder) {
+            event.setCancelled(true);
+        }
     }
 }

@@ -226,6 +226,9 @@ public class LumineEconomyBridge extends JavaPlugin {
     @Override
     public void onDisable() {
         stopBridge();
+        if (shopGuiManager != null) {
+            shopGuiManager.shutdown();
+        }
         snapshotService = null;
         tileDebounceManager = null;
     }
