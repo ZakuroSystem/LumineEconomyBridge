@@ -11,6 +11,9 @@ import com.grapelemon.lumineeconomybridge.guide.GuideBookMenuHolder.MenuType;
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 
 import java.io.IOException;
+import java.math.RoundingMode;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
