@@ -6,8 +6,10 @@ import com.grapelemon.lumineeconomybridge.map.TileDebounceManager;
 import com.grapelemon.lumineeconomybridge.map.BlockEventListener;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
+import okhttp3.RequestBody;
 import okhttp3.Response;
 import com.grapelemon.lumineeconomybridge.shop.ShopListener;
 import com.grapelemon.lumineeconomybridge.cash.PaperCurrencyService;
@@ -27,6 +29,10 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
@@ -52,6 +58,14 @@ public class LumineEconomyBridge extends JavaPlugin {
     private String baseUrl;
     private int timeout = 2000;
 
+    private static final int DEFAULT_DECIMAL_PLACES = 2;
+    private static final DecimalFormatSymbols DECIMAL_SYMBOLS = new DecimalFormatSymbols(Locale.US);
+    private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+
+    private int configuredDecimalPlaces = DEFAULT_DECIMAL_PLACES;
+    private int decimalPlaces = DEFAULT_DECIMAL_PLACES;
+    private int amountScale = computeScale(DEFAULT_DECIMAL_PLACES);
+
     private SnapshotService snapshotService;
     private TileDebounceManager tileDebounceManager;
 
@@ -64,6 +78,7 @@ public class LumineEconomyBridge extends JavaPlugin {
     public void onEnable() {
         instance = this;
         saveDefaultConfig();
+        loadDecimalConfig();
         Lang.load(this);
         saveResource("permission_confg.txt", false);
         loadPermissions();
@@ -111,12 +126,19 @@ public class LumineEconomyBridge extends JavaPlugin {
             String body = res.body() != null ? res.body().string() : "{}";
             JsonObject cfg = JsonParser.parseString(body).getAsJsonObject();
             timeout = cfg.has("timeout") ? cfg.get("timeout").getAsInt() : timeout;
+            if (cfg.has("decimal_places")) {
+                int backendPlaces = sanitizeDecimalPlaces(cfg.get("decimal_places").getAsInt());
+                synchronized (this) {
+                    updateDecimalState(backendPlaces);
+                }
+            }
 
             httpClient = new OkHttpClient.Builder()
                     .connectTimeout(timeout, TimeUnit.MILLISECONDS)
                     .readTimeout(timeout, TimeUnit.MILLISECONDS)
                     .writeTimeout(timeout, TimeUnit.MILLISECONDS)
                     .build();
+            syncDecimalMode(httpClient);
             syncService = new ScoreboardSyncService(httpClient, baseUrl, this);
             cashService = new PaperCurrencyService(this, httpClient, baseUrl);
             getServer().getPluginManager().registerEvents(new PaperNoteListener(cashService), this);
@@ -201,6 +223,7 @@ public class LumineEconomyBridge extends JavaPlugin {
 
     public void reloadBridge() {
         reloadConfig();
+        loadDecimalConfig();
         baseUrl = getConfig().getString("api.base_url", baseUrl);
         timeout = getConfig().getInt("api.timeout", timeout);
         Lang.load(this);
@@ -258,6 +281,122 @@ public class LumineEconomyBridge extends JavaPlugin {
     public boolean hasBypass(String name) {
         if (name == null) return false;
         return bypassUsers.contains(name.toLowerCase(Locale.ROOT));
+    }
+
+    private int computeScale(int places) {
+        int scale = 1;
+        for (int i = 0; i < places; i++) {
+            scale *= 10;
+        }
+        return scale;
+    }
+
+    private int sanitizeDecimalPlaces(int candidate) {
+        if (candidate == 0 || candidate == 2 || candidate == 4) {
+            return candidate;
+        }
+        getLogger().warning("Unsupported currency.decimal_places=" + candidate + ", falling back to " + DEFAULT_DECIMAL_PLACES);
+        return DEFAULT_DECIMAL_PLACES;
+    }
+
+    private void loadDecimalConfig() {
+        int raw = getConfig().getInt("currency.decimal_places", DEFAULT_DECIMAL_PLACES);
+        int sanitized = sanitizeDecimalPlaces(raw);
+        synchronized (this) {
+            configuredDecimalPlaces = sanitized;
+            updateDecimalState(sanitized);
+        }
+    }
+
+    private void updateDecimalState(int places) {
+        decimalPlaces = places;
+        amountScale = computeScale(places);
+    }
+
+    private void syncDecimalMode(OkHttpClient client) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("decimal_places", configuredDecimalPlaces);
+        Request request = new Request.Builder()
+                .url(baseUrl + "/api/config/decimal")
+                .addHeader("X-LE-Token", getConfig().getString("api.token", ""))
+                .post(RequestBody.create(payload.toString(), JSON))
+                .build();
+        try (Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                getLogger().warning("Failed to update decimal mode: status " + response.code());
+                return;
+            }
+            String body = response.body() != null ? response.body().string() : "{}";
+            JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
+            if (obj.has("decimal_places")) {
+                int reported = sanitizeDecimalPlaces(obj.get("decimal_places").getAsInt());
+                int previous;
+                synchronized (this) {
+                    previous = decimalPlaces;
+                    updateDecimalState(reported);
+                }
+                if (reported != previous) {
+                    getLogger().info("Decimal places set to " + reported);
+                }
+            }
+        } catch (IOException ex) {
+            getLogger().warning("Failed to sync decimal mode: " + ex.getMessage());
+        }
+    }
+
+    private String buildPlainPattern() {
+        if (decimalPlaces == 0) {
+            return "0";
+        }
+        StringBuilder pattern = new StringBuilder("0.");
+        for (int i = 0; i < decimalPlaces; i++) {
+            pattern.append('#');
+        }
+        return pattern.toString();
+    }
+
+    private String buildGroupedPattern() {
+        if (decimalPlaces == 0) {
+            return "#,##0";
+        }
+        StringBuilder pattern = new StringBuilder("#,##0.");
+        for (int i = 0; i < decimalPlaces; i++) {
+            pattern.append('#');
+        }
+        return pattern.toString();
+    }
+
+    public synchronized int parseAmount(String value) throws NumberFormatException {
+        try {
+            BigDecimal decimal = new BigDecimal(value);
+            decimal = decimal.setScale(decimalPlaces, RoundingMode.UNNECESSARY);
+            if (decimalPlaces > 0) {
+                decimal = decimal.movePointRight(decimalPlaces);
+            }
+            return decimal.intValueExact();
+        } catch (ArithmeticException ex) {
+            throw new NumberFormatException(ex.getMessage());
+        }
+    }
+
+    public synchronized String formatAmountPlain(int amount) {
+        BigDecimal decimal = new BigDecimal(amount);
+        if (decimalPlaces > 0) {
+            decimal = decimal.movePointLeft(decimalPlaces);
+        }
+        DecimalFormat format = new DecimalFormat(buildPlainPattern(), DECIMAL_SYMBOLS);
+        format.setRoundingMode(RoundingMode.UNNECESSARY);
+        return format.format(decimal);
+    }
+
+    public synchronized String formatAmountGrouped(int amount) {
+        BigDecimal decimal = new BigDecimal(amount);
+        if (decimalPlaces > 0) {
+            decimal = decimal.movePointLeft(decimalPlaces);
+        }
+        DecimalFormat format = new DecimalFormat(buildGroupedPattern(), DECIMAL_SYMBOLS);
+        format.setRoundingMode(RoundingMode.UNNECESSARY);
+        return format.format(decimal);
     }
 
     private void refreshBypassUsers() {
