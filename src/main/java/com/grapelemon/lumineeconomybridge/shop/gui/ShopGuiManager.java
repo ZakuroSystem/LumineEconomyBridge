@@ -827,16 +827,24 @@ public class ShopGuiManager {
         private int page = 0;
         private ShopData currentShop;
         private Runnable reopenAction;
+        private boolean closed;
 
         private ShopGuiSession(Player player) {
             this.playerId = player.getUniqueId();
+            this.closed = false;
         }
 
         private Player player() {
+            if (closed) {
+                return null;
+            }
             return Bukkit.getPlayer(playerId);
         }
 
         private void showMainMenu() {
+            if (closed) {
+                return;
+            }
             Player player = player();
             if (player == null) return;
             Inventory menu = Bukkit.createInventory(new ShopGuiSessionHolder(playerId), 27,
@@ -863,6 +871,9 @@ public class ShopGuiManager {
         }
 
         private void reopen() {
+            if (closed) {
+                return;
+            }
             Player player = player();
             if (player == null) return;
             if (inventory != null) {
@@ -875,6 +886,9 @@ public class ShopGuiManager {
         }
 
         private void execute(int slot) {
+            if (closed) {
+                return;
+            }
             Runnable action = actions.get(slot);
             if (action != null) {
                 action.run();
@@ -882,6 +896,9 @@ public class ShopGuiManager {
         }
 
         private void handleShopLoaded(ShopData data) {
+            if (closed) {
+                return;
+            }
             this.currentShop = data;
             if (!"active".equalsIgnoreCase(data.status)) {
                 showInactiveShop(data);
@@ -997,6 +1014,8 @@ public class ShopGuiManager {
         private void openStockEditor(ShopData data) {
             Player player = player();
             if (player == null) return;
+            sessions.remove(playerId);
+            clear();
             openShopInventory(player, data);
         }
 
@@ -1404,6 +1423,9 @@ public class ShopGuiManager {
         }
 
         private void openShop(String shopId) {
+            if (closed) {
+                return;
+            }
             Player player = player();
             if (player == null) return;
             Inventory loading = Bukkit.createInventory(new ShopGuiSessionHolder(playerId), 27,
@@ -1424,6 +1446,7 @@ public class ShopGuiManager {
             inventory = null;
             reopenAction = null;
             currentShop = null;
+            closed = true;
         }
     }
 }
