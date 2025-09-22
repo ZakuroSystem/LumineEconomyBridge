@@ -12,6 +12,8 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import com.grapelemon.lumineeconomybridge.shop.ShopListener;
+import com.grapelemon.lumineeconomybridge.shop.gui.ShopGuiListener;
+import com.grapelemon.lumineeconomybridge.shop.gui.ShopGuiManager;
 import com.grapelemon.lumineeconomybridge.cash.PaperCurrencyService;
 import com.grapelemon.lumineeconomybridge.cash.PaperNoteListener;
 import com.grapelemon.lumineeconomybridge.guide.GuideBookListener;
@@ -54,6 +56,7 @@ public class LumineEconomyBridge extends JavaPlugin {
     private LeCommandExecutor executor;
     private VaultEconomyBridge vaultEconomy;
     private GuideBookListener guideBookListener;
+    private ShopGuiManager shopGuiManager;
 
     private String baseUrl;
     private int timeout = 2000;
@@ -90,12 +93,18 @@ public class LumineEconomyBridge extends JavaPlugin {
         getCommand("le").setTabCompleter(new LeTabCompleter(this));
         getServer().getPluginManager().registerEvents(new PlayerListener(this), this);
         getServer().getPluginManager().registerEvents(new ShopListener(this), this);
+        shopGuiManager = new ShopGuiManager(this);
+        getServer().getPluginManager().registerEvents(new ShopGuiListener(shopGuiManager), this);
         guideBookListener = new GuideBookListener(this);
         getServer().getPluginManager().registerEvents(guideBookListener, this);
         guideBookListener.distributeToOnline();
 
         startBridge();
         startTileUpdates();
+    }
+
+    public ShopGuiManager getShopGuiManager() {
+        return shopGuiManager;
     }
 
     public void startBridge() {
