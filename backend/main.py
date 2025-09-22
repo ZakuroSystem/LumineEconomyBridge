@@ -9,7 +9,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from pydantic import BaseModel
-from typing import Dict, Optional, List, Union, Tuple, Any, Set
+from typing import Dict, Optional, List, Union, Tuple, Any, Set, Sequence
 from tile_store import TileStore
 from tile_format import PIXEL_COUNT
 import sqlite3
@@ -31,6 +31,16 @@ import base64
 import hashlib
 import re
 from email.utils import parsedate_to_datetime, formatdate
+
+from decimal_config import (
+    DECIMAL_PLACES_KEY,
+    ALLOWED_DECIMAL_PLACES,
+    DEFAULT_DECIMAL_PLACES,
+    LEGACY_DEFAULT_DECIMAL_PLACES,
+    clamp_decimal_places,
+    compute_scale,
+    rescale_value,
+)
 
 BYPASS_FILE = Path(__file__).resolve().parent / "bypass.txt"
 BYPASS_USERS: Set[str] = set()
@@ -443,6 +453,9 @@ with cash_conn:
         """
     )
 
+decimal_places = DEFAULT_DECIMAL_PLACES
+AMOUNT_SCALE = compute_scale(decimal_places)
+
 SHARED_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
 
 from palette import PALETTE, resolve_block
@@ -512,7 +525,8 @@ _tile_worker_task: asyncio.Task | None = None
 
 @app.on_event("startup")
 async def _start_tile_worker() -> None:
-    global _tile_worker_task
+    global _tile_worker_task, EVENT_LOOP
+    EVENT_LOOP = asyncio.get_running_loop()
     _tile_worker_task = asyncio.create_task(_tile_worker())
 
 
@@ -587,6 +601,125 @@ db_lock = threading.Lock()
 undo_stacks: Dict[str, List[List[Dict[str, Union[str, int, None]]]]] = {}
 redo_stack: Dict[str, Optional[List[Dict[str, Union[str, int, None]]]]] = {}
 
+
+def _apply_decimal_places(new_places: int) -> None:
+    global decimal_places, AMOUNT_SCALE
+    decimal_places = clamp_decimal_places(new_places)
+    AMOUNT_SCALE = compute_scale(decimal_places)
+    undo_stacks.clear()
+    redo_stack.clear()
+
+
+def _fetch_decimal_places(cur: sqlite3.Cursor) -> Optional[int]:
+    row = cur.execute(
+        "SELECT value FROM settings WHERE key=?", (DECIMAL_PLACES_KEY,)
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        return clamp_decimal_places(int(row["value"]))
+    except (TypeError, ValueError):
+        return None
+
+
+def _rescale_table(
+    cur: sqlite3.Cursor,
+    table: str,
+    key_columns: Sequence[str],
+    value_columns: Sequence[str],
+    old_places: int,
+    new_places: int,
+) -> None:
+    if old_places == new_places:
+        return
+    select_cols = list(dict.fromkeys([*key_columns, *value_columns]))
+    rows = cur.execute(
+        f"SELECT {', '.join(select_cols)} FROM {table}"
+    ).fetchall()
+    for row in rows:
+        updates: List[str] = []
+        values: List[int] = []
+        for column in value_columns:
+            current = row[column]
+            if current is None:
+                continue
+            scaled = rescale_value(current, old_places, new_places)
+            if scaled != current:
+                updates.append(column)
+                values.append(scaled)
+        if updates:
+            set_clause = ", ".join(f"{col}=?" for col in updates)
+            where_clause = " AND ".join(f"{col}=?" for col in key_columns)
+            params = values + [row[col] for col in key_columns]
+            cur.execute(
+                f"UPDATE {table} SET {set_clause} WHERE {where_clause}", params
+            )
+
+
+def _rescale_cash_db(old_places: int, new_places: int) -> None:
+    if old_places == new_places:
+        return
+    cur = cash_conn.cursor()
+    try:
+        _rescale_table(
+            cur,
+            "notes",
+            ("owner_uuid", "currency"),
+            ("amount",),
+            old_places,
+            new_places,
+        )
+        _rescale_table(
+            cur,
+            "cash_events",
+            ("id",),
+            ("amount",),
+            old_places,
+            new_places,
+        )
+    finally:
+        cur.close()
+
+
+def _update_decimal_places(desired_places: int) -> int:
+    desired = clamp_decimal_places(desired_places)
+    with transaction() as cur:
+        stored = _fetch_decimal_places(cur)
+        if stored is None:
+            stored = LEGACY_DEFAULT_DECIMAL_PLACES
+        if stored != desired:
+            _rescale_table(cur, "accounts", ("uuid", "currency"), ("balance",), stored, desired)
+            _rescale_table(cur, "transactions", ("id",), ("amount",), stored, desired)
+            _rescale_table(
+                cur,
+                "shop_prices",
+                ("shop_id", "item_key", "currency"),
+                ("price", "buy_price"),
+                stored,
+                desired,
+            )
+            _rescale_table(
+                cur,
+                "shop_tx",
+                ("id",),
+                ("total_price",),
+                stored,
+                desired,
+            )
+        cur.execute(
+            """
+            INSERT INTO settings(key, value)
+            VALUES(?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (DECIMAL_PLACES_KEY, str(desired)),
+        )
+    if stored != desired:
+        _rescale_cash_db(stored, desired)
+    _apply_decimal_places(desired)
+    return decimal_places
+
+
 @contextmanager
 def transaction():
     with db_lock:
@@ -602,6 +735,9 @@ def transaction():
             cur.close()
 
 
+_update_decimal_places(DEFAULT_DECIMAL_PLACES)
+
+
 BASE_DIR = Path(__file__).resolve().parent
 with open(BASE_DIR / "lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
@@ -615,7 +751,7 @@ QUEST_DEFINITIONS: Dict[str, Dict[str, str]] = {
 
 QUEST_REWARD_CURRENCY = "thy"
 QUEST_REWARD_SYMBOL: Optional[str] = None
-QUEST_REWARD_POINTS = 10_000
+QUEST_REWARD_POINTS_UNITS = 100
 
 
 def t(key: str, *, lang: str = "en", **kwargs) -> str:
@@ -757,6 +893,10 @@ class CashEvent(BaseModel):
     amount: int
     quantity: int = 1
     location: Optional[str] = None
+
+
+class DecimalConfigPayload(BaseModel):
+    decimal_places: int
 
 
 class ShopRemovePayload(BaseModel):
@@ -1001,10 +1141,13 @@ def format_amount(cur: sqlite3.Cursor, amount: int, currency: str) -> str:
         symbol = row["symbol"]
     sign = "-" if amount < 0 else ""
     amt = abs(amount)
-    whole, frac = divmod(amt, 1000)
-    if frac:
-        return f"§e{sign}{symbol}{whole:,}.{frac:03d}§r"
-    return f"§e{sign}{symbol}{whole:,}§r"
+    if decimal_places > 0:
+        whole, frac = divmod(amt, AMOUNT_SCALE)
+        if frac:
+            frac_str = f"{frac:0{decimal_places}d}"
+            return f"§e{sign}{symbol}{whole:,}.{frac_str}§r"
+        return f"§e{sign}{symbol}{whole:,}§r"
+    return f"§e{sign}{symbol}{amt:,}§r"
 
 
 def is_online(cur: sqlite3.Cursor, uuid: str, now: int) -> bool:
@@ -1042,7 +1185,12 @@ def complete_quest(
         (player_uuid, quest_id, timestamp),
     )
     ensure_currency(cur, QUEST_REWARD_CURRENCY, QUEST_REWARD_SYMBOL)
-    add_balance(cur, player_uuid, QUEST_REWARD_CURRENCY, QUEST_REWARD_POINTS)
+    add_balance(
+        cur,
+        player_uuid,
+        QUEST_REWARD_CURRENCY,
+        QUEST_REWARD_POINTS_UNITS * AMOUNT_SCALE,
+    )
     if scoreboards is not None:
         scoreboards[player_uuid] = get_scoreboard(cur, player_uuid)
     lang = get_lang_tx(cur, player_uuid)
@@ -1179,6 +1327,7 @@ def sanitize_messages(msgs: List[Dict[str, str]]) -> None:
 # websocket broadcast of tile updates ---------------------------------------
 
 WS_CLIENTS: List[WebSocket] = []
+EVENT_LOOP: Optional[asyncio.AbstractEventLoop] = None
 
 
 async def _broadcast_tile_update(world: str, tx: int, tz: int) -> None:
@@ -1195,7 +1344,21 @@ async def _broadcast_tile_update(world: str, tx: int, tz: int) -> None:
 
 
 def notify_tile_update(world: str, tx: int, tz: int) -> None:
-    loop = asyncio.get_event_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = EVENT_LOOP
+        if loop is None:
+            loop = asyncio.get_event_loop()
+        if loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                _broadcast_tile_update(world, tx, tz), loop
+            )
+            with suppress(Exception):
+                future.result(timeout=2)
+        else:
+            loop.run_until_complete(_broadcast_tile_update(world, tx, tz))
+        return
     loop.create_task(_broadcast_tile_update(world, tx, tz))
 
 
@@ -1359,7 +1522,21 @@ async def remove_admin(payload: AdminUserPayload):
 
 @app.get("/api/config")
 async def get_config():
-    return {"timeout": 2000, "sync_interval": 1}
+    return {
+        "timeout": 2000,
+        "sync_interval": 1,
+        "decimal_places": decimal_places,
+        "allowed_decimal_places": list(ALLOWED_DECIMAL_PLACES),
+    }
+
+
+@app.post("/api/config/decimal")
+async def set_decimal_config(
+    payload: DecimalConfigPayload,
+    _auth: None = Depends(ensure_plugin_request),
+):
+    new_value = _update_decimal_places(payload.decimal_places)
+    return {"status": "ok", "decimal_places": new_value}
 
 
 @app.post("/api/message")
@@ -1386,7 +1563,7 @@ async def message(payload: MessagePayload):
                 amt_dec = Decimal(token)
             except InvalidOperation:
                 return None
-            amt_dec *= 1000
+            amt_dec *= Decimal(AMOUNT_SCALE)
         amt = int(amt_dec.to_integral_value(rounding=ROUND_HALF_UP))
         if positive_only and amt <= 0:
             return None
@@ -2901,6 +3078,7 @@ async def shop_buy(payload: ShopBuyPayload):
         "messages": messages,
         "scoreboards": scoreboards,
         "grant": grant,
+        "reason": reason,
     }
 
 
@@ -2978,65 +3156,71 @@ async def shop_sell(payload: ShopSellPayload):
                     "SELECT price, buy_price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
                     (payload.shop_id, payload.item_key, payload.currency),
                 ).fetchone()
-                if not price_row or price_row["buy_price"] is None:
-                    reason = "invalid_currency"
-                elif price_row["buy_price"] <= 0:
+                if not price_row:
                     reason = "invalid_currency"
                 else:
-                    total_price = price_row["buy_price"] * payload.qty
-                    if get_balance(cur, account, payload.currency) < total_price:
-                        reason = "insufficient_funds"
-                    elif not transfer(
-                        cur, account, payload.player_uuid, payload.currency, total_price
-                    ):
-                        reason = "transfer_failed"
+                    buy_price = (
+                        price_row["buy_price"]
+                        if price_row["buy_price"] is not None
+                        else price_row["price"]
+                    )
+                    if buy_price is None or buy_price <= 0:
+                        reason = "invalid_currency"
                     else:
-                        cur.execute(
-                            "UPDATE shop_stock SET stock=stock+? WHERE shop_id=? AND item_key=?",
-                            (payload.qty, payload.shop_id, payload.item_key),
-                        )
-                        cur.execute(
-                            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-                            (payload.timestamp, payload.shop_id),
-                        )
-                        cur.execute(
-                            "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (
-                                payload.client_tx_id,
-                                payload.shop_id,
-                                payload.player_uuid,
-                                payload.item_key,
-                                payload.qty,
-                                payload.currency,
-                                total_price,
-                                payload.timestamp,
-                                "success",
-                                location["world"] if location else None,
-                                location["x"] if location else None,
-                                location["y"] if location else None,
-                                location["z"] if location else None,
-                                "sell",
-                            ),
-                        )
-                        success = True
-                        player_name = get_name(payload.player_uuid) or payload.player_uuid
-                        buyer_msg = {
-                            "target": "chat",
-                            "player": payload.player_uuid,
-                            "text": f"Sold x{payload.qty} for {payload.currency} {total_price}",
-                        }
-                        owner_msg = {
-                            "target": "chat",
-                            "player": owner,
-                            "text": f"Bought x{payload.qty} from {player_name} for {payload.currency} {total_price}",
-                        }
-                        messages.append(buyer_msg)
-                        if is_online(cur, owner, payload.timestamp):
-                            messages.append(owner_msg)
+                        total_price = buy_price * payload.qty
+                        if get_balance(cur, account, payload.currency) < total_price:
+                            reason = "insufficient_funds"
+                        elif not transfer(
+                            cur, account, payload.player_uuid, payload.currency, total_price
+                        ):
+                            reason = "transfer_failed"
                         else:
-                            queue_message(cur, owner_msg)
-                        scoreboards[payload.player_uuid] = get_scoreboard(cur, payload.player_uuid)
-                        scoreboards[owner] = get_scoreboard(cur, owner)
+                            cur.execute(
+                                "UPDATE shop_stock SET stock=stock+? WHERE shop_id=? AND item_key=?",
+                                (payload.qty, payload.shop_id, payload.item_key),
+                            )
+                            cur.execute(
+                                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                                (payload.timestamp, payload.shop_id),
+                            )
+                            cur.execute(
+                                "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                (
+                                    payload.client_tx_id,
+                                    payload.shop_id,
+                                    payload.player_uuid,
+                                    payload.item_key,
+                                    payload.qty,
+                                    payload.currency,
+                                    total_price,
+                                    payload.timestamp,
+                                    "success",
+                                    location["world"] if location else None,
+                                    location["x"] if location else None,
+                                    location["y"] if location else None,
+                                    location["z"] if location else None,
+                                    "sell",
+                                ),
+                            )
+                            success = True
+                            player_name = get_name(payload.player_uuid) or payload.player_uuid
+                            buyer_msg = {
+                                "target": "chat",
+                                "player": payload.player_uuid,
+                                "text": f"Sold x{payload.qty} for {payload.currency} {total_price}",
+                            }
+                            owner_msg = {
+                                "target": "chat",
+                                "player": owner,
+                                "text": f"Bought x{payload.qty} from {player_name} for {payload.currency} {total_price}",
+                            }
+                            messages.append(buyer_msg)
+                            if is_online(cur, owner, payload.timestamp):
+                                messages.append(owner_msg)
+                            else:
+                                queue_message(cur, owner_msg)
+                            scoreboards[payload.player_uuid] = get_scoreboard(cur, payload.player_uuid)
+                            scoreboards[owner] = get_scoreboard(cur, owner)
                         if account and account != owner:
                             scoreboards[account] = get_scoreboard(cur, account)
                         complete_quest(
@@ -3100,6 +3284,7 @@ async def shop_sell(payload: ShopSellPayload):
         "status": "success" if success else "error",
         "messages": messages,
         "scoreboards": scoreboards,
+        "reason": reason,
     }
 
 
@@ -3909,6 +4094,8 @@ def chunk_snapshot(
     check_rate_limit(ip)
     for ch in req.chunks:
         tile_store.save_chunk(req.world, ch.cx, ch.cz, ch.data)
+    tile_store.process_dirty(0)
+    tile_store.process_queue()
     append_log(
         {
             "type": "chunk_snapshot",
@@ -4149,6 +4336,8 @@ def world_dir_status() -> Dict[str, Union[str, bool, None]]:
 
 @app.websocket("/ws/tiles")
 async def ws_tiles(ws: WebSocket):
+    global EVENT_LOOP
+    EVENT_LOOP = asyncio.get_running_loop()
     await ws.accept()
     WS_CLIENTS.append(ws)
     try:

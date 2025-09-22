@@ -11,10 +11,6 @@ import com.grapelemon.lumineeconomybridge.guide.GuideBookMenuHolder.MenuType;
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 
 import java.io.IOException;
-import java.math.BigDecimal;
-import java.math.RoundingMode;
-import java.text.DecimalFormat;
-import java.text.DecimalFormatSymbols;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -343,15 +339,7 @@ public class GuideBookListener implements Listener {
     }
 
     private String formatAmount(int rawAmount) {
-        BigDecimal decimal = BigDecimal.valueOf(rawAmount)
-                .divide(BigDecimal.valueOf(1000), 3, RoundingMode.DOWN)
-                .stripTrailingZeros();
-        if (decimal.scale() < 0) {
-            decimal = decimal.setScale(0, RoundingMode.UNNECESSARY);
-        }
-        DecimalFormatSymbols symbols = new DecimalFormatSymbols(Locale.US);
-        DecimalFormat format = new DecimalFormat("#,##0.###", symbols);
-        return format.format(decimal);
+        return plugin.formatAmountGrouped(rawAmount);
     }
 
     private void openQuestMenu(Player player) {
