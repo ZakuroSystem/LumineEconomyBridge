@@ -1056,6 +1056,10 @@ class ShopAccountPayload(BaseModel):
     account_id: str
 
 
+class AccountEnsurePayload(BaseModel):
+    player_uuid: str
+
+
 class ShopModePayload(BaseModel):
     owner_uuid: str
     shop_id: str
@@ -2783,6 +2787,33 @@ async def rewrite(payload: RewritePayload, token: None = Depends(verify_token)):
             )
     sanitize_messages(msgs)
     return {"status": "success", "messages": msgs}
+
+
+@app.post("/api/account/ensure")
+async def ensure_account(
+    payload: AccountEnsurePayload, _auth: None = Depends(ensure_plugin_request)
+):
+    player_uuid = payload.player_uuid.strip()
+    if not player_uuid:
+        raise HTTPException(status_code=400, detail="invalid player_uuid")
+    created: List[str] = []
+    with transaction() as cur:
+        rows = cur.execute("SELECT name FROM currencies").fetchall()
+        currencies = [row["name"] for row in rows if row and row["name"]]
+        if not currencies:
+            currencies = [get_default_currency(cur)]
+        seen: Set[str] = set()
+        for currency in currencies:
+            if not currency or currency in seen:
+                continue
+            seen.add(currency)
+            cur.execute(
+                "INSERT OR IGNORE INTO accounts(uuid, currency, balance) VALUES (?,?,0)",
+                (player_uuid, currency),
+            )
+            if cur.rowcount > 0:
+                created.append(currency)
+    return {"status": "ok", "created": created}
 
 
 @app.post("/api/shop/place")

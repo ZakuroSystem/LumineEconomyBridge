@@ -1335,3 +1335,35 @@ def test_shop_sell_uses_autoprice_totals():
             ("auto-sell-shop", "auto-sell-item", "coin"),
         ).fetchone()
         assert price_row["price"] == 30
+
+
+def test_account_ensure_creates_default_balance():
+    player_uuid = "ensure-player-uuid"
+    with main.conn:
+        main.conn.execute("DELETE FROM accounts WHERE uuid=?", (player_uuid,))
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/account/ensure",
+            headers=headers,
+            json={"player_uuid": player_uuid},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["created"]
+        second = client.post(
+            "/api/account/ensure",
+            headers=headers,
+            json={"player_uuid": player_uuid},
+        )
+        assert second.status_code == 200
+        assert second.json()["created"] == []
+    with main.conn:
+        rows = main.conn.execute(
+            "SELECT currency, balance FROM accounts WHERE uuid=?",
+            (player_uuid,),
+        ).fetchall()
+        assert rows
+        for row in rows:
+            assert row["balance"] == 0
