@@ -15,14 +15,7 @@
   {% for i in items %}
     <tr>
       <td>{{ i.display_name or i.material }}</td>
-      <td>
-        <form method="post" class="d-flex">
-          <input type="hidden" name="action" value="set_stock">
-          <input type="hidden" name="item_key" value="{{ i.item_key }}">
-          <input type="number" name="stock" value="{{ i.stock }}" class="form-control form-control-sm me-2">
-          <button class="btn btn-sm btn-outline-primary">Save</button>
-        </form>
-      </td>
+      <td>{{ i.stock }}</td>
       <td>
         {% for cur, price in i.prices.items() %}
         <div>{{ cur }}: {{ price }}</div>

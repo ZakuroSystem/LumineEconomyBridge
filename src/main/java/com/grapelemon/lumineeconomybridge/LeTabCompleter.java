@@ -138,7 +138,7 @@ public class LeTabCompleter implements TabCompleter {
                 return names;
             }
             if (first.equals("shop")) {
-                return Stream.of("create", "add", "take", "price", "remove", "partner", "account", "reopen", "hopper", "help")
+                return Stream.of("gui", "create", "add", "take", "price", "buyprice", "autoprice", "remove", "partner", "account", "reopen", "hopper", "help")
                         .filter(s -> s.startsWith(args[1].toLowerCase()))
                         .toList();
             }

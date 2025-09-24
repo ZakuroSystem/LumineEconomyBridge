@@ -48,8 +48,6 @@ import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.UUID;
-import java.math.BigDecimal;
-import java.text.DecimalFormat;
 
 public class ShopListener implements Listener {
     private final LumineEconomyBridge plugin;
@@ -64,7 +62,6 @@ public class ShopListener implements Listener {
     private final NamespacedKey keyHopperShopOwner;
     private final NamespacedKey keyHopperItemTag;
     private static final long CACHE_MS = 3000;
-    private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
     private final Map<String, CacheEntry> itemCache = new ConcurrentHashMap<>();
     private final Map<UUID, PendingSale> pendingSales = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> hopperCooldowns = new ConcurrentHashMap<>();
@@ -148,18 +145,22 @@ public class ShopListener implements Listener {
     private ItemStack prepareForSerialization(ItemStack item) {
         ItemStack clone = item.clone();
         clone.setAmount(1);
-        ItemMeta meta = clone.getItemMeta();
-        if (meta != null) {
-            PersistentDataContainer container = meta.getPersistentDataContainer();
-            container.remove(keyHopperItemTag);
-            container.remove(keyShop);
-            container.remove(keyId);
-            container.remove(keyOwner);
-            container.remove(keyHopper);
-            container.remove(keyHopperSlot);
-            container.remove(keyHopperItem);
-            container.remove(keyHopperShopOwner);
-            clone.setItemMeta(meta);
+        try {
+            ItemMeta meta = clone.getItemMeta();
+            if (meta != null) {
+                PersistentDataContainer container = meta.getPersistentDataContainer();
+                container.remove(keyHopperItemTag);
+                container.remove(keyShop);
+                container.remove(keyId);
+                container.remove(keyOwner);
+                container.remove(keyHopper);
+                container.remove(keyHopperSlot);
+                container.remove(keyHopperItem);
+                container.remove(keyHopperShopOwner);
+                clone.setItemMeta(meta);
+            }
+        } catch (IllegalArgumentException ex) {
+            plugin.getLogger().fine("Skipping meta cleanup for item due to invalid attribute data: " + ex.getMessage());
         }
         return clone;
     }
@@ -1446,12 +1447,10 @@ public class ShopListener implements Listener {
     }
 
     private int parseAmount(String s) throws NumberFormatException {
-        BigDecimal bd = new BigDecimal(s);
-        bd = bd.movePointRight(3);
-        return bd.intValueExact();
+        return plugin.parseAmount(s);
     }
 
     private String formatAmount(int amount) {
-        return AMT_FMT.format(amount / 1000.0);
+        return plugin.formatAmountPlain(amount);
     }
 }

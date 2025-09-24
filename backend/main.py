@@ -9,7 +9,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from pydantic import BaseModel
-from typing import Dict, Optional, List, Union, Tuple, Any, Set
+from typing import Dict, Optional, List, Union, Tuple, Any, Set, Sequence
 from tile_store import TileStore
 from tile_format import PIXEL_COUNT
 import sqlite3
@@ -23,7 +23,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 import time
 import shutil
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, ROUND_FLOOR, getcontext
 import threading
 import asyncio
 import secrets
@@ -31,6 +31,106 @@ import base64
 import hashlib
 import re
 from email.utils import parsedate_to_datetime, formatdate
+
+from decimal_config import (
+    DECIMAL_PLACES_KEY,
+    ALLOWED_DECIMAL_PLACES,
+    DEFAULT_DECIMAL_PLACES,
+    LEGACY_DEFAULT_DECIMAL_PLACES,
+    clamp_decimal_places,
+    compute_scale,
+    rescale_value,
+)
+
+getcontext().prec = 28
+
+
+def _round_half_up(value: Union[int, float, Decimal]) -> int:
+    return int(Decimal(value).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _dec_ceil(value: Decimal) -> int:
+    return int((-value).to_integral_value(rounding=ROUND_FLOOR) * -1)
+
+
+def _autoprice_single(stock: int, lower: int, upper: int, high: int, low: int) -> int:
+    if stock <= lower:
+        return _round_half_up(high)
+    if stock >= upper:
+        return _round_half_up(low)
+    if upper <= lower:
+        return _round_half_up(high)
+    s = Decimal(stock)
+    l = Decimal(lower)
+    u = Decimal(upper)
+    ph = Decimal(high)
+    pl = Decimal(low)
+    slope = (pl - ph) / (u - l)
+    raw = ph + slope * (s - l)
+    return int(raw.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _autoprice_range(start: int, end: int, lower: int, upper: int, high: int, low: int) -> int:
+    if start > end:
+        return 0
+    total = 0
+    if upper <= lower:
+        return (end - start + 1) * _round_half_up(high)
+    low_lo, low_hi = start, min(end, lower)
+    if low_hi >= low_lo:
+        total += (low_hi - low_lo + 1) * _round_half_up(high)
+    up_lo, up_hi = max(start, upper), end
+    if up_hi >= up_lo:
+        total += (up_hi - up_lo + 1) * _round_half_up(low)
+    mid_lo, mid_hi = max(start, lower + 1), min(end, upper - 1)
+    if mid_hi >= mid_lo:
+        ph = Decimal(high)
+        pl = Decimal(low)
+        l = Decimal(lower)
+        u = Decimal(upper)
+        slope = (pl - ph) / (u - l)
+        if slope == 0:
+            rounded = int(ph.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            total += (mid_hi - mid_lo + 1) * rounded
+        else:
+            intercept = ph - slope * l
+
+            def raw_price(x: int) -> Decimal:
+                return ph + slope * (Decimal(x) - l)
+
+            candidates = [
+                _round_half_up(raw_price(mid_lo)),
+                _round_half_up(raw_price(mid_hi)),
+                _round_half_up(raw_price(lower + 1)),
+                _round_half_up(raw_price(upper - 1)),
+            ]
+            k_min, k_max = min(candidates), max(candidates)
+            for k in range(k_min, k_max + 1):
+                bound_low = (Decimal(k) - Decimal("0.5") - intercept) / slope
+                bound_high = (Decimal(k) + Decimal("0.5") - intercept) / slope
+                lo, hi = (bound_low, bound_high) if bound_low <= bound_high else (bound_high, bound_low)
+                s_lo = _dec_ceil(lo)
+                s_hi = _dec_ceil(hi) - 1
+                a, b = max(mid_lo, s_lo), min(mid_hi, s_hi)
+                if b >= a:
+                    total += (b - a + 1) * k
+    return int(total)
+
+
+def autoprice_total_buy(stock: int, qty: int, lower: int, upper: int, high: int, low: int) -> int:
+    if qty <= 0:
+        return 0
+    return _autoprice_range(stock - qty + 1, stock, lower, upper, high, low)
+
+
+def autoprice_total_sell(stock: int, qty: int, lower: int, upper: int, high: int, low: int) -> int:
+    if qty <= 0:
+        return 0
+    return _autoprice_range(stock, stock + qty - 1, lower, upper, high, low)
+
+
+def autoprice_price_after(stock: int, lower: int, upper: int, high: int, low: int) -> int:
+    return _autoprice_single(stock, lower, upper, high, low)
 
 BYPASS_FILE = Path(__file__).resolve().parent / "bypass.txt"
 BYPASS_USERS: Set[str] = set()
@@ -294,6 +394,22 @@ with conn:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shop_autoprice (
+            shop_id TEXT NOT NULL,
+            item_key TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            lower_threshold INTEGER NOT NULL,
+            upper_threshold INTEGER NOT NULL,
+            high_price INTEGER NOT NULL,
+            low_price INTEGER NOT NULL,
+            PRIMARY KEY(shop_id, item_key, currency),
+            FOREIGN KEY(shop_id) REFERENCES shops(shop_id),
+            FOREIGN KEY(item_key) REFERENCES shop_items(item_key)
+        )
+        """
+    )
     try:
         conn.execute("ALTER TABLE shop_prices ADD COLUMN buy_price INTEGER")
     except sqlite3.OperationalError:
@@ -443,6 +559,9 @@ with cash_conn:
         """
     )
 
+decimal_places = DEFAULT_DECIMAL_PLACES
+AMOUNT_SCALE = compute_scale(decimal_places)
+
 SHARED_TOKEN = os.environ.get("LE_TOKEN", "devtoken")
 
 from palette import PALETTE, resolve_block
@@ -512,7 +631,8 @@ _tile_worker_task: asyncio.Task | None = None
 
 @app.on_event("startup")
 async def _start_tile_worker() -> None:
-    global _tile_worker_task
+    global _tile_worker_task, EVENT_LOOP
+    EVENT_LOOP = asyncio.get_running_loop()
     _tile_worker_task = asyncio.create_task(_tile_worker())
 
 
@@ -587,6 +707,133 @@ db_lock = threading.Lock()
 undo_stacks: Dict[str, List[List[Dict[str, Union[str, int, None]]]]] = {}
 redo_stack: Dict[str, Optional[List[Dict[str, Union[str, int, None]]]]] = {}
 
+
+def _apply_decimal_places(new_places: int) -> None:
+    global decimal_places, AMOUNT_SCALE
+    decimal_places = clamp_decimal_places(new_places)
+    AMOUNT_SCALE = compute_scale(decimal_places)
+    undo_stacks.clear()
+    redo_stack.clear()
+
+
+def _fetch_decimal_places(cur: sqlite3.Cursor) -> Optional[int]:
+    row = cur.execute(
+        "SELECT value FROM settings WHERE key=?", (DECIMAL_PLACES_KEY,)
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        return int(row["value"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _rescale_table(
+    cur: sqlite3.Cursor,
+    table: str,
+    key_columns: Sequence[str],
+    value_columns: Sequence[str],
+    old_places: int,
+    new_places: int,
+) -> None:
+    if old_places == new_places:
+        return
+    select_cols = list(dict.fromkeys([*key_columns, *value_columns]))
+    rows = cur.execute(
+        f"SELECT {', '.join(select_cols)} FROM {table}"
+    ).fetchall()
+    for row in rows:
+        updates: List[str] = []
+        values: List[int] = []
+        for column in value_columns:
+            current = row[column]
+            if current is None:
+                continue
+            scaled = rescale_value(current, old_places, new_places)
+            if scaled != current:
+                updates.append(column)
+                values.append(scaled)
+        if updates:
+            set_clause = ", ".join(f"{col}=?" for col in updates)
+            where_clause = " AND ".join(f"{col}=?" for col in key_columns)
+            params = values + [row[col] for col in key_columns]
+            cur.execute(
+                f"UPDATE {table} SET {set_clause} WHERE {where_clause}", params
+            )
+
+
+def _rescale_cash_db(old_places: int, new_places: int) -> None:
+    if old_places == new_places:
+        return
+    cur = cash_conn.cursor()
+    try:
+        _rescale_table(
+            cur,
+            "notes",
+            ("owner_uuid", "currency"),
+            ("amount",),
+            old_places,
+            new_places,
+        )
+        _rescale_table(
+            cur,
+            "cash_events",
+            ("id",),
+            ("amount",),
+            old_places,
+            new_places,
+        )
+    finally:
+        cur.close()
+
+
+def _update_decimal_places(desired_places: int) -> int:
+    desired = clamp_decimal_places(desired_places)
+    with transaction() as cur:
+        stored = _fetch_decimal_places(cur)
+        if stored is None:
+            stored = LEGACY_DEFAULT_DECIMAL_PLACES
+        if stored != desired:
+            _rescale_table(cur, "accounts", ("uuid", "currency"), ("balance",), stored, desired)
+            _rescale_table(cur, "transactions", ("id",), ("amount",), stored, desired)
+            _rescale_table(
+                cur,
+                "shop_prices",
+                ("shop_id", "item_key", "currency"),
+                ("price", "buy_price"),
+                stored,
+                desired,
+            )
+            _rescale_table(
+                cur,
+                "shop_autoprice",
+                ("shop_id", "item_key", "currency"),
+                ("high_price", "low_price"),
+                stored,
+                desired,
+            )
+            _rescale_table(
+                cur,
+                "shop_tx",
+                ("id",),
+                ("total_price",),
+                stored,
+                desired,
+            )
+        cur.execute(
+            """
+            INSERT INTO settings(key, value)
+            VALUES(?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (DECIMAL_PLACES_KEY, str(desired)),
+        )
+    if stored != desired:
+        _rescale_cash_db(stored, desired)
+    _apply_decimal_places(desired)
+    return decimal_places
+
+
 @contextmanager
 def transaction():
     with db_lock:
@@ -602,6 +849,9 @@ def transaction():
             cur.close()
 
 
+_update_decimal_places(DEFAULT_DECIMAL_PLACES)
+
+
 BASE_DIR = Path(__file__).resolve().parent
 with open(BASE_DIR / "lang.yml", encoding="utf-8") as f:
     LANG = yaml.safe_load(f)
@@ -615,7 +865,7 @@ QUEST_DEFINITIONS: Dict[str, Dict[str, str]] = {
 
 QUEST_REWARD_CURRENCY = "thy"
 QUEST_REWARD_SYMBOL: Optional[str] = None
-QUEST_REWARD_POINTS = 10_000
+QUEST_REWARD_POINTS_UNITS = 100
 
 
 def t(key: str, *, lang: str = "en", **kwargs) -> str:
@@ -739,6 +989,18 @@ class ShopSetPricePayload(BaseModel):
     price_kind: str = "sell"
 
 
+class ShopAutoPricePayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    item_key: Optional[str] = None
+    sale_name: Optional[str] = None
+    currency: Optional[str] = None
+    lower_threshold: int
+    high_price: int
+    upper_threshold: int
+    low_price: int
+
+
 class ShopPingPayload(BaseModel):
     shop_id: str
     timestamp: int
@@ -757,6 +1019,10 @@ class CashEvent(BaseModel):
     amount: int
     quantity: int = 1
     location: Optional[str] = None
+
+
+class DecimalConfigPayload(BaseModel):
+    decimal_places: int
 
 
 class ShopRemovePayload(BaseModel):
@@ -788,6 +1054,10 @@ class ShopAccountPayload(BaseModel):
     owner_uuid: str
     shop_id: str
     account_id: str
+
+
+class AccountEnsurePayload(BaseModel):
+    player_uuid: str
 
 
 class ShopModePayload(BaseModel):
@@ -846,6 +1116,63 @@ def get_default_currency(cur: sqlite3.Cursor) -> str:
     return resolve_currency(cur, row["value"]) if row else "thy"
 
 
+def get_autoprice_config(
+    cur: sqlite3.Cursor, shop_id: str, item_key: str, currency: str
+) -> Optional[sqlite3.Row]:
+    return cur.execute(
+        """
+        SELECT lower_threshold, upper_threshold, high_price, low_price
+        FROM shop_autoprice
+        WHERE shop_id=? AND item_key=? AND currency=?
+        """,
+        (shop_id, item_key, currency),
+    ).fetchone()
+
+
+def apply_autoprice(
+    cur: sqlite3.Cursor, shop_id: str, item_key: str, currency: str
+) -> Optional[Tuple[int, Optional[int]]]:
+    config = get_autoprice_config(cur, shop_id, item_key, currency)
+    if not config:
+        return None
+    stock_row = cur.execute(
+        "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+        (shop_id, item_key),
+    ).fetchone()
+    stock = stock_row["stock"] if stock_row else 0
+    new_price = autoprice_price_after(
+        stock,
+        config["lower_threshold"],
+        config["upper_threshold"],
+        config["high_price"],
+        config["low_price"],
+    )
+    existing = cur.execute(
+        "SELECT price, buy_price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
+        (shop_id, item_key, currency),
+    ).fetchone()
+    if existing:
+        buy_price = existing["buy_price"]
+        old_price = existing["price"]
+        update_buy = buy_price is None or buy_price == old_price
+        cur.execute(
+            "UPDATE shop_prices SET price=?, buy_price=? WHERE shop_id=? AND item_key=? AND currency=?",
+            (
+                new_price,
+                new_price if update_buy else buy_price,
+                shop_id,
+                item_key,
+                currency,
+            ),
+        )
+        return new_price, new_price if update_buy else buy_price
+    cur.execute(
+        "INSERT INTO shop_prices(shop_id, item_key, currency, price, buy_price) VALUES(?,?,?,?,?)",
+        (shop_id, item_key, currency, new_price, new_price),
+    )
+    return new_price, new_price
+
+
 def get_uuid(name: str) -> Optional[str]:
     with closing(conn.cursor()) as cur:
         row = cur.execute("SELECT uuid FROM name_index WHERE name=?", (name.lower(),)).fetchone()
@@ -862,6 +1189,7 @@ def purge_shop(cur: sqlite3.Cursor, shop_id: str) -> None:
     cur.execute("DELETE FROM shop_locations WHERE shop_id=?", (shop_id,))
     cur.execute("DELETE FROM shop_stock WHERE shop_id=?", (shop_id,))
     cur.execute("DELETE FROM shop_prices WHERE shop_id=?", (shop_id,))
+    cur.execute("DELETE FROM shop_autoprice WHERE shop_id=?", (shop_id,))
     cur.execute("DELETE FROM shop_tx WHERE shop_id=?", (shop_id,))
     cur.execute("DELETE FROM shop_owners WHERE shop_id=?", (shop_id,))
     cur.execute("DELETE FROM shop_visits WHERE shop_id=?", (shop_id,))
@@ -1001,10 +1329,13 @@ def format_amount(cur: sqlite3.Cursor, amount: int, currency: str) -> str:
         symbol = row["symbol"]
     sign = "-" if amount < 0 else ""
     amt = abs(amount)
-    whole, frac = divmod(amt, 1000)
-    if frac:
-        return f"§e{sign}{symbol}{whole:,}.{frac:03d}§r"
-    return f"§e{sign}{symbol}{whole:,}§r"
+    if decimal_places > 0:
+        whole, frac = divmod(amt, AMOUNT_SCALE)
+        if frac:
+            frac_str = f"{frac:0{decimal_places}d}"
+            return f"§e{sign}{symbol}{whole:,}.{frac_str}§r"
+        return f"§e{sign}{symbol}{whole:,}§r"
+    return f"§e{sign}{symbol}{amt:,}§r"
 
 
 def is_online(cur: sqlite3.Cursor, uuid: str, now: int) -> bool:
@@ -1042,7 +1373,12 @@ def complete_quest(
         (player_uuid, quest_id, timestamp),
     )
     ensure_currency(cur, QUEST_REWARD_CURRENCY, QUEST_REWARD_SYMBOL)
-    add_balance(cur, player_uuid, QUEST_REWARD_CURRENCY, QUEST_REWARD_POINTS)
+    add_balance(
+        cur,
+        player_uuid,
+        QUEST_REWARD_CURRENCY,
+        QUEST_REWARD_POINTS_UNITS * AMOUNT_SCALE,
+    )
     if scoreboards is not None:
         scoreboards[player_uuid] = get_scoreboard(cur, player_uuid)
     lang = get_lang_tx(cur, player_uuid)
@@ -1179,6 +1515,7 @@ def sanitize_messages(msgs: List[Dict[str, str]]) -> None:
 # websocket broadcast of tile updates ---------------------------------------
 
 WS_CLIENTS: List[WebSocket] = []
+EVENT_LOOP: Optional[asyncio.AbstractEventLoop] = None
 
 
 async def _broadcast_tile_update(world: str, tx: int, tz: int) -> None:
@@ -1195,7 +1532,21 @@ async def _broadcast_tile_update(world: str, tx: int, tz: int) -> None:
 
 
 def notify_tile_update(world: str, tx: int, tz: int) -> None:
-    loop = asyncio.get_event_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = EVENT_LOOP
+        if loop is None:
+            loop = asyncio.get_event_loop()
+        if loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                _broadcast_tile_update(world, tx, tz), loop
+            )
+            with suppress(Exception):
+                future.result(timeout=2)
+        else:
+            loop.run_until_complete(_broadcast_tile_update(world, tx, tz))
+        return
     loop.create_task(_broadcast_tile_update(world, tx, tz))
 
 
@@ -1359,7 +1710,21 @@ async def remove_admin(payload: AdminUserPayload):
 
 @app.get("/api/config")
 async def get_config():
-    return {"timeout": 2000, "sync_interval": 1}
+    return {
+        "timeout": 2000,
+        "sync_interval": 1,
+        "decimal_places": decimal_places,
+        "allowed_decimal_places": list(ALLOWED_DECIMAL_PLACES),
+    }
+
+
+@app.post("/api/config/decimal")
+async def set_decimal_config(
+    payload: DecimalConfigPayload,
+    _auth: None = Depends(ensure_plugin_request),
+):
+    new_value = _update_decimal_places(payload.decimal_places)
+    return {"status": "ok", "decimal_places": new_value}
 
 
 @app.post("/api/message")
@@ -1386,7 +1751,7 @@ async def message(payload: MessagePayload):
                 amt_dec = Decimal(token)
             except InvalidOperation:
                 return None
-            amt_dec *= 1000
+            amt_dec *= Decimal(AMOUNT_SCALE)
         amt = int(amt_dec.to_integral_value(rounding=ROUND_HALF_UP))
         if positive_only and amt <= 0:
             return None
@@ -2424,6 +2789,33 @@ async def rewrite(payload: RewritePayload, token: None = Depends(verify_token)):
     return {"status": "success", "messages": msgs}
 
 
+@app.post("/api/account/ensure")
+async def ensure_account(
+    payload: AccountEnsurePayload, _auth: None = Depends(ensure_plugin_request)
+):
+    player_uuid = payload.player_uuid.strip()
+    if not player_uuid:
+        raise HTTPException(status_code=400, detail="invalid player_uuid")
+    created: List[str] = []
+    with transaction() as cur:
+        rows = cur.execute("SELECT name FROM currencies").fetchall()
+        currencies = [row["name"] for row in rows if row and row["name"]]
+        if not currencies:
+            currencies = [get_default_currency(cur)]
+        seen: Set[str] = set()
+        for currency in currencies:
+            if not currency or currency in seen:
+                continue
+            seen.add(currency)
+            cur.execute(
+                "INSERT OR IGNORE INTO accounts(uuid, currency, balance) VALUES (?,?,0)",
+                (player_uuid, currency),
+            )
+            if cur.rowcount > 0:
+                created.append(currency)
+    return {"status": "ok", "created": created}
+
+
 @app.post("/api/shop/place")
 async def shop_place(
     payload: ShopPlacePayload, _auth: None = Depends(ensure_plugin_request)
@@ -2541,7 +2933,7 @@ async def shop_items(shop_id: str):
     start = time.time()
     with transaction() as cur:
         srow = cur.execute(
-            "SELECT owner_uuid,status,last_activity_at,trade_mode FROM shops WHERE shop_id=?",
+            "SELECT owner_uuid,status,last_activity_at,trade_mode,listed,account_uuid FROM shops WHERE shop_id=?",
             (shop_id,),
         ).fetchone()
         owners: List[str] = []
@@ -2575,6 +2967,8 @@ async def shop_items(shop_id: str):
                 "last_activity_at": srow["last_activity_at"],
                 "owner_uuid": srow["owner_uuid"],
                 "owners": owners,
+                "listed": bool(srow["listed"]),
+                "account_uuid": srow["account_uuid"],
             }
         else:
             rows = cur.execute(
@@ -2619,6 +3013,8 @@ async def shop_items(shop_id: str):
                 "owner_uuid": srow["owner_uuid"],
                 "owners": owners,
                 "trade_mode": srow["trade_mode"] if srow["trade_mode"] else "both",
+                "listed": bool(srow["listed"]),
+                "account_uuid": srow["account_uuid"],
                 "items": items,
             }
             if sale:
@@ -2745,7 +3141,23 @@ async def shop_buy(payload: ShopBuyPayload):
                     elif price_row["price"] <= 0:
                         reason = "invalid_currency"
                     else:
-                        base_price = price_row["price"] * payload.qty
+                        auto_cfg = get_autoprice_config(
+                            cur,
+                            payload.shop_id,
+                            payload.item_key,
+                            payload.currency,
+                        )
+                        if auto_cfg:
+                            base_price = autoprice_total_buy(
+                                stock_row["stock"],
+                                payload.qty,
+                                auto_cfg["lower_threshold"],
+                                auto_cfg["upper_threshold"],
+                                auto_cfg["high_price"],
+                                auto_cfg["low_price"],
+                            )
+                        else:
+                            base_price = price_row["price"] * payload.qty
                         sale = cur.execute(
                             "SELECT id,pct,account FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
                             (payload.timestamp, payload.timestamp),
@@ -2784,6 +3196,14 @@ async def shop_buy(payload: ShopBuyPayload):
                                 "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
                                 (payload.timestamp, payload.shop_id),
                             )
+                            rows = cur.execute(
+                                "SELECT currency FROM shop_autoprice WHERE shop_id=? AND item_key=?",
+                                (payload.shop_id, payload.item_key),
+                            ).fetchall()
+                            for cfg in rows:
+                                apply_autoprice(
+                                    cur, payload.shop_id, payload.item_key, cfg["currency"]
+                                )
                             cur.execute(
                                 "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,grant_token,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (
@@ -2901,6 +3321,7 @@ async def shop_buy(payload: ShopBuyPayload):
         "messages": messages,
         "scoreboards": scoreboards,
         "grant": grant,
+        "reason": reason,
     }
 
 
@@ -2974,69 +3395,108 @@ async def shop_sell(payload: ShopSellPayload):
             else:
                 owner = shop["owner_uuid"]
                 account = shop["account_uuid"] or owner
+                stock_row = cur.execute(
+                    "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                    (payload.shop_id, payload.item_key),
+                ).fetchone()
+                current_stock = stock_row["stock"] if stock_row else 0
                 price_row = cur.execute(
                     "SELECT price, buy_price FROM shop_prices WHERE shop_id=? AND item_key=? AND currency=?",
                     (payload.shop_id, payload.item_key, payload.currency),
                 ).fetchone()
-                if not price_row or price_row["buy_price"] is None:
-                    reason = "invalid_currency"
-                elif price_row["buy_price"] <= 0:
+                if not price_row:
                     reason = "invalid_currency"
                 else:
-                    total_price = price_row["buy_price"] * payload.qty
-                    if get_balance(cur, account, payload.currency) < total_price:
-                        reason = "insufficient_funds"
-                    elif not transfer(
-                        cur, account, payload.player_uuid, payload.currency, total_price
-                    ):
-                        reason = "transfer_failed"
+                    buy_price = (
+                        price_row["buy_price"]
+                        if price_row["buy_price"] is not None
+                        else price_row["price"]
+                    )
+                    if buy_price is None or buy_price <= 0:
+                        reason = "invalid_currency"
                     else:
-                        cur.execute(
-                            "UPDATE shop_stock SET stock=stock+? WHERE shop_id=? AND item_key=?",
-                            (payload.qty, payload.shop_id, payload.item_key),
+                        auto_cfg = get_autoprice_config(
+                            cur,
+                            payload.shop_id,
+                            payload.item_key,
+                            payload.currency,
                         )
-                        cur.execute(
-                            "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-                            (payload.timestamp, payload.shop_id),
-                        )
-                        cur.execute(
-                            "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (
-                                payload.client_tx_id,
-                                payload.shop_id,
-                                payload.player_uuid,
-                                payload.item_key,
+                        if (
+                            auto_cfg
+                            and price_row["price"] is not None
+                            and price_row["price"] == buy_price
+                        ):
+                            total_price = autoprice_total_sell(
+                                current_stock,
                                 payload.qty,
-                                payload.currency,
-                                total_price,
-                                payload.timestamp,
-                                "success",
-                                location["world"] if location else None,
-                                location["x"] if location else None,
-                                location["y"] if location else None,
-                                location["z"] if location else None,
-                                "sell",
-                            ),
-                        )
-                        success = True
-                        player_name = get_name(payload.player_uuid) or payload.player_uuid
-                        buyer_msg = {
-                            "target": "chat",
-                            "player": payload.player_uuid,
-                            "text": f"Sold x{payload.qty} for {payload.currency} {total_price}",
-                        }
-                        owner_msg = {
-                            "target": "chat",
-                            "player": owner,
-                            "text": f"Bought x{payload.qty} from {player_name} for {payload.currency} {total_price}",
-                        }
-                        messages.append(buyer_msg)
-                        if is_online(cur, owner, payload.timestamp):
-                            messages.append(owner_msg)
+                                auto_cfg["lower_threshold"],
+                                auto_cfg["upper_threshold"],
+                                auto_cfg["high_price"],
+                                auto_cfg["low_price"],
+                            )
                         else:
-                            queue_message(cur, owner_msg)
-                        scoreboards[payload.player_uuid] = get_scoreboard(cur, payload.player_uuid)
-                        scoreboards[owner] = get_scoreboard(cur, owner)
+                            total_price = buy_price * payload.qty
+                        if get_balance(cur, account, payload.currency) < total_price:
+                            reason = "insufficient_funds"
+                        elif not transfer(
+                            cur, account, payload.player_uuid, payload.currency, total_price
+                        ):
+                            reason = "transfer_failed"
+                        else:
+                            cur.execute(
+                                "UPDATE shop_stock SET stock=stock+? WHERE shop_id=? AND item_key=?",
+                                (payload.qty, payload.shop_id, payload.item_key),
+                            )
+                            cur.execute(
+                                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                                (payload.timestamp, payload.shop_id),
+                            )
+                            rows = cur.execute(
+                                "SELECT currency FROM shop_autoprice WHERE shop_id=? AND item_key=?",
+                                (payload.shop_id, payload.item_key),
+                            ).fetchall()
+                            for cfg in rows:
+                                apply_autoprice(
+                                    cur, payload.shop_id, payload.item_key, cfg["currency"]
+                                )
+                            cur.execute(
+                                "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                (
+                                    payload.client_tx_id,
+                                    payload.shop_id,
+                                    payload.player_uuid,
+                                    payload.item_key,
+                                    payload.qty,
+                                    payload.currency,
+                                    total_price,
+                                    payload.timestamp,
+                                    "success",
+                                    location["world"] if location else None,
+                                    location["x"] if location else None,
+                                    location["y"] if location else None,
+                                    location["z"] if location else None,
+                                    "sell",
+                                ),
+                            )
+                            success = True
+                            player_name = get_name(payload.player_uuid) or payload.player_uuid
+                            buyer_msg = {
+                                "target": "chat",
+                                "player": payload.player_uuid,
+                                "text": f"Sold x{payload.qty} for {payload.currency} {total_price}",
+                            }
+                            owner_msg = {
+                                "target": "chat",
+                                "player": owner,
+                                "text": f"Bought x{payload.qty} from {player_name} for {payload.currency} {total_price}",
+                            }
+                            messages.append(buyer_msg)
+                            if is_online(cur, owner, payload.timestamp):
+                                messages.append(owner_msg)
+                            else:
+                                queue_message(cur, owner_msg)
+                            scoreboards[payload.player_uuid] = get_scoreboard(cur, payload.player_uuid)
+                            scoreboards[owner] = get_scoreboard(cur, owner)
                         if account and account != owner:
                             scoreboards[account] = get_scoreboard(cur, account)
                         complete_quest(
@@ -3100,6 +3560,7 @@ async def shop_sell(payload: ShopSellPayload):
         "status": "success" if success else "error",
         "messages": messages,
         "scoreboards": scoreboards,
+        "reason": reason,
     }
 
 
@@ -3163,6 +3624,10 @@ async def shop_add_stock(
                     """,
                     (payload.shop_id, item_key, currency, sell_price, buy_price),
                 )
+                applied = apply_autoprice(cur, payload.shop_id, item_key, currency)
+                if applied:
+                    sell_price = applied[0]
+                    buy_price = applied[1] if applied[1] is not None else buy_price
                 cur.execute(
                     "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
                     (ts, payload.shop_id),
@@ -3240,6 +3705,12 @@ async def shop_take_stock(
                         "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
                         (ts, payload.shop_id),
                     )
+                    rows = cur.execute(
+                        "SELECT currency FROM shop_autoprice WHERE shop_id=? AND item_key=?",
+                        (payload.shop_id, candidate),
+                    ).fetchall()
+                    for cfg in rows:
+                        apply_autoprice(cur, payload.shop_id, candidate, cfg["currency"])
                     item = cur.execute(
                         "SELECT nbt_blob FROM shop_items WHERE item_key=?", (candidate,)
                     ).fetchone()
@@ -3254,6 +3725,10 @@ async def shop_take_stock(
                         )
                         cur.execute(
                             "DELETE FROM shop_prices WHERE shop_id=? AND item_key=?",
+                            (payload.shop_id, candidate),
+                        )
+                        cur.execute(
+                            "DELETE FROM shop_autoprice WHERE shop_id=? AND item_key=?",
                             (payload.shop_id, candidate),
                         )
                     if item:
@@ -3414,6 +3889,121 @@ async def shop_set_price(
     return {"status": "error", "reason": reason}
 
 
+@app.post("/api/shop/autoprice")
+async def shop_set_autoprice(
+    payload: ShopAutoPricePayload, _auth: None = Depends(ensure_plugin_request)
+):
+    start = time.time()
+    result = "success"
+    reason: Optional[str] = None
+    response_price: Optional[int] = None
+    response_buy: Optional[int] = None
+    response_currency: Optional[str] = None
+    with transaction() as cur:
+        shop = cur.execute(
+            "SELECT status FROM shops WHERE shop_id=?",
+            (payload.shop_id,),
+        ).fetchone()
+        if (
+            not shop
+            or shop["status"] != "active"
+            or not is_shop_owner(cur, payload.shop_id, payload.owner_uuid)
+        ):
+            result = "error"
+            reason = "not_owner"
+        else:
+            item_key = payload.item_key
+            if item_key is None and payload.sale_name:
+                row = cur.execute(
+                    "SELECT item_key FROM shop_stock WHERE shop_id=? AND sale_name=?",
+                    (payload.shop_id, payload.sale_name),
+                ).fetchone()
+                if row:
+                    item_key = row["item_key"]
+            if not item_key:
+                result = "error"
+                reason = "item_not_found"
+            else:
+                currency = (
+                    resolve_currency(cur, payload.currency)
+                    if payload.currency
+                    else get_default_currency(cur)
+                )
+                if not is_currency(cur, currency):
+                    result = "error"
+                    reason = "invalid_currency"
+                elif payload.lower_threshold < 0 or payload.upper_threshold < 0:
+                    result = "error"
+                    reason = "invalid_threshold"
+                elif payload.upper_threshold <= payload.lower_threshold:
+                    result = "error"
+                    reason = "invalid_threshold"
+                elif payload.high_price < 0 or payload.low_price < 0:
+                    result = "error"
+                    reason = "invalid_price"
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO shop_autoprice(
+                            shop_id, item_key, currency,
+                            lower_threshold, upper_threshold,
+                            high_price, low_price
+                        ) VALUES(?,?,?,?,?,?,?)
+                        ON CONFLICT(shop_id, item_key, currency) DO UPDATE SET
+                            lower_threshold=excluded.lower_threshold,
+                            upper_threshold=excluded.upper_threshold,
+                            high_price=excluded.high_price,
+                            low_price=excluded.low_price
+                        """,
+                        (
+                            payload.shop_id,
+                            item_key,
+                            currency,
+                            payload.lower_threshold,
+                            payload.upper_threshold,
+                            payload.high_price,
+                            payload.low_price,
+                        ),
+                    )
+                    ts = int(time.time())
+                    cur.execute(
+                        "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                        (ts, payload.shop_id),
+                    )
+                    applied = apply_autoprice(cur, payload.shop_id, item_key, currency)
+                    if applied:
+                        response_price, response_buy = applied
+                        response_currency = currency
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_set_autoprice",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "sale_name": payload.sale_name,
+        "item_key": payload.item_key,
+        "currency": payload.currency,
+        "lower_threshold": payload.lower_threshold,
+        "upper_threshold": payload.upper_threshold,
+        "high_price": payload.high_price,
+        "low_price": payload.low_price,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    if result == "success":
+        body: Dict[str, Any] = {"status": "success"}
+        if response_price is not None:
+            body["price"] = response_price
+        if response_buy is not None:
+            body["buy_price"] = response_buy
+        if response_currency is not None:
+            body["currency"] = response_currency
+        return body
+    return {"status": "error", "reason": reason}
+
+
 @app.post("/api/shop/remove_item")
 async def shop_remove_item(
     payload: ShopRemoveItemPayload, _auth: None = Depends(ensure_plugin_request)
@@ -3456,6 +4046,10 @@ async def shop_remove_item(
                 )
                 cur.execute(
                     "DELETE FROM shop_prices WHERE shop_id=? AND item_key=?",
+                    (payload.shop_id, item_key),
+                )
+                cur.execute(
+                    "DELETE FROM shop_autoprice WHERE shop_id=? AND item_key=?",
                     (payload.shop_id, item_key),
                 )
                 ts = int(time.time())
@@ -3909,6 +4503,8 @@ def chunk_snapshot(
     check_rate_limit(ip)
     for ch in req.chunks:
         tile_store.save_chunk(req.world, ch.cx, ch.cz, ch.data)
+    tile_store.process_dirty(0)
+    tile_store.process_queue()
     append_log(
         {
             "type": "chunk_snapshot",
@@ -4149,6 +4745,8 @@ def world_dir_status() -> Dict[str, Union[str, bool, None]]:
 
 @app.websocket("/ws/tiles")
 async def ws_tiles(ws: WebSocket):
+    global EVENT_LOOP
+    EVENT_LOOP = asyncio.get_running_loop()
     await ws.accept()
     WS_CLIENTS.append(ws)
     try:
