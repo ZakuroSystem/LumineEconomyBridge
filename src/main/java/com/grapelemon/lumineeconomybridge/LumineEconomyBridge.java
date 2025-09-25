@@ -85,7 +85,7 @@ public class LumineEconomyBridge extends JavaPlugin {
         Lang.load(this);
         saveResource("permission_confg.txt", false);
         loadPermissions();
-        baseUrl = getConfig().getString("api.base_url", "http://127.0.0.1:8000");
+        baseUrl = normalizeBaseUrl(getConfig().getString("api.base_url", "http://127.0.0.1:8000"));
         timeout = getConfig().getInt("api.timeout", timeout);
 
         executor = new LeCommandExecutor(this);
@@ -236,12 +236,32 @@ public class LumineEconomyBridge extends JavaPlugin {
     public void reloadBridge() {
         reloadConfig();
         loadDecimalConfig();
-        baseUrl = getConfig().getString("api.base_url", baseUrl);
+        baseUrl = normalizeBaseUrl(getConfig().getString("api.base_url", baseUrl));
         timeout = getConfig().getInt("api.timeout", timeout);
         Lang.load(this);
         loadPermissions();
         stopBridge();
         startBridge();
+    }
+
+    private String normalizeBaseUrl(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        int end = trimmed.length();
+        int minEnd = 0;
+        int schemeIndex = trimmed.indexOf("://");
+        if (schemeIndex >= 0) {
+            minEnd = schemeIndex + 3;
+        }
+        while (end > minEnd && trimmed.charAt(end - 1) == '/') {
+            end--;
+        }
+        return end <= 0 ? trimmed : trimmed.substring(0, end);
     }
 
     public static LumineEconomyBridge getInstance() { return instance; }
