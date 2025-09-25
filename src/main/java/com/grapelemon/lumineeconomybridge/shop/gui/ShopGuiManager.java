@@ -865,6 +865,7 @@ public class ShopGuiManager {
         private final UUID playerId;
         private Inventory inventory;
         private final Map<Integer, Runnable> actions = new HashMap<>();
+        private final Map<String, String> currencySelections = new HashMap<>();
         private List<String> shopIds = new ArrayList<>();
         private int page = 0;
         private ShopData currentShop;
@@ -984,6 +985,11 @@ public class ShopGuiManager {
             if (closed) {
                 return;
             }
+            pricePage = 0;
+            priceEntry = null;
+            priceCurrency = null;
+            priceAutopriceView = false;
+            currencySelections.clear();
             this.currentShop = data;
             if (!"active".equalsIgnoreCase(data.status)) {
                 showInactiveShop(data);
@@ -1870,19 +1876,28 @@ public class ShopGuiManager {
         private String ensureSelectedCurrency(ShopItem item) {
             List<String> currencies = currencyList(item);
             if (priceCurrency != null && currencies.contains(priceCurrency)) {
+                rememberCurrency(item, priceCurrency);
+                return priceCurrency;
+            }
+            String remembered = currencySelections.get(item.getItemKey());
+            if (remembered != null && currencies.contains(remembered)) {
+                priceCurrency = remembered;
                 return priceCurrency;
             }
             String sell = item.firstSellCurrency();
             if (sell != null && currencies.contains(sell)) {
                 priceCurrency = sell;
+                rememberCurrency(item, priceCurrency);
                 return priceCurrency;
             }
             String buy = item.firstBuyCurrency();
             if (buy != null && currencies.contains(buy)) {
                 priceCurrency = buy;
+                rememberCurrency(item, priceCurrency);
                 return priceCurrency;
             }
             priceCurrency = currencies.isEmpty() ? "" : currencies.get(0);
+            rememberCurrency(item, priceCurrency);
             return priceCurrency;
         }
 
@@ -1896,6 +1911,7 @@ public class ShopGuiManager {
             List<String> currencies = currencyList(item);
             if (currencies.isEmpty()) {
                 priceCurrency = "";
+                rememberCurrency(item, priceCurrency);
                 return;
             }
             int idx = currencies.indexOf(priceCurrency);
@@ -1904,6 +1920,7 @@ public class ShopGuiManager {
             }
             idx = (idx + 1) % currencies.size();
             priceCurrency = currencies.get(idx);
+            rememberCurrency(item, priceCurrency);
         }
 
         private void promptAddCurrency(ShopData data, ShopItem item) {
@@ -1925,9 +1942,22 @@ public class ShopGuiManager {
                         }
                         item.getOrCreatePrice(trimmed);
                         priceCurrency = trimmed;
+                        rememberCurrency(item, priceCurrency);
                         renderPriceEditor(data);
                     },
                     () -> renderPriceEditor(data));
+        }
+
+        private void rememberCurrency(ShopItem item, String currency) {
+            if (item == null) {
+                return;
+            }
+            String key = item.getItemKey();
+            if (currency == null) {
+                currencySelections.remove(key);
+            } else {
+                currencySelections.put(key, currency);
+            }
         }
 
         private void promptSetPrice(ShopData data, ShopItem item, String currency, boolean sell) {
@@ -2310,6 +2340,7 @@ public class ShopGuiManager {
             priceEntry = null;
             priceCurrency = null;
             priceAutopriceView = false;
+            currencySelections.clear();
         }
     }
 }
