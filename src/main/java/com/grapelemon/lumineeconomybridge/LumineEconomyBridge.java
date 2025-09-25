@@ -252,16 +252,31 @@ public class LumineEconomyBridge extends JavaPlugin {
         if (trimmed.isEmpty()) {
             return "";
         }
-        int end = trimmed.length();
         int minEnd = 0;
         int schemeIndex = trimmed.indexOf("://");
         if (schemeIndex >= 0) {
             minEnd = schemeIndex + 3;
         }
-        while (end > minEnd && trimmed.charAt(end - 1) == '/') {
+
+        String withoutTrailing = stripTrailingSlashes(trimmed, minEnd);
+
+        if (withoutTrailing.length() - minEnd >= 4
+                && withoutTrailing.regionMatches(true, withoutTrailing.length() - 4, "/api", 0, 4)) {
+            String candidate = stripTrailingSlashes(withoutTrailing.substring(0, withoutTrailing.length() - 4), minEnd);
+            if (!candidate.isEmpty()) {
+                withoutTrailing = candidate;
+            }
+        }
+
+        return withoutTrailing;
+    }
+
+    private String stripTrailingSlashes(String value, int minEnd) {
+        int end = value.length();
+        while (end > minEnd && value.charAt(end - 1) == '/') {
             end--;
         }
-        return end <= 0 ? trimmed : trimmed.substring(0, end);
+        return end <= 0 ? value : value.substring(0, end);
     }
 
     public static LumineEconomyBridge getInstance() { return instance; }
