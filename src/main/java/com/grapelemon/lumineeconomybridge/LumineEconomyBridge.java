@@ -411,6 +411,10 @@ public class LumineEconomyBridge extends JavaPlugin {
         return format.format(decimal);
     }
 
+    public synchronized int getDecimalPlaces() {
+        return decimalPlaces;
+    }
+
     private void refreshBypassUsers() {
         if (httpClient == null) {
             return;
