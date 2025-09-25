@@ -188,23 +188,29 @@ public class GuideBookListener implements Listener {
         Inventory inv = Bukkit.createInventory(holder, MENU_SIZE, title);
         holder.setInventory(inv);
 
-        inv.setItem(2, buildMenuItem(Material.GOLD_INGOT,
+        inv.setItem(1, buildMenuItem(Material.GOLD_INGOT,
                 Lang.get("guide.option.balance.name"),
                 Lang.get("guide.option.balance.lore_1"),
                 Lang.get("guide.option.balance.lore_2")));
-        holder.bind(2, GuideAction.CHECK_BALANCE);
+        holder.bind(1, GuideAction.CHECK_BALANCE);
 
-        inv.setItem(4, buildMenuItem(Material.BARREL,
+        inv.setItem(3, buildMenuItem(Material.BARREL,
                 Lang.get("guide.option.shop.name"),
                 Lang.get("guide.option.shop.lore_1"),
                 Lang.get("guide.option.shop.lore_2")));
-        holder.bind(4, GuideAction.CREATE_SHOP);
+        holder.bind(3, GuideAction.CREATE_SHOP);
 
-        inv.setItem(6, buildMenuItem(Material.ENCHANTED_BOOK,
+        inv.setItem(5, buildMenuItem(Material.CLOCK,
+                Lang.get("guide.option.manage_shops.name"),
+                Lang.get("guide.option.manage_shops.lore_1"),
+                Lang.get("guide.option.manage_shops.lore_2")));
+        holder.bind(5, GuideAction.MANAGE_SHOPS);
+
+        inv.setItem(7, buildMenuItem(Material.ENCHANTED_BOOK,
                 Lang.get("guide.option.quests.name"),
                 Lang.get("guide.option.quests.lore_1"),
                 Lang.get("guide.option.quests.lore_2")));
-        holder.bind(6, GuideAction.RECOMMENDED_QUESTS);
+        holder.bind(7, GuideAction.RECOMMENDED_QUESTS);
 
         inv.setItem(8, buildMenuItem(Material.CHEST,
                 Lang.get("guide.option.recommended_shops.name"),
@@ -253,6 +259,14 @@ public class GuideBookListener implements Listener {
             case CREATE_SHOP -> {
                 player.closeInventory();
                 promptForShopId(player);
+            }
+            case MANAGE_SHOPS -> {
+                player.closeInventory();
+                if (!plugin.isActive() || plugin.getHttpClient() == null || plugin.getShopGuiManager() == null) {
+                    player.sendMessage(Lang.get("error-unavailable"));
+                } else {
+                    plugin.getShopGuiManager().openMainMenu(player);
+                }
             }
             case RECOMMENDED_QUESTS -> openQuestMenu(player);
             case RECOMMENDED_SHOPS -> openRecommendedShopMenu(player);

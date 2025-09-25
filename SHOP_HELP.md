@@ -1,10 +1,16 @@
 # Shop Help / ショップヘルプ
 
+## GUI での管理 / Manage via GUI
+§a/le shop §7- ショップ管理GUIを開き、所有ショップ一覧・在庫・価格・自動価格調整を編集 / Open the Shop Manager GUI to browse shops, edit prices, and manage autoprice settings
+§aガイドブックの「ショップ管理」ボタン §7- ガイドブックからGUIを即時起動 / Launch the GUI instantly from the guide book shortcut
+
+## コマンド一覧 / Command Reference
 §a/le shop §7- Quick-create a shop barrel / クイックショップ樽を作成
 §a/le shop create §e<id> §7- Create a shop barrel / ショップ樽を作成
 §a/le shop add §e<id> <qty> <price> <name> §7- Deposit item / 在庫追加
 §a/le shop take §e<id> <item> <qty> §7- Withdraw stock / 在庫回収
 §a/le shop price §e<id> <name> <currency> <amount> [<currency> <amount>...] §7- Set price / 価格設定
+§a/le shop autopricedisable §e<id> [name] [currency] §7- Disable autoprice / 自動価格調整を解除
 §a/le shop remove §e<id> <name> [refund] §7- Remove item / 在庫削除
 §a/le shop remove §e<id> [refund] §7- Remove shop / 撤去
 §a/le shop reopen §e<id> §7- Reopen suspended shop / 再開

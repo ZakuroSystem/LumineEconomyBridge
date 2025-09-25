@@ -11,7 +11,7 @@ LumineEconomyBridge は Minecraft のスコアボード経済を Python バッ�
 ## 2. プレイヤーの操作
 - `/le wallet` : 自分の口座残高を表示。口座が無い場合は自動作成されます。
 - `/le pay <player> <amount> [currency]` : 他プレイヤーへ送金。
-- `/le shop` : ショップ樽を受け取り設置すると自動でショップが作成されます。シフトクリックで売却も可能。
+- `/le shop` : ショップ管理GUIを開き、自分のショップ一覧や在庫/価格編集メニューに移動できます。従来どおりショップ樽の受け取りやシフトクリックでの売却も可能です。
 - `/le lang <code>` : 経済システムの表示言語を切り替えます (例: `/le lang ja`)。
 - `/le search <item> [currency] [min] [max]` : 公開ショップを検索。
 
@@ -26,7 +26,7 @@ LumineEconomyBridge は Minecraft のスコアボード経済を Python バッ�
 - `/le currency manager add <id> <player>` : 通貨管理者の追加。管理者は発行・没収・税率/国庫設定が可能。
 - `/le currency tax <id> <rate%>` : 0.1%単位で税率を設定。
 - `/le currency treasury <id> <account>` : 税の納付先アカウントを指定。
-- ショップの掲載/非掲載や価格設定、ログ閲覧などの管理ツールは WebUI のメニューから操作します。
+- ショップの掲載/非掲載や価格設定、在庫編集はゲーム内のショップ管理GUI（/le shop）から行えます。詳細なログ閲覧などは WebUI のメニューから利用してください。
 
 ## 5. 権限設定
 多くのコマンドは標準で管理者権限が必要です。`src/main/resources/permission_confg.txt` を編集すると初期権限を変更できます。

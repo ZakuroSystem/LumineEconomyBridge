@@ -18,6 +18,7 @@ public class GuideBookMenuHolder implements InventoryHolder {
     public enum GuideAction {
         CHECK_BALANCE,
         CREATE_SHOP,
+        MANAGE_SHOPS,
         RECOMMENDED_QUESTS,
         RECOMMENDED_SHOPS,
         BACK_TO_MAIN

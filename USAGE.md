@@ -2,6 +2,10 @@
 
 LumineEconomyBridge bridges a Minecraft server's scoreboard economy with a Python backend. All economy logic lives in Python while the plugin simply forwards commands and applies responses.
 
+## Shop GUI
+- `/le shop` – Open the in-game Shop Manager GUI to browse owned shops, edit inventory and prices (including autoprice thresholds), and manage listings without memorising chat commands.
+- `/le shop gui` – Alias for opening the same GUI when you need to follow up with other `/le shop ...` subcommands afterwards.
+
 ## Commands
 Use `/le` followed by a subcommand. Common commands:
 
@@ -31,6 +35,7 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le help` – Show in‑game help.
 - `/le weblink` – Generate a token to link your account with the web dashboard.
 - `/le search <item> [currency] [min] [max]` – Search public shops for an item.
+- `/le shop autopricedisable <id> [name] [currency]` – Disable an autoprice configuration when you no longer want the backend to adjust prices.
 - `/le admin add <player>` – Grant a player access to the admin dashboard.
 
 ## Notes

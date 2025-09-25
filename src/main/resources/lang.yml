@@ -27,6 +27,10 @@ guide:
       name: "&bショップ作成 / Create Shop"
       lore_1: "&7チャットでショップIDを入力 / Enter a shop ID in chat"
       lore_2: "&7cancel と入力でキャンセル / Type cancel to abort"
+    manage_shops:
+      name: "&eショップ管理 / Manage Shops"
+      lore_1: "&7在庫と価格をGUIで編集 / Edit inventory and prices in the GUI"
+      lore_2: "&7/le shop でも開けます / Also available via /le shop"
     quests:
       name: "&dおすすめクエスト / Recommended Quests"
       lore_1: "&7未達成のクエストを表示 / Show quests you can clear next"
