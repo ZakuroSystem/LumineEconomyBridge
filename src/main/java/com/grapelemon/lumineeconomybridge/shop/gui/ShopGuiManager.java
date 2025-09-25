@@ -225,6 +225,10 @@ public class ShopGuiManager {
         }
     }
 
+    public LumineEconomyBridge getPlugin() {
+        return plugin;
+    }
+
     private void cancelPrompt(UUID playerId, boolean runCancel) {
         ChatPrompt prompt = prompts.remove(playerId);
         if (prompt != null) {

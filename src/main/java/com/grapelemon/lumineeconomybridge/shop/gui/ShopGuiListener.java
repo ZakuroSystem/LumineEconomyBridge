@@ -1,5 +1,6 @@
 package com.grapelemon.lumineeconomybridge.shop.gui;
 
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -9,6 +10,7 @@ import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.inventory.InventoryView;
 
 /**
  * Listener skeleton for the inventory GUI interactions.
@@ -45,7 +47,17 @@ public class ShopGuiListener implements Listener {
         if (!(event.getInventory().getHolder() instanceof ShopGuiSessionHolder)) {
             return;
         }
-        manager.close(player, false);
+        Bukkit.getScheduler().runTaskLater(manager.getPlugin(), () -> {
+            if (!player.isOnline()) {
+                manager.close(player, true);
+                return;
+            }
+            InventoryView view = player.getOpenInventory();
+            if (view != null && view.getTopInventory().getHolder() instanceof ShopGuiSessionHolder) {
+                return;
+            }
+            manager.close(player, false);
+        }, 1L);
     }
 
     @EventHandler
