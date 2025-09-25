@@ -1001,6 +1001,14 @@ class ShopAutoPricePayload(BaseModel):
     low_price: int
 
 
+class ShopAutoPriceDisablePayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    item_key: Optional[str] = None
+    sale_name: Optional[str] = None
+    currency: Optional[str] = None
+
+
 class ShopPingPayload(BaseModel):
     shop_id: str
     timestamp: int
@@ -1193,7 +1201,6 @@ def purge_shop(cur: sqlite3.Cursor, shop_id: str) -> None:
     cur.execute("DELETE FROM shop_tx WHERE shop_id=?", (shop_id,))
     cur.execute("DELETE FROM shop_owners WHERE shop_id=?", (shop_id,))
     cur.execute("DELETE FROM shop_visits WHERE shop_id=?", (shop_id,))
-    cur.execute("DELETE FROM sale_events WHERE shop_id=?", (shop_id,))
     cur.execute("DELETE FROM shops WHERE shop_id=?", (shop_id,))
 
 
@@ -2981,6 +2988,23 @@ async def shop_items(shop_id: str):
                 (int(time.time()), int(time.time())),
             ).fetchone()
             for r in rows:
+                autoprice_rows = cur.execute(
+                    """
+                    SELECT currency, lower_threshold, upper_threshold, high_price, low_price
+                    FROM shop_autoprice
+                    WHERE shop_id=? AND item_key=?
+                    """,
+                    (shop_id, r["item_key"]),
+                ).fetchall()
+                autoprice_map = {
+                    ap["currency"]: {
+                        "lower_threshold": ap["lower_threshold"],
+                        "upper_threshold": ap["upper_threshold"],
+                        "high_price": ap["high_price"],
+                        "low_price": ap["low_price"],
+                    }
+                    for ap in autoprice_rows
+                }
                 price_rows = cur.execute(
                     "SELECT currency, price, buy_price FROM shop_prices WHERE shop_id=? AND item_key=?",
                     (shop_id, r["item_key"]),
@@ -2996,7 +3020,14 @@ async def shop_items(shop_id: str):
                         price_entry["sell"] = sell_price
                     if buy_price is not None:
                         price_entry["buy"] = buy_price
+                    auto_cfg = autoprice_map.get(pr["currency"])
+                    if auto_cfg:
+                        price_entry["autoprice"] = auto_cfg.copy()
                     prices[pr["currency"]] = price_entry
+                for currency, cfg in autoprice_map.items():
+                    price_entry = prices.setdefault(currency, {})
+                    if "autoprice" not in price_entry:
+                        price_entry["autoprice"] = cfg.copy()
                 items.append(
                     {
                         "item_key": r["item_key"],
@@ -4001,6 +4032,93 @@ async def shop_set_autoprice(
         if response_currency is not None:
             body["currency"] = response_currency
         return body
+    return {"status": "error", "reason": reason}
+
+
+@app.post("/api/shop/autoprice_disable")
+async def shop_autoprice_disable(
+    payload: ShopAutoPriceDisablePayload,
+    _auth: None = Depends(ensure_plugin_request),
+):
+    start = time.time()
+    result = "success"
+    reason: Optional[str] = None
+    removed = 0
+    resolved_currency: Optional[str] = None
+    with transaction() as cur:
+        shop = cur.execute(
+            "SELECT status FROM shops WHERE shop_id=?",
+            (payload.shop_id,),
+        ).fetchone()
+        if (
+            not shop
+            or shop["status"] != "active"
+            or not is_shop_owner(cur, payload.shop_id, payload.owner_uuid)
+        ):
+            result = "error"
+            reason = "not_owner"
+        else:
+            item_key = payload.item_key
+            if item_key is None and payload.sale_name:
+                row = cur.execute(
+                    "SELECT item_key FROM shop_stock WHERE shop_id=? AND sale_name=?",
+                    (payload.shop_id, payload.sale_name),
+                ).fetchone()
+                if row:
+                    item_key = row["item_key"]
+            if payload.currency:
+                resolved_currency = resolve_currency(cur, payload.currency)
+                if not is_currency(cur, resolved_currency):
+                    result = "error"
+                    reason = "invalid_currency"
+            if result == "success":
+                if resolved_currency and item_key:
+                    cur.execute(
+                        "DELETE FROM shop_autoprice WHERE shop_id=? AND item_key=? AND currency=?",
+                        (payload.shop_id, item_key, resolved_currency),
+                    )
+                elif resolved_currency:
+                    cur.execute(
+                        "DELETE FROM shop_autoprice WHERE shop_id=? AND currency=?",
+                        (payload.shop_id, resolved_currency),
+                    )
+                elif item_key:
+                    cur.execute(
+                        "DELETE FROM shop_autoprice WHERE shop_id=? AND item_key=?",
+                        (payload.shop_id, item_key),
+                    )
+                else:
+                    cur.execute(
+                        "DELETE FROM shop_autoprice WHERE shop_id=?",
+                        (payload.shop_id,),
+                    )
+                removed = cur.rowcount if cur.rowcount != -1 else 0
+                if removed > 0:
+                    ts = int(time.time())
+                    cur.execute(
+                        "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                        (ts, payload.shop_id),
+                    )
+                else:
+                    result = "error"
+                    reason = "autoprice_not_found"
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_autoprice_disable",
+        "timestamp": int(time.time()),
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "sale_name": payload.sale_name,
+        "item_key": payload.item_key,
+        "currency": resolved_currency if resolved_currency else payload.currency,
+        "result": result,
+        "reason": reason,
+        "removed": removed,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    if result == "success":
+        return {"status": "success", "removed": removed}
     return {"status": "error", "reason": reason}
 
 

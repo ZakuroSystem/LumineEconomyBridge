@@ -85,7 +85,7 @@ public class LumineEconomyBridge extends JavaPlugin {
         Lang.load(this);
         saveResource("permission_confg.txt", false);
         loadPermissions();
-        baseUrl = getConfig().getString("api.base_url", "http://127.0.0.1:8000");
+        baseUrl = normalizeBaseUrl(getConfig().getString("api.base_url", "http://127.0.0.1:8000"));
         timeout = getConfig().getInt("api.timeout", timeout);
 
         executor = new LeCommandExecutor(this);
@@ -236,12 +236,47 @@ public class LumineEconomyBridge extends JavaPlugin {
     public void reloadBridge() {
         reloadConfig();
         loadDecimalConfig();
-        baseUrl = getConfig().getString("api.base_url", baseUrl);
+        baseUrl = normalizeBaseUrl(getConfig().getString("api.base_url", baseUrl));
         timeout = getConfig().getInt("api.timeout", timeout);
         Lang.load(this);
         loadPermissions();
         stopBridge();
         startBridge();
+    }
+
+    private String normalizeBaseUrl(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty()) {
+            return "";
+        }
+        int minEnd = 0;
+        int schemeIndex = trimmed.indexOf("://");
+        if (schemeIndex >= 0) {
+            minEnd = schemeIndex + 3;
+        }
+
+        String withoutTrailing = stripTrailingSlashes(trimmed, minEnd);
+
+        if (withoutTrailing.length() - minEnd >= 4
+                && withoutTrailing.regionMatches(true, withoutTrailing.length() - 4, "/api", 0, 4)) {
+            String candidate = stripTrailingSlashes(withoutTrailing.substring(0, withoutTrailing.length() - 4), minEnd);
+            if (!candidate.isEmpty()) {
+                withoutTrailing = candidate;
+            }
+        }
+
+        return withoutTrailing;
+    }
+
+    private String stripTrailingSlashes(String value, int minEnd) {
+        int end = value.length();
+        while (end > minEnd && value.charAt(end - 1) == '/') {
+            end--;
+        }
+        return end <= 0 ? value : value.substring(0, end);
     }
 
     public static LumineEconomyBridge getInstance() { return instance; }
@@ -409,6 +444,10 @@ public class LumineEconomyBridge extends JavaPlugin {
         DecimalFormat format = new DecimalFormat(buildGroupedPattern(), DECIMAL_SYMBOLS);
         format.setRoundingMode(RoundingMode.UNNECESSARY);
         return format.format(decimal);
+    }
+
+    public synchronized int getDecimalPlaces() {
+        return decimalPlaces;
     }
 
     private void refreshBypassUsers() {
