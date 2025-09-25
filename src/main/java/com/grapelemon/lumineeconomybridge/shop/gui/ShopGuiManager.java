@@ -550,13 +550,47 @@ public class ShopGuiManager {
                 || block == Character.UnicodeBlock.HANGUL_COMPATIBILITY_JAMO;
     }
 
+    private HttpUrl.Builder apiUrlBuilder(String path) {
+        String base = plugin.getBaseUrl();
+        if (base == null || base.isBlank()) {
+            return null;
+        }
+        HttpUrl baseUrl = HttpUrl.parse(base);
+        if (baseUrl == null) {
+            return null;
+        }
+        HttpUrl.Builder builder = baseUrl.newBuilder();
+        if (path != null && !path.isBlank()) {
+            String normalized = path.startsWith("/") ? path.substring(1) : path;
+            if (!normalized.isEmpty()) {
+                String[] segments = normalized.split("/");
+                for (String segment : segments) {
+                    if (!segment.isEmpty()) {
+                        builder.addPathSegment(segment);
+                    }
+                }
+            }
+        }
+        return builder;
+    }
+
+    private HttpUrl buildApiUrl(String path) {
+        HttpUrl.Builder builder = apiUrlBuilder(path);
+        return builder != null ? builder.build() : null;
+    }
+
     private void requestOwnedShops(Player player, Consumer<List<String>> success, Consumer<String> error) {
         OkHttpClient client = plugin.getHttpClient();
         if (client == null || !plugin.isActive()) {
             error.accept(ChatColor.RED + "Backend unavailable" + ChatColor.RESET);
             return;
         }
-        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/ids").newBuilder()
+        HttpUrl.Builder builder = apiUrlBuilder("/api/shop/ids");
+        if (builder == null) {
+            error.accept(ChatColor.RED + "Backend unavailable" + ChatColor.RESET);
+            return;
+        }
+        HttpUrl url = builder
                 .addQueryParameter("owner_uuid", player.getUniqueId().toString())
                 .build();
         Request request = new Request.Builder()
@@ -602,7 +636,12 @@ public class ShopGuiManager {
             error.accept(ChatColor.RED + "Backend unavailable" + ChatColor.RESET);
             return;
         }
-        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
+        HttpUrl.Builder builder = apiUrlBuilder("/api/shop/items");
+        if (builder == null) {
+            error.accept(ChatColor.RED + "Backend unavailable" + ChatColor.RESET);
+            return;
+        }
+        HttpUrl url = builder
                 .addQueryParameter("shop_id", shopId)
                 .build();
         Request request = new Request.Builder()
@@ -724,8 +763,13 @@ public class ShopGuiManager {
             error.accept(ChatColor.RED + "Backend unavailable" + ChatColor.RESET);
             return;
         }
+        HttpUrl url = buildApiUrl(path);
+        if (url == null) {
+            error.accept(ChatColor.RED + "Backend unavailable" + ChatColor.RESET);
+            return;
+        }
         Request request = new Request.Builder()
-                .url(plugin.getBaseUrl() + path)
+                .url(url)
                 .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
                 .post(RequestBody.create(payload.toString(), JSON))
                 .build();
@@ -758,7 +802,12 @@ public class ShopGuiManager {
             error.accept(ChatColor.RED + "Backend unavailable" + ChatColor.RESET);
             return;
         }
-        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
+        HttpUrl.Builder builder = apiUrlBuilder("/api/shop/items");
+        if (builder == null) {
+            error.accept(ChatColor.RED + "Backend unavailable" + ChatColor.RESET);
+            return;
+        }
+        HttpUrl url = builder
                 .addQueryParameter("shop_id", shopId)
                 .build();
         Request request = new Request.Builder()
