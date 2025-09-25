@@ -138,7 +138,7 @@ public class LeTabCompleter implements TabCompleter {
                 return names;
             }
             if (first.equals("shop")) {
-                return Stream.of("gui", "create", "add", "take", "price", "buyprice", "autoprice", "remove", "partner", "account", "reopen", "hopper", "help")
+                return Stream.of("gui", "create", "add", "take", "price", "buyprice", "autoprice", "autopricedisable", "remove", "partner", "account", "reopen", "hopper", "help")
                         .filter(s -> s.startsWith(args[1].toLowerCase()))
                         .toList();
             }
@@ -276,7 +276,7 @@ public class LeTabCompleter implements TabCompleter {
                 }
                 return Collections.emptyList();
             }
-            if (args[0].equalsIgnoreCase("shop") && (args[1].equalsIgnoreCase("price") || args[1].equalsIgnoreCase("remove"))) {
+            if (args[0].equalsIgnoreCase("shop") && (args[1].equalsIgnoreCase("price") || args[1].equalsIgnoreCase("remove") || args[1].equalsIgnoreCase("autoprice") || args[1].equalsIgnoreCase("autopricedisable"))) {
                 String shopId = args[2];
                 ItemCache cache = itemCache.get(shopId);
                 long now = System.currentTimeMillis();

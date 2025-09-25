@@ -243,6 +243,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop price " + ChatColor.YELLOW + "<id> <name> <currency> <amount> [<currency> <amount>...] " + ChatColor.GRAY + "- Set price / 価格設定");
                         p.sendMessage(ChatColor.GREEN + "/le shop buyprice " + ChatColor.YELLOW + "<id> <name> <currency> <amount> [<currency> <amount>...] " + ChatColor.GRAY + "- Set buy price / 買取価格設定");
                         p.sendMessage(ChatColor.GREEN + "/le shop autoprice " + ChatColor.YELLOW + "<id> <name> <low-stock> <max> <high-stock> <min>" + ChatColor.GRAY + " - Configure auto pricing / 自動価格調整");
+                        p.sendMessage(ChatColor.GREEN + "/le shop autopricedisable " + ChatColor.YELLOW + "<id> [name] [currency]" + ChatColor.GRAY + " - Disable auto pricing / 自動価格調整を解除");
                         p.sendMessage(ChatColor.GREEN + "/le shop remove " + ChatColor.YELLOW + "<id> <name> [refund] " + ChatColor.GRAY + "- Remove item / 在庫削除");
                         p.sendMessage(ChatColor.GREEN + "/le shop remove " + ChatColor.YELLOW + "<id> [refund] " + ChatColor.GRAY + "- Remove shop / 撤去");
                         p.sendMessage(ChatColor.GREEN + "/le shop reopen " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Reopen suspended shop / 再開");
@@ -1067,8 +1068,50 @@ public class LeCommandExecutor implements CommandExecutor {
                                 }
                             }
                         });
+                    } else if (args.length >= 3 && args[1].equalsIgnoreCase("autopricedisable")) {
+                        String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        if (args.length >= 4) {
+                            payload.put("sale_name", args[3]);
+                        }
+                        if (args.length >= 5) {
+                            payload.put("currency", args[4]);
+                        }
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/autoprice_disable")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Disable autoprice failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (res.has("status") && "success".equals(res.get("status").getAsString())) {
+                                            int removed = res.has("removed") && !res.get("removed").isJsonNull() ? res.get("removed").getAsInt() : 0;
+                                            p.sendMessage(ChatColor.GREEN + "Autoprice disabled" + ChatColor.GRAY + " (" + removed + ")" + ChatColor.RESET);
+                                        } else {
+                                            String reason = res.has("reason") && !res.get("reason").isJsonNull() ? res.get("reason").getAsString() : "unknown";
+                                            p.sendMessage(ChatColor.RED + "Failed: " + ChatColor.YELLOW + reason + ChatColor.RED + " / 失敗しました" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
                     } else {
-                        p.sendMessage(ChatColor.YELLOW + "Usage: /le shop <create|add|take|price|buyprice|autoprice|mode|remove|reopen|help> ... / 使い方: /le shop <create|add|take|price|buyprice|autoprice|mode|remove|reopen|help> ..." + ChatColor.RESET);
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le shop <create|add|take|price|buyprice|autoprice|autopricedisable|mode|remove|reopen|help> ... / 使い方: /le shop <create|add|take|price|buyprice|autoprice|autopricedisable|mode|remove|reopen|help> ..." + ChatColor.RESET);
                     }
                     return true;
                 }
