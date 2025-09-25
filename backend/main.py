@@ -1201,7 +1201,6 @@ def purge_shop(cur: sqlite3.Cursor, shop_id: str) -> None:
     cur.execute("DELETE FROM shop_tx WHERE shop_id=?", (shop_id,))
     cur.execute("DELETE FROM shop_owners WHERE shop_id=?", (shop_id,))
     cur.execute("DELETE FROM shop_visits WHERE shop_id=?", (shop_id,))
-    cur.execute("DELETE FROM sale_events WHERE shop_id=?", (shop_id,))
     cur.execute("DELETE FROM shops WHERE shop_id=?", (shop_id,))
 
 
