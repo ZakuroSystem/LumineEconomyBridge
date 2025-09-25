@@ -148,13 +148,6 @@ public class ShopGuiManager {
         }
     }
 
-    private static final class AutopriceDraft {
-        private Integer lowerThreshold;
-        private Integer upperThreshold;
-        private Integer highPrice;
-        private Integer lowPrice;
-    }
-
     public void openMainMenu(Player player) {
         ShopGuiSession session = sessions.computeIfAbsent(player.getUniqueId(), id -> new ShopGuiSession(player));
         session.showMainMenu();
@@ -883,6 +876,9 @@ public class ShopGuiManager {
         private ShopEntry priceEntry;
         private String priceCurrency;
         private boolean priceAutopriceView;
+        private ShopItem.AutoPriceConfig autopriceWorking;
+        private boolean autopriceNew;
+        private boolean autopriceDirty;
 
         private ShopGuiSession(Player player) {
             this.playerId = player.getUniqueId();
@@ -892,6 +888,9 @@ public class ShopGuiManager {
             this.priceEntry = null;
             this.priceCurrency = null;
             this.priceAutopriceView = false;
+            this.autopriceWorking = null;
+            this.autopriceNew = false;
+            this.autopriceDirty = false;
         }
 
         private Player player() {
@@ -956,6 +955,12 @@ public class ShopGuiManager {
             if (action != null) {
                 action.run();
             }
+        }
+
+        private void clearAutopriceDraft() {
+            autopriceWorking = null;
+            autopriceNew = false;
+            autopriceDirty = false;
         }
 
         private boolean startPrompt() {
@@ -1371,6 +1376,7 @@ public class ShopGuiManager {
         private void renderPriceManager(ShopData data) {
             Player player = player();
             if (player == null) return;
+            clearAutopriceDraft();
             Inventory inv = Bukkit.createInventory(new ShopGuiSessionHolder(playerId), 54,
                     ChatColor.GOLD + "Prices - " + data.shopId);
             actions.clear();
@@ -1553,6 +1559,56 @@ public class ShopGuiManager {
                     ChatColor.GRAY + "High stock price: " + ChatColor.YELLOW + plugin.formatAmountPlain(cfg.getLowPrice()));
         }
 
+        private ItemStack buildAutopriceEditorInfo(String currency, ShopItem.AutoPriceConfig cfg,
+                                                   boolean active, boolean dirty) {
+            List<String> lore = new ArrayList<>();
+            lore.add(ChatColor.GRAY + "Currency: " + currencyDisplayName(currency));
+            lore.add(ChatColor.GRAY + "Lower qty: " + ChatColor.YELLOW + cfg.getLowerThreshold());
+            lore.add(ChatColor.GRAY + "Upper qty: " + ChatColor.YELLOW + cfg.getUpperThreshold());
+            lore.add(ChatColor.GRAY + "Low stock price: " + ChatColor.YELLOW + plugin.formatAmountPlain(cfg.getHighPrice()));
+            lore.add(ChatColor.GRAY + "High stock price: " + ChatColor.YELLOW + plugin.formatAmountPlain(cfg.getLowPrice()));
+            if (!active) {
+                lore.add(ChatColor.GOLD + "Draft - not yet applied");
+            } else if (dirty) {
+                lore.add(ChatColor.GOLD + "Pending changes");
+            } else {
+                lore.add(ChatColor.GRAY + "No pending changes");
+            }
+            return button(Material.CLOCK, ChatColor.GOLD + "Autoprice", lore.toArray(new String[0]));
+        }
+
+        private void openAutopriceEditor(ShopData data, ShopItem item, ShopItem.ShopPrice info,
+                                         String currency, boolean newSetup) {
+            priceCurrency = currency;
+            priceAutopriceView = true;
+            if (newSetup || !info.hasAutoprice()) {
+                autopriceWorking = initialAutopriceConfig(item, info);
+                autopriceNew = true;
+                autopriceDirty = true;
+            } else {
+                autopriceWorking = copyAutoprice(info.getAutoprice());
+                autopriceNew = false;
+                autopriceDirty = false;
+            }
+            renderAutopriceEditor(data);
+        }
+
+        private ShopItem.AutoPriceConfig initialAutopriceConfig(ShopItem item, ShopItem.ShopPrice info) {
+            int stock = Math.max(0, item.getStock());
+            int lower = stock;
+            int upper = stock + 10;
+            if (upper <= lower) {
+                upper = lower + 1;
+            }
+            int basePrice = 0;
+            if (info.getSellPrice() != null) {
+                basePrice = Math.max(0, info.getSellPrice());
+            } else if (info.getBuyPrice() != null) {
+                basePrice = Math.max(0, info.getBuyPrice());
+            }
+            return new ShopItem.AutoPriceConfig(lower, upper, basePrice, basePrice);
+        }
+
         private void renderAutopriceEditor(ShopData data) {
             Player player = player();
             if (player == null) return;
@@ -1563,19 +1619,27 @@ public class ShopGuiManager {
             ShopItem item = priceEntry.item;
             String currency = ensureSelectedCurrency(item);
             ShopItem.ShopPrice info = item.getOrCreatePrice(currency);
-            if (!info.hasAutoprice()) {
-                player.sendMessage(ChatColor.RED + "Autoprice not configured" + ChatColor.RESET);
-                priceAutopriceView = false;
-                renderPriceEditor(data);
-                return;
+
+            if (autopriceWorking == null) {
+                if (info.hasAutoprice() && !autopriceNew) {
+                    autopriceWorking = copyAutoprice(info.getAutoprice());
+                    autopriceNew = false;
+                    autopriceDirty = false;
+                } else {
+                    autopriceWorking = initialAutopriceConfig(item, info);
+                    autopriceNew = true;
+                    autopriceDirty = true;
+                }
             }
-            ShopItem.AutoPriceConfig cfg = info.getAutoprice();
+
+            ShopItem.AutoPriceConfig cfg = autopriceWorking;
             Inventory inv = Bukkit.createInventory(new ShopGuiSessionHolder(playerId), 45,
                     ChatColor.GOLD + "Autoprice - " + item.getSaleName());
             actions.clear();
             inv.setItem(0, button(Material.ARROW, ChatColor.YELLOW + "Back"));
             actions.put(0, () -> {
                 priceAutopriceView = false;
+                clearAutopriceDraft();
                 renderPriceEditor(data);
             });
 
@@ -1590,16 +1654,39 @@ public class ShopGuiManager {
             }
             inv.setItem(1, icon);
 
-            inv.setItem(4, buildAutopriceInfo(info, currency));
+            boolean active = info.hasAutoprice() && !autopriceNew;
+            inv.setItem(4, buildAutopriceEditorInfo(currency, cfg, active, autopriceDirty));
 
-            inv.setItem(7, button(Material.BARRIER, ChatColor.RED + "Disable Autoprice",
-                    ChatColor.GRAY + "Remove configuration"));
-            actions.put(7, () -> disableAutoprice(data, item, currency, info));
+            String saveTitle = autopriceNew ? ChatColor.GREEN + "Enable Autoprice" : ChatColor.GREEN + "Save Changes";
+            List<String> saveLore = new ArrayList<>();
+            if (autopriceNew) {
+                saveLore.add(ChatColor.YELLOW + "Apply this configuration");
+            } else if (autopriceDirty) {
+                saveLore.add(ChatColor.YELLOW + "Update autoprice settings");
+            } else {
+                saveLore.add(ChatColor.DARK_GRAY + "No pending changes");
+            }
+            inv.setItem(6, button(Material.EMERALD_BLOCK, saveTitle, saveLore.toArray(new String[0])));
+            actions.put(6, () -> saveAutoprice(data, item, currency, info));
 
-            populateAutopriceQuantityRow(inv, 9, true, data, item, info, currency);
-            populateAutopricePriceRow(inv, 18, true, data, item, info, currency);
-            populateAutopriceQuantityRow(inv, 27, false, data, item, info, currency);
-            populateAutopricePriceRow(inv, 36, false, data, item, info, currency);
+            if (active) {
+                inv.setItem(7, button(Material.BARRIER, ChatColor.RED + "Disable Autoprice",
+                        ChatColor.GRAY + "Remove configuration"));
+                actions.put(7, () -> disableAutoprice(data, item, currency, info));
+            } else {
+                inv.setItem(7, button(Material.BARRIER, ChatColor.RED + "Cancel Setup",
+                        ChatColor.GRAY + "Discard current draft"));
+                actions.put(7, () -> {
+                    clearAutopriceDraft();
+                    priceAutopriceView = false;
+                    renderPriceEditor(data);
+                });
+            }
+
+            populateAutopriceQuantityRow(inv, 9, true, data, item, currency);
+            populateAutopricePriceRow(inv, 18, true, data, item, currency);
+            populateAutopriceQuantityRow(inv, 27, false, data, item, currency);
+            populateAutopricePriceRow(inv, 36, false, data, item, currency);
 
             this.inventory = inv;
             this.reopenAction = () -> renderAutopriceEditor(data);
@@ -1607,8 +1694,8 @@ public class ShopGuiManager {
         }
 
         private void populateAutopriceQuantityRow(Inventory inv, int baseSlot, boolean lower, ShopData data,
-                                                  ShopItem item, ShopItem.ShopPrice info, String currency) {
-            ShopItem.AutoPriceConfig cfg = info.getAutoprice();
+                                                  ShopItem item, String currency) {
+            ShopItem.AutoPriceConfig cfg = autopriceWorking;
             if (cfg == null) {
                 return;
             }
@@ -1637,8 +1724,8 @@ public class ShopGuiManager {
         }
 
         private void populateAutopricePriceRow(Inventory inv, int baseSlot, boolean highPrice, ShopData data,
-                                               ShopItem item, ShopItem.ShopPrice info, String currency) {
-            ShopItem.AutoPriceConfig cfg = info.getAutoprice();
+                                               ShopItem item, String currency) {
+            ShopItem.AutoPriceConfig cfg = autopriceWorking;
             if (cfg == null) {
                 return;
             }
@@ -1697,75 +1784,97 @@ public class ShopGuiManager {
         }
 
         private void changeAutopriceThreshold(ShopData data, ShopItem item, String currency, boolean lower, int delta) {
-            ShopItem.ShopPrice info = item.getOrCreatePrice(currency);
-            ShopItem.AutoPriceConfig cfg = info.getAutoprice();
+            ShopItem.AutoPriceConfig cfg = autopriceWorking;
             if (cfg == null) {
+                renderAutopriceEditor(data);
                 return;
             }
-            ShopItem.AutoPriceConfig copy = copyAutoprice(cfg);
             if (lower) {
-                int next = copy.getLowerThreshold() + delta;
-                if (next < 0) {
-                    next = 0;
+                int next = Math.max(0, cfg.getLowerThreshold() + delta);
+                cfg.setLowerThreshold(next);
+                if (cfg.getUpperThreshold() <= next) {
+                    cfg.setUpperThreshold(next + 1);
                 }
-                if (next >= copy.getUpperThreshold()) {
-                    next = Math.max(0, copy.getUpperThreshold() - 1);
-                }
-                if (next == copy.getLowerThreshold()) {
-                    return;
-                }
-                copy.setLowerThreshold(next);
             } else {
-                int next = copy.getUpperThreshold() + delta;
-                if (next <= copy.getLowerThreshold()) {
-                    next = copy.getLowerThreshold() + 1;
+                int next = Math.max(0, cfg.getUpperThreshold() + delta);
+                if (next <= cfg.getLowerThreshold()) {
+                    next = cfg.getLowerThreshold() + 1;
                 }
-                if (next < 1) {
-                    next = 1;
-                }
-                if (next == copy.getUpperThreshold()) {
-                    return;
-                }
-                copy.setUpperThreshold(next);
+                cfg.setUpperThreshold(next);
             }
-            submitAutoprice(data, item, currency, info, copy);
+            autopriceDirty = true;
+            renderAutopriceEditor(data);
         }
 
         private void changeAutopricePrice(ShopData data, ShopItem item, String currency, boolean highPrice, int delta) {
-            ShopItem.ShopPrice info = item.getOrCreatePrice(currency);
-            ShopItem.AutoPriceConfig cfg = info.getAutoprice();
+            ShopItem.AutoPriceConfig cfg = autopriceWorking;
             if (cfg == null) {
+                renderAutopriceEditor(data);
                 return;
             }
-            if (delta == 0) {
-                return;
-            }
-            ShopItem.AutoPriceConfig copy = copyAutoprice(cfg);
             if (highPrice) {
-                int next = copy.getHighPrice() + delta;
-                if (next < 0) {
-                    next = 0;
+                int next = Math.max(0, cfg.getHighPrice() + delta);
+                cfg.setHighPrice(next);
+                if (next < cfg.getLowPrice()) {
+                    cfg.setLowPrice(next);
                 }
-                if (next == copy.getHighPrice()) {
-                    return;
-                }
-                copy.setHighPrice(next);
             } else {
-                int next = copy.getLowPrice() + delta;
-                if (next < 0) {
-                    next = 0;
+                int next = Math.max(0, cfg.getLowPrice() + delta);
+                cfg.setLowPrice(next);
+                if (next > cfg.getHighPrice()) {
+                    cfg.setHighPrice(next);
                 }
-                if (next == copy.getLowPrice()) {
-                    return;
-                }
-                copy.setLowPrice(next);
             }
-            submitAutoprice(data, item, currency, info, copy);
+            autopriceDirty = true;
+            renderAutopriceEditor(data);
+        }
+
+        private void saveAutoprice(ShopData data, ShopItem item, String currency, ShopItem.ShopPrice info) {
+            Player player = player();
+            if (player == null) return;
+            if (!autopriceNew && !autopriceDirty && info.hasAutoprice()) {
+                player.sendMessage(ChatColor.YELLOW + "No changes to save" + ChatColor.RESET);
+                return;
+            }
+            ShopItem.AutoPriceConfig cfg = autopriceWorking;
+            if (cfg == null) {
+                player.sendMessage(ChatColor.RED + "No draft available" + ChatColor.RESET);
+                renderAutopriceEditor(data);
+                return;
+            }
+            if (cfg.getLowerThreshold() < 0 || cfg.getUpperThreshold() < 0) {
+                player.sendMessage(ChatColor.RED + "Thresholds must be >= 0 / 0以上を入力してください" + ChatColor.RESET);
+                renderAutopriceEditor(data);
+                return;
+            }
+            if (cfg.getUpperThreshold() <= cfg.getLowerThreshold()) {
+                player.sendMessage(ChatColor.RED + "Upper must be > lower / 上限は下限より大きくしてください" + ChatColor.RESET);
+                renderAutopriceEditor(data);
+                return;
+            }
+            if (cfg.getHighPrice() < 0 || cfg.getLowPrice() < 0) {
+                player.sendMessage(ChatColor.RED + "Prices must be >= 0 / 0以上を入力してください" + ChatColor.RESET);
+                renderAutopriceEditor(data);
+                return;
+            }
+            if (cfg.getHighPrice() < cfg.getLowPrice()) {
+                player.sendMessage(ChatColor.RED + "Low stock price must be >= high stock price / 低在庫時の価格は高在庫時以上にしてください" + ChatColor.RESET);
+                renderAutopriceEditor(data);
+                return;
+            }
+            ShopItem.AutoPriceConfig payload = copyAutoprice(cfg);
+            submitAutoprice(data, item, currency, info, payload);
         }
 
         private ShopItem.AutoPriceConfig copyAutoprice(ShopItem.AutoPriceConfig cfg) {
-            return new ShopItem.AutoPriceConfig(cfg.getLowerThreshold(), cfg.getUpperThreshold(),
-                    cfg.getHighPrice(), cfg.getLowPrice());
+            if (cfg == null) {
+                return null;
+            }
+            return new ShopItem.AutoPriceConfig(
+                    cfg.getLowerThreshold(),
+                    cfg.getUpperThreshold(),
+                    cfg.getHighPrice(),
+                    cfg.getLowPrice());
         }
 
         private void submitAutoprice(ShopData data, ShopItem item, String currency,
@@ -1780,14 +1889,17 @@ public class ShopGuiManager {
             if (currency != null && !currency.isBlank()) {
                 payload.addProperty("currency", currency);
             }
-            payload.addProperty("lower_threshold", newConfig.getLowerThreshold());
-            payload.addProperty("upper_threshold", newConfig.getUpperThreshold());
-            payload.addProperty("high_price", newConfig.getHighPrice());
-            payload.addProperty("low_price", newConfig.getLowPrice());
-            postJson(player, "/api/shop/autoprice", payload, json -> {
+            payload.addProperty("lower_threshold", Math.max(0, newConfig.getLowerThreshold()));
+            payload.addProperty("upper_threshold", Math.max(0, newConfig.getUpperThreshold()));
+            payload.addProperty("high_price", Math.max(0, newConfig.getHighPrice()));
+            payload.addProperty("low_price", Math.max(0, newConfig.getLowPrice()));
+            postJson(player, "/api/shop/set_autoprice", payload, json -> {
                 String status = json.has("status") ? json.get("status").getAsString() : "error";
                 if ("success".equalsIgnoreCase(status)) {
                     info.setAutoprice(newConfig);
+                    autopriceWorking = copyAutoprice(newConfig);
+                    autopriceNew = false;
+                    autopriceDirty = false;
                     player.sendMessage(ChatColor.GREEN + (newSetup ? "Autoprice enabled" : "Autoprice updated")
                             + ChatColor.RESET);
                     renderAutopriceEditor(data);
@@ -1799,147 +1911,6 @@ public class ShopGuiManager {
                 player.sendMessage(msg);
                 renderAutopriceEditor(data);
             });
-        }
-
-        private void startAutopriceSetup(ShopData data, ShopItem item, String currency) {
-            AutopriceDraft draft = new AutopriceDraft();
-            promptAutopriceLower(data, item, currency, draft);
-        }
-
-        private void promptAutopriceLower(ShopData data, ShopItem item, String currency, AutopriceDraft draft) {
-            Player player = player();
-            if (player == null) return;
-            if (!startPrompt()) {
-                return;
-            }
-            beginPrompt(this, player,
-                    "Enter lower threshold quantity / 低在庫の閾値個数を入力してください",
-                    input -> {
-                        Player p = player();
-                        if (p == null) return;
-                        try {
-                            int value = Integer.parseInt(input);
-                            if (value < 0) {
-                                p.sendMessage(ChatColor.RED + "Threshold must be >= 0 / 0以上を入力してください"
-                                        + ChatColor.RESET);
-                                promptAutopriceLower(data, item, currency, draft);
-                                return;
-                            }
-                            draft.lowerThreshold = value;
-                            promptAutopriceUpper(data, item, currency, draft);
-                        } catch (NumberFormatException ex) {
-                            p.sendMessage(ChatColor.RED + "Invalid number / 無効な数値です" + ChatColor.RESET);
-                            promptAutopriceLower(data, item, currency, draft);
-                        }
-                    },
-                    () -> renderPriceEditor(data));
-        }
-
-        private void promptAutopriceUpper(ShopData data, ShopItem item, String currency, AutopriceDraft draft) {
-            Player player = player();
-            if (player == null) return;
-            if (!startPrompt()) {
-                return;
-            }
-            beginPrompt(this, player,
-                    "Enter upper threshold quantity / 高在庫の閾値個数を入力してください",
-                    input -> {
-                        Player p = player();
-                        if (p == null) return;
-                        try {
-                            int value = Integer.parseInt(input);
-                            if (value <= (draft.lowerThreshold == null ? 0 : draft.lowerThreshold)) {
-                                p.sendMessage(ChatColor.RED + "Upper threshold must be greater than lower / 上限は下限より大きくしてください"
-                                        + ChatColor.RESET);
-                                promptAutopriceUpper(data, item, currency, draft);
-                                return;
-                            }
-                            draft.upperThreshold = value;
-                            promptAutopriceHighPrice(data, item, currency, draft);
-                        } catch (NumberFormatException ex) {
-                            p.sendMessage(ChatColor.RED + "Invalid number / 無効な数値です" + ChatColor.RESET);
-                            promptAutopriceUpper(data, item, currency, draft);
-                        }
-                    },
-                    () -> renderPriceEditor(data));
-        }
-
-        private void promptAutopriceHighPrice(ShopData data, ShopItem item, String currency, AutopriceDraft draft) {
-            Player player = player();
-            if (player == null) return;
-            if (!startPrompt()) {
-                return;
-            }
-            beginPrompt(this, player,
-                    "Enter price at low stock / 低在庫時の価格を入力してください",
-                    input -> {
-                        Player p = player();
-                        if (p == null) return;
-                        try {
-                            int value = plugin.parseAmount(input);
-                            if (value < 0) {
-                                p.sendMessage(ChatColor.RED + "Price must be >= 0 / 0以上を入力してください" + ChatColor.RESET);
-                                promptAutopriceHighPrice(data, item, currency, draft);
-                                return;
-                            }
-                            draft.highPrice = value;
-                            promptAutopriceLowPrice(data, item, currency, draft);
-                        } catch (NumberFormatException ex) {
-                            p.sendMessage(ChatColor.RED + "Invalid number / 無効な数値です" + ChatColor.RESET);
-                            promptAutopriceHighPrice(data, item, currency, draft);
-                        }
-                    },
-                    () -> renderPriceEditor(data));
-        }
-
-        private void promptAutopriceLowPrice(ShopData data, ShopItem item, String currency, AutopriceDraft draft) {
-            Player player = player();
-            if (player == null) return;
-            if (!startPrompt()) {
-                return;
-            }
-            beginPrompt(this, player,
-                    "Enter price at high stock / 高在庫時の価格を入力してください",
-                    input -> {
-                        Player p = player();
-                        if (p == null) return;
-                        try {
-                            int value = plugin.parseAmount(input);
-                            if (value < 0) {
-                                p.sendMessage(ChatColor.RED + "Price must be >= 0 / 0以上を入力してください" + ChatColor.RESET);
-                                promptAutopriceLowPrice(data, item, currency, draft);
-                                return;
-                            }
-                            if (draft.highPrice != null && value > draft.highPrice) {
-                                p.sendMessage(ChatColor.RED + "High stock price must be <= low stock price / 高在庫時の価格は低在庫時以下にしてください"
-                                        + ChatColor.RESET);
-                                promptAutopriceLowPrice(data, item, currency, draft);
-                                return;
-                            }
-                            draft.lowPrice = value;
-                            completeAutopriceSetup(data, item, currency, draft);
-                        } catch (NumberFormatException ex) {
-                            p.sendMessage(ChatColor.RED + "Invalid number / 無効な数値です" + ChatColor.RESET);
-                            promptAutopriceLowPrice(data, item, currency, draft);
-                        }
-                    },
-                    () -> renderPriceEditor(data));
-        }
-
-        private void completeAutopriceSetup(ShopData data, ShopItem item, String currency, AutopriceDraft draft) {
-            ShopItem.ShopPrice info = item.getOrCreatePrice(currency);
-            if (draft.lowerThreshold == null || draft.upperThreshold == null
-                    || draft.highPrice == null || draft.lowPrice == null) {
-                renderPriceEditor(data);
-                return;
-            }
-            priceAutopriceView = true;
-            ShopItem.AutoPriceConfig config = new ShopItem.AutoPriceConfig(
-                    draft.lowerThreshold,
-                    draft.upperThreshold,
-                    draft.highPrice,
-                    draft.lowPrice);
-            submitAutoprice(data, item, currency, info, config);
         }
 
         private void disableAutoprice(ShopData data, ShopItem item, String currency, ShopItem.ShopPrice info) {
@@ -1956,6 +1927,7 @@ public class ShopGuiManager {
                 String status = json.has("status") ? json.get("status").getAsString() : "error";
                 if ("success".equalsIgnoreCase(status)) {
                     info.clearAutoprice();
+                    clearAutopriceDraft();
                     player.sendMessage(ChatColor.GREEN + "Autoprice disabled" + ChatColor.RESET);
                     priceAutopriceView = false;
                     renderPriceEditor(data);
@@ -1968,7 +1940,6 @@ public class ShopGuiManager {
                 renderAutopriceEditor(data);
             });
         }
-
         private ItemStack buildPriceDisplay(ShopEntry entry) {
             ShopItem item = entry.item;
             ItemStack stack = item.getRawItem().clone();
@@ -2204,6 +2175,7 @@ public class ShopGuiManager {
                 renderPriceManager(data);
                 return;
             }
+            clearAutopriceDraft();
             ShopItem item = priceEntry.item;
             String currency = ensureSelectedCurrency(item);
             ShopItem.ShopPrice info = item.getOrCreatePrice(currency);
@@ -2267,14 +2239,11 @@ public class ShopGuiManager {
             if (info.hasAutoprice()) {
                 inv.setItem(7, button(Material.CLOCK, ChatColor.GOLD + "Autoprice",
                         ChatColor.GRAY + "Click to edit thresholds"));
-                actions.put(7, () -> {
-                    priceAutopriceView = true;
-                    renderAutopriceEditor(data);
-                });
+                actions.put(7, () -> openAutopriceEditor(data, item, info, currency, false));
             } else {
                 inv.setItem(7, button(Material.CLOCK, ChatColor.GREEN + "Enable Autoprice",
                         ChatColor.GRAY + "Create automatic pricing"));
-                actions.put(7, () -> startAutopriceSetup(data, item, currency));
+                actions.put(7, () -> openAutopriceEditor(data, item, info, currency, true));
             }
 
             populatePriceRow(inv, 9, true, data, item, info, currency);
