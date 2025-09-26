@@ -8,8 +8,22 @@
     <form method="post" class="row gy-2 gx-2 align-items-center">
       <input type="hidden" name="currency" value="{{ c.name }}">
       <div class="col-auto">
-        <label class="form-label">Tax %</label>
-        <input name="tax" class="form-control form-control-sm" type="number" step="0.1" min="0" value="{{ '%.1f'|format(c.tax_rate/10) }}">
+        <label class="form-label">Trade Tax %</label>
+        <div class="input-group input-group-sm">
+          <div class="input-group-text">
+            <input class="form-check-input mt-0" type="checkbox" name="trade_enabled" {% if c.trade_tax_enabled %}checked{% endif %}>
+          </div>
+          <input name="trade_tax" class="form-control form-control-sm" type="number" step="0.1" min="0" value="{{ '%.1f'|format(c.trade_tax_rate/10) }}">
+        </div>
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Transfer Tax %</label>
+        <div class="input-group input-group-sm">
+          <div class="input-group-text">
+            <input class="form-check-input mt-0" type="checkbox" name="transfer_enabled" {% if c.transfer_tax_enabled %}checked{% endif %}>
+          </div>
+          <input name="transfer_tax" class="form-control form-control-sm" type="number" step="0.1" min="0" value="{{ '%.1f'|format(c.transfer_tax_rate/10) }}">
+        </div>
       </div>
       <div class="col-auto">
         <label class="form-label">Treasury</label>

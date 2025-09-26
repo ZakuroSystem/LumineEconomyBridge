@@ -24,7 +24,7 @@ LumineEconomyBridge は Minecraft のスコアボード経済を Python バッ�
 - `/le admin add <player>` : 指定プレイヤーをダッシュボード管理者に追加。
 - `/le account connect <user> <system>` : システムアカウントをユーザーへ紐付け。
 - `/le currency manager add <id> <player>` : 通貨管理者の追加。管理者は発行・没収・税率/国庫設定が可能。
-- `/le currency tax <id> <rate%>` : 0.1%単位で税率を設定。
+- `/le currency tax <id> <trade|transfer> <rate|off> [on|off]` : 売買・送金ごとに税率と有効/無効を設定 (税率は0.1%刻み)。
 - `/le currency treasury <id> <account>` : 税の納付先アカウントを指定。
 - ショップの掲載/非掲載や価格設定、在庫編集はゲーム内のショップ管理GUI（/le shop）から行えます。詳細なログ閲覧などは WebUI のメニューから利用してください。
 

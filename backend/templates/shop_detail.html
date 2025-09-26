@@ -35,7 +35,7 @@
 </table>
 <h3>Sales</h3>
 <table class="table table-striped datatable">
-  <thead><tr><th>Time</th><th>Buyer</th><th>Item</th><th>Qty</th><th>Currency</th><th>Total</th></tr></thead>
+  <thead><tr><th>Time</th><th>Buyer</th><th>Item</th><th>Qty</th><th>Currency</th><th>Total</th><th>Tax</th></tr></thead>
   <tbody>
     {% for tx in sales %}
     <tr>
@@ -45,6 +45,7 @@
       <td>{{ tx.qty }}</td>
       <td>{{ tx.currency }}</td>
       <td>{{ tx.total_price }}</td>
+      <td>{{ tx.tax_amount }}</td>
     </tr>
     {% endfor %}
   </tbody>

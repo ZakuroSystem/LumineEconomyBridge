@@ -26,7 +26,7 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le currency default <id>` – Set the default currency used when a command omits one.
 - `/le currency manager add <id> <player>` – Grant manager privileges for a currency.
 - `/le currency manager remove <id> <player>` – Revoke a currency manager.
-- `/le currency tax <id> <rate%>` – Set a currency's tax rate (0.1% steps).
+- `/le currency tax <id> <trade|transfer> <rate|off> [on|off]` – Configure trade or transfer tax per currency (0.1% steps, separate enable toggles).
 - `/le currency treasury <id> <account>` – Choose the treasury account to receive tax.
 - `/le account create <id>` – Create a system account.
 - `/le account connect <user> <system>` – Link a user to a system account they can control.

@@ -173,7 +173,9 @@ public class LeTabCompleter implements TabCompleter {
                         .collect(Collectors.toList());
             }
             if (first.equals("currency") && args[1].equalsIgnoreCase("tax")) {
-                return Collections.singletonList("0.0");
+                return Stream.of("trade", "transfer")
+                        .filter(s -> s.startsWith(args[2].toLowerCase()))
+                        .collect(Collectors.toList());
             }
             if (first.equals("currency") && args[1].equalsIgnoreCase("treasury")) {
                 return Collections.singletonList("<account>");
@@ -236,6 +238,11 @@ public class LeTabCompleter implements TabCompleter {
             if (args[0].equalsIgnoreCase("currency") && args[1].equalsIgnoreCase("manager")
                     && (args[2].equalsIgnoreCase("add") || args[2].equalsIgnoreCase("remove"))) {
                 return Collections.singletonList("<currency>");
+            }
+            if (args[0].equalsIgnoreCase("currency") && args[1].equalsIgnoreCase("tax")) {
+                return Stream.of("0.0", "off")
+                        .filter(s -> s.startsWith(args[3].toLowerCase()))
+                        .collect(Collectors.toList());
             }
             if (args[0].equalsIgnoreCase("money") && args[1].equalsIgnoreCase("top")) {
                 return Collections.singletonList("1");
@@ -303,6 +310,13 @@ public class LeTabCompleter implements TabCompleter {
                             .filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase()))
                             .collect(Collectors.toList());
                 }
+            }
+        }
+        if (args.length == 5) {
+            if (args[0].equalsIgnoreCase("currency") && args[1].equalsIgnoreCase("tax")) {
+                return Stream.of("on", "off")
+                        .filter(s -> s.startsWith(args[4].toLowerCase()))
+                        .collect(Collectors.toList());
             }
         }
         if (args.length == 5) {

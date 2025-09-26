@@ -269,7 +269,11 @@ def init_db() -> None:
                 description TEXT,
                 active INTEGER NOT NULL DEFAULT 1,
                 treasury TEXT,
-                tax_rate INTEGER NOT NULL DEFAULT 0
+                tax_rate INTEGER NOT NULL DEFAULT 0,
+                trade_tax_enabled INTEGER NOT NULL DEFAULT 0,
+                trade_tax_rate INTEGER NOT NULL DEFAULT 0,
+                transfer_tax_enabled INTEGER NOT NULL DEFAULT 0,
+                transfer_tax_rate INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS currency_managers (
                 currency TEXT NOT NULL,
@@ -330,6 +334,41 @@ def init_db() -> None:
             db.execute("ALTER TABLE currencies ADD COLUMN tax_rate INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        try:
+            db.execute(
+                "ALTER TABLE currencies ADD COLUMN trade_tax_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute(
+                "ALTER TABLE currencies ADD COLUMN trade_tax_rate INTEGER NOT NULL DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute(
+                "ALTER TABLE currencies ADD COLUMN transfer_tax_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute(
+                "ALTER TABLE currencies ADD COLUMN transfer_tax_rate INTEGER NOT NULL DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass
+        db.execute(
+            """
+            UPDATE currencies
+            SET transfer_tax_rate=tax_rate,
+                transfer_tax_enabled=CASE WHEN tax_rate>0 THEN 1 ELSE transfer_tax_enabled END,
+                tax_rate=0
+            WHERE tax_rate>0
+                AND transfer_tax_rate=0
+                AND transfer_tax_enabled=0
+            """
+        )
         db.execute(
             "CREATE TABLE IF NOT EXISTS currency_managers (currency TEXT NOT NULL, uuid TEXT NOT NULL, PRIMARY KEY(currency, uuid))"
         )
@@ -986,11 +1025,21 @@ def currency_manage():
                     or is_currency_manager(db, g.user["uuid"], cname)
                 ):
                     abort(403)
-                try:
-                    tax = Decimal(request.form.get("tax", "0"))
-                except InvalidOperation:
-                    tax = Decimal(0)
-                tax_int = int((tax * 10).to_integral_value(rounding=ROUND_HALF_UP))
+                def parse_rate(field: str) -> int:
+                    raw = request.form.get(field, "0")
+                    try:
+                        value = Decimal(raw)
+                    except InvalidOperation:
+                        value = Decimal(0)
+                    rate_int = int(
+                        (value * 10).to_integral_value(rounding=ROUND_HALF_UP)
+                    )
+                    return max(rate_int, 0)
+
+                trade_rate = parse_rate("trade_tax")
+                transfer_rate = parse_rate("transfer_tax")
+                trade_enabled = 1 if request.form.get("trade_enabled") else 0
+                transfer_enabled = 1 if request.form.get("transfer_enabled") else 0
                 tre_name = request.form.get("treasury", "").strip().lower()
                 tre_uuid = None
                 if tre_name:
@@ -998,8 +1047,23 @@ def currency_manage():
                     if row:
                         tre_uuid = row["uuid"]
                 db.execute(
-                    "UPDATE currencies SET tax_rate=?, treasury=? WHERE name=?",
-                    (tax_int, tre_uuid, cname),
+                    """
+                    UPDATE currencies
+                    SET trade_tax_rate=?,
+                        trade_tax_enabled=?,
+                        transfer_tax_rate=?,
+                        transfer_tax_enabled=?,
+                        treasury=?
+                    WHERE name=?
+                    """,
+                    (
+                        trade_rate,
+                        trade_enabled,
+                        transfer_rate,
+                        transfer_enabled,
+                        tre_uuid,
+                        cname,
+                    ),
                 )
                 db.commit()
                 return redirect(url_for("currency_manage"))
@@ -1086,11 +1150,30 @@ def currency_manage():
                 return redirect(url_for("currency_manage"))
         if g.user["is_admin"] and session.get("admin_mode", False):
             rows = db.execute(
-                "SELECT c.name, c.tax_rate, n.name AS treasury_name FROM currencies c LEFT JOIN name_index n ON n.uuid=c.treasury"
+                """
+                SELECT c.name,
+                       c.trade_tax_rate,
+                       c.trade_tax_enabled,
+                       c.transfer_tax_rate,
+                       c.transfer_tax_enabled,
+                       n.name AS treasury_name
+                FROM currencies c
+                LEFT JOIN name_index n ON n.uuid=c.treasury
+                """
             ).fetchall()
         else:
             rows = db.execute(
-                "SELECT c.name, c.tax_rate, n.name AS treasury_name FROM currencies c JOIN currency_managers m ON m.currency=c.name AND m.uuid=? LEFT JOIN name_index n ON n.uuid=c.treasury",
+                """
+                SELECT c.name,
+                       c.trade_tax_rate,
+                       c.trade_tax_enabled,
+                       c.transfer_tax_rate,
+                       c.transfer_tax_enabled,
+                       n.name AS treasury_name
+                FROM currencies c
+                JOIN currency_managers m ON m.currency=c.name AND m.uuid=?
+                LEFT JOIN name_index n ON n.uuid=c.treasury
+                """,
                 (g.user["uuid"],),
             ).fetchall()
         currencies = []
@@ -1102,7 +1185,10 @@ def currency_manage():
             currencies.append(
                 {
                     "name": r["name"],
-                    "tax_rate": r["tax_rate"],
+                    "trade_tax_rate": r["trade_tax_rate"],
+                    "trade_tax_enabled": bool(r["trade_tax_enabled"]),
+                    "transfer_tax_rate": r["transfer_tax_rate"],
+                    "transfer_tax_enabled": bool(r["transfer_tax_enabled"]),
                     "treasury_name": r["treasury_name"],
                     "managers": [m["name"] for m in mgrs],
                     "can_manage": g.user["is_admin"]
@@ -1221,14 +1307,19 @@ def shop_detail(shop_id: str):
             )
         sales = db.execute(
             """
-            SELECT timestamp, buyer_uuid, item_key, qty, currency, total_price
+            SELECT timestamp, buyer_uuid, item_key, qty, currency, total_price, tax_amount
             FROM shop_tx WHERE shop_id=? AND result='success'
             ORDER BY id DESC LIMIT 100
             """,
             (shop_id,),
         ).fetchall()
     sales_fmt = [
-        {**dict(r), "total_price": r["total_price"] / scale} for r in sales
+        {
+            **dict(r),
+            "total_price": r["total_price"] / scale,
+            "tax_amount": r["tax_amount"] / scale,
+        }
+        for r in sales
     ]
     return render_template("shop_detail.html", shop=shop, items=items, sales=sales_fmt)
 
@@ -1403,13 +1494,20 @@ def portal_shop(shop_id: str):
             )
         sales = db.execute(
             """
-            SELECT timestamp, buyer_uuid, item_key, qty, currency, total_price
+            SELECT timestamp, buyer_uuid, item_key, qty, currency, total_price, tax_amount
             FROM shop_tx WHERE shop_id=? AND result='success'
             ORDER BY id DESC LIMIT 100
             """,
             (shop_id,),
         ).fetchall()
-        sales = [{**dict(r), "total_price": r["total_price"] / scale} for r in sales]
+        sales = [
+            {
+                **dict(r),
+                "total_price": r["total_price"] / scale,
+                "tax_amount": r["tax_amount"] / scale,
+            }
+            for r in sales
+        ]
         series = db.execute(
             """
             SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch') AS day, SUM(total_price) total

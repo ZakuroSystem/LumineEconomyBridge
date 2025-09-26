@@ -6,7 +6,10 @@ en:
     default: "§aDefault currency set to §e{currency}§a.§r"
     manager_add: "§aAdded §e{player}§a as manager for §e{currency}§a.§r"
     manager_remove: "§aRemoved §e{player}§a from managers of §e{currency}§a.§r"
-    tax: "§aSet tax for §e{currency}§a to {rate}%§r"
+    tax_set: "§aSet {mode} tax for §e{currency}§a to {rate}%§r"
+    tax_disabled: "§aDisabled {mode} tax for §e{currency}§a.§r"
+    tax_mode_trade: "trade"
+    tax_mode_transfer: "transfer"
     treasury: "§aSet treasury for §e{currency}§a to §e{account}§a.§r"
   money:
     give: "§aGave {amount}§a §e{currency}§a to §e{target}§a.§r"
@@ -131,7 +134,10 @@ jp:
     default: "§aデフォルト通貨を §e{currency}§a に設定しました。§r"
     manager_add: "§a§e{currency}§a の管理者に §e{player}§a を追加しました。§r"
     manager_remove: "§a§e{currency}§a の管理者から §e{player}§a を削除しました。§r"
-    tax: "§a§e{currency}§a の税率を {rate}% に設定しました。§r"
+    tax_set: "§a§e{currency}§a の{mode}税率を {rate}% に設定しました。§r"
+    tax_disabled: "§a§e{currency}§a の{mode}税を無効化しました。§r"
+    tax_mode_trade: "売買"
+    tax_mode_transfer: "送金"
     treasury: "§a§e{currency}§a の国庫アカウントを §e{account}§a に設定しました。§r"
   money:
     give: "§a§e{target}§a の §e{currency}§a を {amount}§a 付与しました。§r"
