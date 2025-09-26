@@ -1325,6 +1325,12 @@ class TaxConfig(NamedTuple):
     treasury: Optional[str]
 
 
+def compute_tax_amount(amount: int, tax: TaxConfig) -> int:
+    if not tax.enabled or tax.rate <= 0 or amount <= 0:
+        return 0
+    return max((amount * tax.rate + 500) // 1000, 0)
+
+
 def tax_info(cur: sqlite3.Cursor, currency: str, kind: str) -> TaxConfig:
     row = cur.execute(
         """
@@ -2291,11 +2297,7 @@ async def message(payload: MessagePayload):
                             error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                         else:
                             transfer_tax = tax_info(cur, currency, "transfer")
-                            tax_amt = (
-                                amt * transfer_tax.rate // 1000
-                                if transfer_tax.enabled and transfer_tax.rate > 0
-                                else 0
-                            )
+                            tax_amt = compute_tax_amount(amt, transfer_tax)
                             treasury = transfer_tax.treasury
                             required = amt + tax_amt
                             if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
@@ -2379,11 +2381,7 @@ async def message(payload: MessagePayload):
                     error_text = t("error.invalid_args", lang=exec_lang) if amt is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                 else:
                     transfer_tax = tax_info(cur, currency, "transfer")
-                    tax_amt = (
-                        amt * transfer_tax.rate // 1000
-                        if transfer_tax.enabled and transfer_tax.rate > 0
-                        else 0
-                    )
+                    tax_amt = compute_tax_amount(amt, transfer_tax)
                     treasury = transfer_tax.treasury
                     required = amt + tax_amt
                     if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
@@ -2474,11 +2472,7 @@ async def message(payload: MessagePayload):
                         error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                     else:
                         transfer_tax = tax_info(cur, currency, "transfer")
-                        tax_amt = (
-                            amt * transfer_tax.rate // 1000
-                            if transfer_tax.enabled and transfer_tax.rate > 0
-                            else 0
-                        )
+                        tax_amt = compute_tax_amount(amt, transfer_tax)
                         treasury = transfer_tax.treasury
                         required = amt + tax_amt
                         if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
@@ -3374,11 +3368,7 @@ async def shop_buy(payload: ShopBuyPayload):
                         else:
                             total_price = base_price
                         trade_tax = tax_info(cur, payload.currency, "trade")
-                        tax_amount = (
-                            total_price * trade_tax.rate // 1000
-                            if trade_tax.enabled and trade_tax.rate > 0
-                            else 0
-                        )
+                        tax_amount = compute_tax_amount(total_price, trade_tax)
                         required = total_price + tax_amount
                         tax_account = trade_tax.treasury if trade_tax.enabled else None
                         if is_frozen(
@@ -3733,11 +3723,7 @@ async def shop_sell(payload: ShopSellPayload):
                         else:
                             total_price = buy_price * payload.qty
                         trade_tax = tax_info(cur, payload.currency, "trade")
-                        tax_amount = (
-                            total_price * trade_tax.rate // 1000
-                            if trade_tax.enabled and trade_tax.rate > 0
-                            else 0
-                        )
+                        tax_amount = compute_tax_amount(total_price, trade_tax)
                         if tax_amount > total_price:
                             tax_amount = total_price
                         net_amount = total_price - tax_amount
