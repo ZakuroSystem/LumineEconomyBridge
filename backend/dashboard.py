@@ -20,6 +20,7 @@ import shutil
 import requests
 import re
 import logging
+import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime
@@ -223,6 +224,15 @@ def parse_amount_field(value: str) -> int:
     scale = Decimal(compute_scale(places))
     scaled = (dec * scale).to_integral_value(rounding=ROUND_HALF_UP)
     return int(scaled)
+
+
+def format_amount_units(value: int) -> str:
+    places = current_decimal_places()
+    scale = Decimal(compute_scale(places))
+    quant = Decimal(1) / scale
+    dec = (Decimal(value) / scale).quantize(quant, rounding=ROUND_HALF_UP)
+    txt = f"{dec:.{places}f}" if places else f"{int(dec)}"
+    return txt.rstrip("0").rstrip(".") if "." in txt else txt
 
 
 def is_currency_manager(db: sqlite3.Connection, uuid: str, currency: str) -> bool:
@@ -993,6 +1003,87 @@ def currency_manage():
                 )
                 db.commit()
                 return redirect(url_for("currency_manage"))
+            elif op in {"mint", "burn"}:
+                if not (
+                    g.user["is_admin"]
+                    and session.get("admin_mode", False)
+                    or is_currency_manager(db, g.user["uuid"], cname)
+                ):
+                    abort(403)
+                target_raw = request.form.get("target", "").strip()
+                amount_raw = request.form.get("amount", "").strip()
+                if not target_raw:
+                    flash("Account name is required")
+                    return redirect(url_for("currency_manage"))
+                try:
+                    amount = parse_amount_field(amount_raw)
+                except ValueError:
+                    flash("Amount must be a number")
+                    return redirect(url_for("currency_manage"))
+                if amount <= 0:
+                    flash("Amount must be positive")
+                    return redirect(url_for("currency_manage"))
+
+                target_uuid = None
+                target_label = target_raw
+                try:
+                    parsed_uuid = str(uuid.UUID(target_raw))
+                except ValueError:
+                    row = db.execute(
+                        "SELECT uuid FROM name_index WHERE name=?",
+                        (target_raw.lower(),),
+                    ).fetchone()
+                    if row:
+                        target_uuid = row["uuid"]
+                    else:
+                        flash("Account not found")
+                        return redirect(url_for("currency_manage"))
+                else:
+                    target_uuid = parsed_uuid
+                    name_row = db.execute(
+                        "SELECT name FROM name_index WHERE uuid=?",
+                        (parsed_uuid,),
+                    ).fetchone()
+                    if name_row and name_row["name"]:
+                        target_label = name_row["name"]
+
+                db.execute(
+                    "INSERT OR IGNORE INTO accounts(uuid, currency, balance) VALUES (?,?,0)",
+                    (target_uuid, cname),
+                )
+                row = db.execute(
+                    "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
+                    (target_uuid, cname),
+                ).fetchone()
+                current_balance = row["balance"] if row else 0
+                delta = amount if op == "mint" else -min(amount, current_balance)
+                if delta == 0:
+                    flash("Account has no balance to confiscate" if op == "burn" else "No change applied")
+                    return redirect(url_for("currency_manage"))
+
+                new_balance = current_balance + delta
+                db.execute(
+                    "UPDATE accounts SET balance=? WHERE uuid=? AND currency=?",
+                    (new_balance, target_uuid, cname),
+                )
+                ts = int(time.time())
+                db.execute(
+                    "INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason) VALUES (?,?,?,?,?,?)",
+                    (
+                        ts,
+                        None if delta > 0 else target_uuid,
+                        target_uuid if delta > 0 else None,
+                        cname,
+                        abs(delta),
+                        "mint" if delta > 0 else "burn",
+                    ),
+                )
+                db.commit()
+                action_word = "issued" if delta > 0 else "confiscated"
+                flash(
+                    f"{action_word.capitalize()} {format_amount_units(abs(delta))} {cname} for {target_label}"
+                )
+                return redirect(url_for("currency_manage"))
         if g.user["is_admin"] and session.get("admin_mode", False):
             rows = db.execute(
                 "SELECT c.name, c.tax_rate, n.name AS treasury_name FROM currencies c LEFT JOIN name_index n ON n.uuid=c.treasury"
@@ -1014,6 +1105,9 @@ def currency_manage():
                     "tax_rate": r["tax_rate"],
                     "treasury_name": r["treasury_name"],
                     "managers": [m["name"] for m in mgrs],
+                    "can_manage": g.user["is_admin"]
+                    and session.get("admin_mode", False)
+                    or is_currency_manager(db, g.user["uuid"], r["name"]),
                 }
             )
     return render_template("currency_manage.html", currencies=currencies)

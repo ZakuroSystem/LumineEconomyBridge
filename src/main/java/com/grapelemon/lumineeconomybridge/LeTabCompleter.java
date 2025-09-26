@@ -167,6 +167,17 @@ public class LeTabCompleter implements TabCompleter {
             if (first.equals("currency") && args[1].equalsIgnoreCase("default")) {
                 return Collections.singletonList("<id>");
             }
+            if (first.equals("currency") && args[1].equalsIgnoreCase("manager")) {
+                return Stream.of("add", "remove")
+                        .filter(s -> s.startsWith(args[2].toLowerCase()))
+                        .collect(Collectors.toList());
+            }
+            if (first.equals("currency") && args[1].equalsIgnoreCase("tax")) {
+                return Collections.singletonList("0.0");
+            }
+            if (first.equals("currency") && args[1].equalsIgnoreCase("treasury")) {
+                return Collections.singletonList("<account>");
+            }
             if (first.equals("money") && (args[1].equalsIgnoreCase("give") || args[1].equalsIgnoreCase("take") || args[1].equalsIgnoreCase("pay"))) {
                 List<String> names = new ArrayList<>();
                 for (Player p : Bukkit.getOnlinePlayers()) {
@@ -221,6 +232,10 @@ public class LeTabCompleter implements TabCompleter {
                 }
                 names.removeIf(n -> !n.toLowerCase().startsWith(args[3].toLowerCase()));
                 return names;
+            }
+            if (args[0].equalsIgnoreCase("currency") && args[1].equalsIgnoreCase("manager")
+                    && (args[2].equalsIgnoreCase("add") || args[2].equalsIgnoreCase("remove"))) {
+                return Collections.singletonList("<currency>");
             }
             if (args[0].equalsIgnoreCase("money") && args[1].equalsIgnoreCase("top")) {
                 return Collections.singletonList("1");
@@ -296,6 +311,15 @@ public class LeTabCompleter implements TabCompleter {
                         .map(Player::getName)
                         .filter(n -> n.toLowerCase().startsWith(args[4].toLowerCase()))
                         .collect(Collectors.toList());
+            }
+            if (args[0].equalsIgnoreCase("currency") && args[1].equalsIgnoreCase("manager")
+                    && (args[2].equalsIgnoreCase("add") || args[2].equalsIgnoreCase("remove"))) {
+                List<String> names = new ArrayList<>();
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    names.add(p.getName());
+                }
+                names.removeIf(n -> !n.toLowerCase().startsWith(args[4].toLowerCase()));
+                return names;
             }
         }
         return Collections.emptyList();
