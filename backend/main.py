@@ -1403,6 +1403,28 @@ def get_scoreboard(cur: sqlite3.Cursor, uuid: str) -> Dict[str, int]:
     return list_balances(cur, uuid)
 
 
+def increment_quest_progress(
+    cur: sqlite3.Cursor, player_uuid: str, quest_id: str, amount: int
+) -> bool:
+    """Increment quest progress when the optional quest tables exist.
+
+    Some deployments omit the quest schema entirely. In that case we should
+    ignore the missing table instead of aborting the surrounding shop
+    transaction.
+    """
+
+    try:
+        cur.execute(
+            "UPDATE quest_progress SET progress=progress+? WHERE player_uuid=? AND quest_id=?",
+            (amount, player_uuid, quest_id),
+        )
+        return True
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower() and "quest_progress" in str(exc).lower():
+            return False
+        raise
+
+
 def format_amount(cur: sqlite3.Cursor, amount: int, currency: str) -> str:
     row = cur.execute("SELECT symbol FROM currencies WHERE name=?", (currency,)).fetchone()
     symbol = ""
@@ -3816,9 +3838,11 @@ async def shop_sell(payload: ShopSellPayload):
                                         ),
                                     )
                                     success = True
-                                    cur.execute(
-                                        "UPDATE quest_progress SET progress=progress+? WHERE player_uuid=? AND quest_id='shop_sell'",
-                                        (payload.qty, payload.player_uuid),
+                                    increment_quest_progress(
+                                        cur,
+                                        payload.player_uuid,
+                                        "shop_sell",
+                                        payload.qty,
                                     )
                                     player_name = get_name(payload.player_uuid) or payload.player_uuid
                                     net_display = net_amount
