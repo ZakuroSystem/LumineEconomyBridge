@@ -23,3 +23,19 @@ def test_compute_tax_positive_amount_required():
     tax = main.TaxConfig(rate=100, enabled=True, treasury=None)
     assert main.compute_tax_amount(0, tax) == 0
     assert main.compute_tax_amount(-100, tax) == 0
+
+
+def test_transfer_tax_withheld_from_receiver():
+    tax = main.TaxConfig(rate=100, enabled=True, treasury="treasury")
+    amt = 1000
+    tax_amt = min(main.compute_tax_amount(amt, tax), amt)
+    assert tax_amt == 100
+    assert amt - tax_amt == 900
+
+
+def test_trade_tax_withheld_from_shop_payout():
+    tax = main.TaxConfig(rate=100, enabled=True, treasury="treasury")
+    price = 100
+    tax_amt = min(main.compute_tax_amount(price, tax), price)
+    assert tax_amt == 10
+    assert price - tax_amt == 90
