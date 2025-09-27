@@ -3795,7 +3795,7 @@ async def shop_sell(payload: ShopSellPayload):
                                             cur, payload.shop_id, payload.item_key, cfg["currency"]
                                         )
                                     cur.execute(
-                                        "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,tax_amount,tax_account,timestamp,result,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                        "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,tax_amount,tax_account,timestamp,result,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                         (
                                             payload.client_tx_id,
                                             payload.shop_id,
