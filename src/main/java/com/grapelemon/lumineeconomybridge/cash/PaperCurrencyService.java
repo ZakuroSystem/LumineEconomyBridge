@@ -55,34 +55,36 @@ public class PaperCurrencyService {
     }
 
     public boolean isNote(ItemStack stack) {
-        if (stack == null) return false;
-        try {
-            ItemMeta meta = stack.getItemMeta();
-            return meta != null && meta.getPersistentDataContainer().has(currencyKey, PersistentDataType.STRING);
-        } catch (IllegalArgumentException e) {
-            plugin.getLogger().warning("failed to read item meta: " + e.getMessage());
+        if (stack == null) {
             return false;
         }
+        ItemMeta meta = readMeta(stack);
+        return meta != null && meta.getPersistentDataContainer().has(currencyKey, PersistentDataType.STRING);
     }
 
     public String getCurrency(ItemStack stack) {
-        try {
-            ItemMeta meta = stack.getItemMeta();
-            return meta.getPersistentDataContainer().get(currencyKey, PersistentDataType.STRING);
-        } catch (IllegalArgumentException e) {
-            plugin.getLogger().warning("failed to read currency: " + e.getMessage());
+        ItemMeta meta = readMeta(stack);
+        if (meta == null) {
             return "";
         }
+        return meta.getPersistentDataContainer().get(currencyKey, PersistentDataType.STRING);
     }
 
     public int getAmount(ItemStack stack) {
-        try {
-            ItemMeta meta = stack.getItemMeta();
-            Integer v = meta.getPersistentDataContainer().get(amountKey, PersistentDataType.INTEGER);
-            return v != null ? v : 0;
-        } catch (IllegalArgumentException e) {
-            plugin.getLogger().warning("failed to read amount: " + e.getMessage());
+        ItemMeta meta = readMeta(stack);
+        if (meta == null) {
             return 0;
+        }
+        Integer v = meta.getPersistentDataContainer().get(amountKey, PersistentDataType.INTEGER);
+        return v != null ? v : 0;
+    }
+
+    private ItemMeta readMeta(ItemStack stack) {
+        try {
+            return stack.getItemMeta();
+        } catch (RuntimeException e) {
+            plugin.getLogger().fine("failed to read item meta: " + e.getMessage());
+            return null;
         }
     }
 
