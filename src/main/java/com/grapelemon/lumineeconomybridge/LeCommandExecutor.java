@@ -1,6 +1,7 @@
 package com.grapelemon.lumineeconomybridge;
 
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
+import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
@@ -1140,6 +1141,12 @@ public class LeCommandExecutor implements CommandExecutor {
         payload.put("executor", p.getName());
         payload.put("command", "/" + String.join(" ", args));
         payload.put("timestamp", System.currentTimeMillis() / 1000);
+        if (args[0].equalsIgnoreCase("wallet")) {
+            Map<String, Integer> snapshot = ScoreboardUtil.readAllSync(p);
+            if (!snapshot.isEmpty()) {
+                payload.put("scoreboard", new HashMap<>(snapshot));
+            }
+        }
         Location loc = p.getLocation();
         Map<String, Object> locMap = new HashMap<>();
         locMap.put("world", loc.getWorld().getName());

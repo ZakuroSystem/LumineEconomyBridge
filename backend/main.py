@@ -8,8 +8,19 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from pydantic import BaseModel
-from typing import Dict, Optional, List, Union, Tuple, Any, Set, Sequence, NamedTuple
+from pydantic import BaseModel, Field
+from typing import (
+    Dict,
+    Optional,
+    List,
+    Union,
+    Tuple,
+    Any,
+    Set,
+    Sequence,
+    NamedTuple,
+    Mapping,
+)
 from tile_store import TileStore
 from tile_format import PIXEL_COUNT
 import sqlite3
@@ -304,12 +315,19 @@ with conn:
         CREATE TABLE IF NOT EXISTS players (
             uuid TEXT PRIMARY KEY,
             last_seen INTEGER NOT NULL,
-            lang_hint INTEGER NOT NULL DEFAULT 0
+            lang_hint INTEGER NOT NULL DEFAULT 0,
+            wallet_initialized INTEGER NOT NULL DEFAULT 0
         )
         """
     )
     try:
         conn.execute("ALTER TABLE players ADD COLUMN lang_hint INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute(
+            "ALTER TABLE players ADD COLUMN wallet_initialized INTEGER NOT NULL DEFAULT 0"
+        )
     except sqlite3.OperationalError:
         pass
     conn.execute(
@@ -965,6 +983,7 @@ class MessagePayload(BaseModel):
     command: str
     timestamp: int
     location: Location
+    scoreboard: Dict[str, int] = Field(default_factory=dict)
 
 
 class DeltaPayload(BaseModel):
@@ -1401,6 +1420,72 @@ def list_balances(cur: sqlite3.Cursor, uuid: str) -> Dict[str, int]:
 
 def get_scoreboard(cur: sqlite3.Cursor, uuid: str) -> Dict[str, int]:
     return list_balances(cur, uuid)
+
+
+def maybe_initialize_wallet(
+    cur: sqlite3.Cursor,
+    player_uuid: str,
+    scoreboard_snapshot: Mapping[str, int],
+) -> bool:
+    """Seed account balances from the provided scoreboard snapshot.
+
+    The wallet command ships the caller's scoreboard values so that players who
+    earned currency before linking their account no longer lose their funds on
+    first use.  The snapshot is applied only once per player; subsequent calls
+    simply mark the wallet as initialized without overwriting existing data.
+    Returns ``True`` when balances were updated.
+    """
+
+    row = cur.execute(
+        "SELECT wallet_initialized FROM players WHERE uuid=?",
+        (player_uuid,),
+    ).fetchone()
+    if row and row["wallet_initialized"]:
+        return False
+
+    normalized: Dict[str, int] = {}
+    for raw_currency, value in scoreboard_snapshot.items():
+        try:
+            amount = int(value)
+        except (TypeError, ValueError):
+            continue
+        resolved = resolve_currency(cur, raw_currency)
+        if not is_currency(cur, resolved):
+            continue
+        normalized[resolved] = max(0, amount)
+
+    cur.execute(
+        "INSERT OR IGNORE INTO players(uuid, last_seen, lang_hint) VALUES(?,?,0)",
+        (player_uuid, int(time.time())),
+    )
+
+    updated = False
+    for currency, amount in normalized.items():
+        existing = cur.execute(
+            "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
+            (player_uuid, currency),
+        ).fetchone()
+        if existing is None or existing["balance"] != amount:
+            set_balance(cur, player_uuid, currency, amount)
+            updated = True
+
+    if normalized:
+        default_currency = get_default_currency(cur)
+        if default_currency not in normalized:
+            cur.execute(
+                "INSERT OR IGNORE INTO accounts(uuid, currency, balance) VALUES (?,?,0)",
+                (player_uuid, default_currency),
+            )
+
+    has_account = cur.execute(
+        "SELECT 1 FROM accounts WHERE uuid=? LIMIT 1", (player_uuid,)
+    ).fetchone()
+    if has_account or normalized:
+        cur.execute(
+            "UPDATE players SET wallet_initialized=1 WHERE uuid=?",
+            (player_uuid,),
+        )
+    return updated
 
 
 def increment_quest_progress(
@@ -2728,6 +2813,8 @@ async def message(payload: MessagePayload):
                         success = False
                         error_text = t("error.invalid_args", lang=exec_lang)
                     else:
+                        if action == "wallet" and target_uuid == exec_uuid:
+                            maybe_initialize_wallet(cur, target_uuid, payload.scoreboard)
                         if currency:
                             bal = get_balance(cur, target_uuid, currency)
                             key = "balance.other_single" if target_uuid != exec_uuid else "balance.single"
