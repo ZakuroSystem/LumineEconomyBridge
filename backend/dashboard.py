@@ -1707,6 +1707,118 @@ def analytics():
                 {"label": "Balance", "data": [r["total"] for r in top_rows]}
             ],
         }
+        shop_rank_rows = db.execute(
+            """
+            SELECT st.shop_id,
+                   s.owner_uuid,
+                   ni.name AS owner_name,
+                   COUNT(*) AS total_count,
+                   SUM(CASE WHEN st.tx_type='buy' THEN 1 ELSE 0 END) AS buy_count,
+                   SUM(CASE WHEN st.tx_type='sell' THEN 1 ELSE 0 END) AS sell_count
+            FROM shop_tx st
+            LEFT JOIN shops s ON st.shop_id = s.shop_id
+            LEFT JOIN name_index ni ON ni.uuid = s.owner_uuid
+            WHERE st.result='success'
+            GROUP BY st.shop_id
+            ORDER BY total_count DESC
+            LIMIT 10
+            """
+        ).fetchall()
+        shop_labels = [r["shop_id"] for r in shop_rank_rows]
+        shop_rank = {
+            "labels": shop_labels,
+            "datasets": [
+                {
+                    "label": "Buys",
+                    "data": [r["buy_count"] for r in shop_rank_rows],
+                    "backgroundColor": "#0d6efd",
+                },
+                {
+                    "label": "Sells",
+                    "data": [r["sell_count"] for r in shop_rank_rows],
+                    "backgroundColor": "#20c997",
+                },
+            ],
+        }
+        top_ids = [r["shop_id"] for r in shop_rank_rows]
+        volume_map: Dict[str, List[str]] = {shop_id: [] for shop_id in top_ids}
+        if top_ids:
+            placeholders = ",".join(["?"] * len(top_ids))
+            volume_rows = db.execute(
+                f"""
+                SELECT shop_id,
+                       currency,
+                       SUM(CASE WHEN tx_type='buy' THEN total_price ELSE 0 END) AS buy_volume,
+                       SUM(CASE WHEN tx_type='sell' THEN total_price ELSE 0 END) AS sell_volume
+                FROM shop_tx
+                WHERE result='success' AND shop_id IN ({placeholders})
+                GROUP BY shop_id, currency
+                """,
+                top_ids,
+            ).fetchall()
+            for vr in volume_rows:
+                buy_volume = vr["buy_volume"] or 0
+                sell_volume = vr["sell_volume"] or 0
+                total_volume = buy_volume + sell_volume
+                parts: List[str] = []
+                if buy_volume:
+                    parts.append(f"buy {format_amount_units(buy_volume)}")
+                if sell_volume:
+                    parts.append(f"sell {format_amount_units(sell_volume)}")
+                detail = f" ({', '.join(parts)})" if parts else ""
+                volume_map.setdefault(vr["shop_id"], []).append(
+                    f"{vr['currency']} {format_amount_units(total_volume)}{detail}"
+                )
+        shop_table = []
+        owner_labels = {
+            r["shop_id"]: (r["owner_name"] or r["owner_uuid"] or "—")
+            for r in shop_rank_rows
+        }
+        for r in shop_rank_rows:
+            volumes = volume_map.get(r["shop_id"], [])
+            shop_table.append(
+                {
+                    "shop_id": r["shop_id"],
+                    "owner": owner_labels.get(r["shop_id"], "—"),
+                    "total": r["total_count"],
+                    "buys": r["buy_count"],
+                    "sells": r["sell_count"],
+                    "volume_display": ", ".join(volumes) if volumes else "—",
+                }
+            )
+        top_daily_ids = top_ids[:5]
+        shop_daily = {"labels": [], "datasets": []}
+        if top_daily_ids:
+            placeholders = ",".join(["?"] * len(top_daily_ids))
+            daily_rows = db.execute(
+                f"""
+                SELECT shop_id,
+                       date(timestamp,'unixepoch') AS day,
+                       COUNT(*) AS cnt
+                FROM shop_tx
+                WHERE result='success' AND shop_id IN ({placeholders})
+                GROUP BY shop_id, day
+                ORDER BY day
+                """,
+                top_daily_ids,
+            ).fetchall()
+            day_labels = sorted({row["day"] for row in daily_rows})
+            day_idx = {day: i for i, day in enumerate(day_labels)}
+            series: Dict[str, List[int]] = {
+                shop_id: [0] * len(day_labels) for shop_id in top_daily_ids
+            }
+            for row in daily_rows:
+                series[row["shop_id"]][day_idx[row["day"]]] = row["cnt"]
+            shop_daily = {
+                "labels": day_labels,
+                "datasets": [
+                    {
+                        "label": shop_id,
+                        "data": series[shop_id],
+                    }
+                    for shop_id in top_daily_ids
+                ],
+            }
         heat = [[0] * 24 for _ in range(7)]
         heat_rows = db.execute(
             "SELECT strftime('%w',timestamp,'unixepoch') d, strftime('%H',timestamp,'unixepoch') h, COUNT(*) c FROM transactions GROUP BY d,h"
@@ -1724,6 +1836,9 @@ def analytics():
         supply_json=json.dumps(supply),
         tx_json=json.dumps(tx),
         top_json=json.dumps(top),
+        shop_rank_json=json.dumps(shop_rank),
+        shop_daily_json=json.dumps(shop_daily),
+        top_shops=shop_table,
         heat=heat,
         max_heat=max_heat,
     )
