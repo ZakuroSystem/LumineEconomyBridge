@@ -15,6 +15,7 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.TileState;
+import org.bukkit.block.Hopper;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -30,10 +31,9 @@ import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.inventory.ItemFlag;
-import org.bukkit.enchantments.Enchantment;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.ChatColor;
@@ -44,6 +44,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.UUID;
 import java.math.BigDecimal;
 import java.text.DecimalFormat;
@@ -55,10 +56,16 @@ public class ShopListener implements Listener {
     private final NamespacedKey keyShop;
     private final NamespacedKey keyId;
     private final NamespacedKey keyOwner;
+    private final NamespacedKey keyHopper;
+    private final NamespacedKey keyHopperSlot;
+    private final NamespacedKey keyHopperItem;
     private static final long CACHE_MS = 3000;
     private static final DecimalFormat AMT_FMT = new DecimalFormat("0.###");
     private final Map<String, CacheEntry> itemCache = new ConcurrentHashMap<>();
     private final Map<UUID, PendingSale> pendingSales = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Long> hopperCooldowns = new ConcurrentHashMap<>();
+    private static final long HOPPER_MIN_INTERVAL_MS = 600L;
+    private static final long HOPPER_EMPTY_INTERVAL_MS = 3000L;
 
     private static class PendingSale {
         final String shopId;
@@ -77,11 +84,30 @@ public class ShopListener implements Listener {
         }
     }
 
+    private static class HopperData {
+        final String shopId;
+        final String ownerUuid;
+        final int slot;
+        final String itemKey;
+        final Location location;
+
+        HopperData(String shopId, String ownerUuid, int slot, String itemKey, Location location) {
+            this.shopId = shopId;
+            this.ownerUuid = ownerUuid;
+            this.slot = slot;
+            this.itemKey = itemKey;
+            this.location = location;
+        }
+    }
+
     public ShopListener(LumineEconomyBridge plugin) {
         this.plugin = plugin;
         this.keyShop = new NamespacedKey(plugin, "le_shop");
         this.keyId = new NamespacedKey(plugin, "shop_id");
         this.keyOwner = new NamespacedKey(plugin, "owner_uuid");
+        this.keyHopper = new NamespacedKey(plugin, "le_shop_hopper");
+        this.keyHopperSlot = new NamespacedKey(plugin, "le_shop_hopper_slot");
+        this.keyHopperItem = new NamespacedKey(plugin, "le_shop_hopper_item");
     }
 
     private static class CacheEntry {
@@ -120,7 +146,7 @@ public class ShopListener implements Listener {
         ItemMeta meta = e.getItemInHand().getItemMeta();
         if (meta == null) return;
         PersistentDataContainer c = meta.getPersistentDataContainer();
-        if (!c.has(keyShop, PersistentDataType.BYTE)) return;
+        if (!c.has(keyShop, PersistentDataType.BYTE) && !c.has(keyHopper, PersistentDataType.BYTE)) return;
         String expected = c.get(keyOwner, PersistentDataType.STRING);
         String placer = e.getPlayer().getUniqueId().toString();
         if (expected == null || !placer.equals(expected)) {
@@ -129,20 +155,40 @@ public class ShopListener implements Listener {
             return;
         }
         String shopId = c.get(keyId, PersistentDataType.STRING);
-        String owner = expected;
         BlockState state = e.getBlockPlaced().getState();
         if (state instanceof TileState tile) {
             PersistentDataContainer tc = tile.getPersistentDataContainer();
-            tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
+            if (c.has(keyShop, PersistentDataType.BYTE)) {
+                tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
+            }
+            if (c.has(keyHopper, PersistentDataType.BYTE)) {
+                tc.set(keyHopper, PersistentDataType.BYTE, (byte)1);
+                Integer slot = c.get(keyHopperSlot, PersistentDataType.INTEGER);
+                if (slot != null) {
+                    tc.set(keyHopperSlot, PersistentDataType.INTEGER, slot);
+                } else {
+                    String legacy = c.get(keyHopperSlot, PersistentDataType.STRING);
+                    if (legacy != null && !legacy.isEmpty()) {
+                        tc.set(keyHopperSlot, PersistentDataType.STRING, legacy);
+                    }
+                }
+                String itemKey = c.get(keyHopperItem, PersistentDataType.STRING);
+                if (itemKey != null && !itemKey.isEmpty()) {
+                    tc.set(keyHopperItem, PersistentDataType.STRING, itemKey);
+                }
+            }
             if (shopId != null) tc.set(keyId, PersistentDataType.STRING, shopId);
-            tc.set(keyOwner, PersistentDataType.STRING, owner);
+            tc.set(keyOwner, PersistentDataType.STRING, expected);
             tile.update(true);
+        }
+        if (!c.has(keyShop, PersistentDataType.BYTE)) {
+            return;
         }
         OkHttpClient http = plugin.getHttpClient();
         if (http == null) return;
         Map<String, Object> payload = new HashMap<>();
         payload.put("shop_id", shopId);
-        payload.put("owner_uuid", owner);
+        payload.put("owner_uuid", expected);
         payload.put("placer_uuid", placer);
         Location loc = e.getBlockPlaced().getLocation();
         payload.put("world", loc.getWorld().getName());
@@ -641,7 +687,8 @@ public class ShopListener implements Listener {
                 try (response) {
                     String body = response.body() != null ? response.body().string() : "{}";
                     JsonObject res = JsonParser.parseString(body).getAsJsonObject();
-                    if ("success".equals(res.get("status").getAsString()) && res.has("grant")) {
+                    String status = res.has("status") ? res.get("status").getAsString() : "";
+                    if ("success".equals(status) && res.has("grant")) {
                         res.getAsJsonArray("grant").forEach(g -> {
                             JsonObject gg = g.getAsJsonObject();
                             String token = gg.get("grant_token").getAsString();
@@ -732,9 +779,53 @@ public class ShopListener implements Listener {
 
     @EventHandler
     public void onMoveItem(InventoryMoveItemEvent e) {
-        if (isShopInventory(e.getDestination()) || isShopInventory(e.getSource())) {
-            e.setCancelled(true);
+        Inventory source = e.getSource();
+        Inventory destination = e.getDestination();
+        boolean sourceShop = isShopInventory(source);
+        boolean destShop = isShopInventory(destination);
+        if (!sourceShop && !destShop) {
+            return;
         }
+        if (destShop) {
+            e.setCancelled(true);
+            return;
+        }
+        if (!sourceShop) {
+            e.setCancelled(true);
+            return;
+        }
+        Inventory initiator = e.getInitiator();
+        HopperData hopper = resolveHopper(initiator);
+        if (hopper == null) {
+            e.setCancelled(true);
+            return;
+        }
+        InventoryHolder holder = source.getHolder();
+        if (!(holder instanceof TileState tile)) {
+            e.setCancelled(true);
+            return;
+        }
+        PersistentDataContainer c = tile.getPersistentDataContainer();
+        String shopId = c.get(keyId, PersistentDataType.STRING);
+        String ownerUuid = c.get(keyOwner, PersistentDataType.STRING);
+        if (shopId == null || ownerUuid == null || !shopId.equals(hopper.shopId) || !ownerUuid.equals(hopper.ownerUuid)) {
+            e.setCancelled(true);
+            return;
+        }
+        if (hopper.location == null || hopper.location.getWorld() == null) {
+            e.setCancelled(true);
+            return;
+        }
+        String hopperKey = hopperKey(hopper.location);
+        long now = System.currentTimeMillis();
+        long next = hopperCooldowns.getOrDefault(hopperKey, 0L);
+        if (next > now) {
+            e.setCancelled(true);
+            return;
+        }
+        hopperCooldowns.put(hopperKey, now + HOPPER_MIN_INTERVAL_MS);
+        e.setCancelled(true);
+        pullFromShop(hopper, hopperKey);
     }
 
     private boolean isShopInventory(Inventory inv) {
@@ -745,6 +836,124 @@ public class ShopListener implements Listener {
             return c.has(keyShop, PersistentDataType.BYTE);
         }
         return false;
+    }
+
+    private HopperData resolveHopper(Inventory inv) {
+        if (inv == null) return null;
+        InventoryHolder holder = inv.getHolder();
+        if (!(holder instanceof Hopper hopper)) return null;
+        PersistentDataContainer c = hopper.getPersistentDataContainer();
+        if (!c.has(keyHopper, PersistentDataType.BYTE)) return null;
+        String shopId = c.get(keyId, PersistentDataType.STRING);
+        String owner = c.get(keyOwner, PersistentDataType.STRING);
+        if (shopId == null || owner == null) return null;
+        Integer slot = c.get(keyHopperSlot, PersistentDataType.INTEGER);
+        if (slot == null) {
+            String slotString = c.get(keyHopperSlot, PersistentDataType.STRING);
+            if (slotString != null && !slotString.isEmpty()) {
+                String[] parts = slotString.split(",");
+                for (String part : parts) {
+                    String trimmed = part.trim();
+                    if (trimmed.isEmpty()) continue;
+                    try {
+                        slot = Integer.parseInt(trimmed);
+                        break;
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            }
+        }
+        String itemKey = c.get(keyHopperItem, PersistentDataType.STRING);
+        if (itemKey != null && itemKey.contains(",")) {
+            String[] parts = itemKey.split(",");
+            itemKey = parts.length > 0 ? parts[0].trim() : itemKey;
+        }
+        if (slot == null || itemKey == null || itemKey.isEmpty()) return null;
+        Location loc = hopper.getLocation();
+        return new HopperData(shopId, owner, slot, itemKey, loc != null ? loc.clone() : null);
+    }
+
+    private String hopperKey(Location loc) {
+        if (loc == null || loc.getWorld() == null) return "";
+        return loc.getWorld().getName() + ':' + loc.getBlockX() + ':' + loc.getBlockY() + ':' + loc.getBlockZ();
+    }
+
+    private void pullFromShop(HopperData hopper, String key) {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null || !plugin.isActive()) {
+            hopperCooldowns.put(key, System.currentTimeMillis() + HOPPER_EMPTY_INTERVAL_MS);
+            return;
+        }
+        if (hopper.itemKey == null || hopper.itemKey.isEmpty()) {
+            hopperCooldowns.put(key, System.currentTimeMillis() + HOPPER_EMPTY_INTERVAL_MS);
+            return;
+        }
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("owner_uuid", hopper.ownerUuid);
+        payload.put("shop_id", hopper.shopId);
+        payload.put("item_key", hopper.itemKey);
+        payload.put("qty", 1);
+        payload.put("timestamp", System.currentTimeMillis() / 1000);
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/shop/take_stock")
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        Location hopperLoc = hopper.location != null ? hopper.location.clone() : null;
+        http.newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException ex) {
+                plugin.getLogger().warning("Hopper withdraw failed: " + ex.getMessage());
+                hopperCooldowns.put(key, System.currentTimeMillis() + HOPPER_EMPTY_INTERVAL_MS);
+            }
+
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    String body = response.body() != null ? response.body().string() : "{}";
+                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                    String status = res.has("status") ? res.get("status").getAsString() : "";
+                    if ("success".equals(status) && res.has("grant")) {
+                        List<ItemStack> items = new ArrayList<>();
+                        res.getAsJsonArray("grant").forEach(el -> {
+                            JsonObject gg = el.getAsJsonObject();
+                            String token = gg.get("grant_token").getAsString();
+                            if (plugin.consumeGrantToken(token)) {
+                                ItemStack item = itemFromBase64(gg.get("nbt_blob").getAsString());
+                                item.setAmount(gg.get("qty").getAsInt());
+                                items.add(item);
+                            }
+                        });
+                        hopperCooldowns.put(key, System.currentTimeMillis() + HOPPER_MIN_INTERVAL_MS);
+                        if (!items.isEmpty() && hopperLoc != null) {
+                            Bukkit.getScheduler().runTask(plugin, () -> deliverToHopper(hopperLoc, items));
+                        }
+                    } else {
+                        String reason = res.has("reason") ? res.get("reason").getAsString() : "";
+                        long delay = "insufficient_stock".equals(reason) ? HOPPER_EMPTY_INTERVAL_MS : 1500L;
+                        hopperCooldowns.put(key, System.currentTimeMillis() + delay);
+                    }
+                } catch (Exception ex) {
+                    plugin.getLogger().warning("Failed to process hopper response: " + ex.getMessage());
+                    hopperCooldowns.put(key, System.currentTimeMillis() + HOPPER_EMPTY_INTERVAL_MS);
+                }
+            }
+        });
+    }
+
+    private void deliverToHopper(Location loc, List<ItemStack> items) {
+        Block block = loc.getBlock();
+        if (!(block.getState() instanceof Hopper hopper)) {
+            for (ItemStack stack : items) {
+                loc.getWorld().dropItemNaturally(loc.clone().add(0.5, 0.5, 0.5), stack);
+            }
+            return;
+        }
+        Inventory inv = hopper.getInventory();
+        for (ItemStack stack : items) {
+            Map<Integer, ItemStack> leftover = inv.addItem(stack);
+            if (!leftover.isEmpty()) {
+                leftover.values().forEach(rem -> loc.getWorld().dropItemNaturally(loc.clone().add(0.5, 0.5, 0.5), rem));
+            }
+        }
     }
 
     @EventHandler

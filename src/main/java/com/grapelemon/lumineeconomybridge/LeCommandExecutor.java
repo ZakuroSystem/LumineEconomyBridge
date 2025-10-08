@@ -6,6 +6,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonArray;
 import okhttp3.*;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -32,7 +33,11 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.math.BigDecimal;
 import java.text.DecimalFormat;
@@ -86,6 +91,10 @@ public class LeCommandExecutor implements CommandExecutor {
                 case "reload" -> {
                     plugin.reloadBridge();
                     p.sendMessage(Lang.get("bridge-reloaded"));
+                    return true;
+                }
+                case "help" -> {
+                    sendHelp(p);
                     return true;
                 }
                 case "admin" -> {
@@ -201,30 +210,9 @@ public class LeCommandExecutor implements CommandExecutor {
                         return true;
                     }
                     if (args.length == 1) {
-                        String shopId = p.getName().toLowerCase() + "_" + Long.toHexString(System.currentTimeMillis());
-                        ItemStack barrel = new ItemStack(Material.BARREL);
-                        ItemMeta meta = barrel.getItemMeta();
-                        PersistentDataContainer c = meta.getPersistentDataContainer();
-                        NamespacedKey keyShop = new NamespacedKey(plugin, "le_shop");
-                        NamespacedKey keyId = new NamespacedKey(plugin, "shop_id");
-                        NamespacedKey keyOwner = new NamespacedKey(plugin, "owner_uuid");
-                        c.set(keyShop, PersistentDataType.BYTE, (byte)1);
-                        c.set(keyId, PersistentDataType.STRING, shopId);
-                        c.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
-                        if (meta instanceof BlockStateMeta bsm) {
-                            BlockState state = bsm.getBlockState();
-                            if (state instanceof TileState tile) {
-                                PersistentDataContainer tc = tile.getPersistentDataContainer();
-                                tc.set(keyShop, PersistentDataType.BYTE, (byte)1);
-                                tc.set(keyId, PersistentDataType.STRING, shopId);
-                                tc.set(keyOwner, PersistentDataType.STRING, p.getUniqueId().toString());
-                                tile.update(true);
-                                bsm.setBlockState(tile);
-                            }
-                        }
-                        barrel.setItemMeta(meta);
-                        p.getInventory().addItem(barrel);
-                        args = new String[]{"shop", "quick", shopId};
+                        p.sendMessage(ChatColor.YELLOW + "Usage: /le shop create <id>" + ChatColor.RESET);
+                        p.sendMessage(ChatColor.GRAY + "Use /le shop help for more commands" + ChatColor.RESET);
+                        return true;
                     } else if (args.length >= 2 && args[1].equalsIgnoreCase("help")) {
                         p.sendMessage(ChatColor.GREEN + "/le shop create " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Create a shop barrel / ショップ樽を作成");
                         p.sendMessage(ChatColor.GREEN + "/le shop add " + ChatColor.YELLOW + "<id> <qty> <price> <name> " + ChatColor.GRAY + "- Deposit item / 在庫追加");
@@ -235,6 +223,8 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop reopen " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Reopen suspended shop / 再開");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner add " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Add co-owner / 共同オーナー追加");
                         p.sendMessage(ChatColor.GREEN + "/le shop partner remove " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Remove co-owner / 共同オーナー削除");
+                        p.sendMessage(ChatColor.GREEN + "/le shop account " + ChatColor.YELLOW + "<id> <company> " + ChatColor.GRAY + "- Set payout account / 取引口座設定");
+                        p.sendMessage(ChatColor.GREEN + "/le shop hopper " + ChatColor.YELLOW + "<id> <slot> " + ChatColor.GRAY + "- Issue hopper / ホッパー付与");
                         p.sendMessage(ChatColor.GREEN + "/le shop publish " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- List shop / 掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
@@ -272,6 +262,57 @@ public class LeCommandExecutor implements CommandExecutor {
                         barrel.setItemMeta(meta);
                         p.getInventory().addItem(barrel);
                         args = new String[]{"shop", "quick", shopId};
+                    } else if (args.length >= 4 && args[1].equalsIgnoreCase("hopper")) {
+                        if (args.length != 4) {
+                            p.sendMessage(ChatColor.YELLOW + "Usage: /le shop hopper <id> <slot>" + ChatColor.RESET);
+                            return true;
+                        }
+                        String shopId = args[2];
+                        int slotIndex;
+                        try {
+                            slotIndex = Integer.parseInt(args[3]);
+                        } catch (NumberFormatException ex) {
+                            p.sendMessage(ChatColor.RED + "Invalid slot / スロット番号が不正です" + ChatColor.RESET);
+                            return true;
+                        }
+                        JsonObject shopData = fetchShop(shopId);
+                        if (shopData == null) {
+                            p.sendMessage(ChatColor.RED + "Unable to fetch shop / ショップ情報を取得できません" + ChatColor.RESET);
+                            return true;
+                        }
+                        if (!isDirectOwner(p, shopData)) {
+                            p.sendMessage(ChatColor.RED + "Not your shop / 自分のショップではありません" + ChatColor.RESET);
+                            return true;
+                        }
+                        if (!shopData.has("items")) {
+                            p.sendMessage(ChatColor.RED + "No items available / アイテムがありません" + ChatColor.RESET);
+                            return true;
+                        }
+                        JsonArray items = shopData.getAsJsonArray("items");
+                        if (slotIndex < 0 || slotIndex >= items.size()) {
+                            p.sendMessage(ChatColor.RED + "Slot out of range / スロット番号が不正です" + ChatColor.RESET);
+                            return true;
+                        }
+                        JsonObject item = items.get(slotIndex).getAsJsonObject();
+                        String itemKey = item.get("item_key").getAsString();
+                        String ownerUuid = p.getUniqueId().toString();
+                        NamespacedKey hopperKey = new NamespacedKey(plugin, "le_shop_hopper");
+                        NamespacedKey keyId = new NamespacedKey(plugin, "shop_id");
+                        NamespacedKey keyOwner = new NamespacedKey(plugin, "owner_uuid");
+                        NamespacedKey keySlot = new NamespacedKey(plugin, "le_shop_hopper_slot");
+                        NamespacedKey keyItem = new NamespacedKey(plugin, "le_shop_hopper_item");
+                        ItemStack hopper = new ItemStack(Material.HOPPER);
+                        ItemMeta meta = hopper.getItemMeta();
+                        PersistentDataContainer container = meta.getPersistentDataContainer();
+                        container.set(hopperKey, PersistentDataType.BYTE, (byte) 1);
+                        container.set(keyId, PersistentDataType.STRING, shopId);
+                        container.set(keyOwner, PersistentDataType.STRING, ownerUuid);
+                        container.set(keySlot, PersistentDataType.INTEGER, slotIndex);
+                        container.set(keyItem, PersistentDataType.STRING, itemKey);
+                        meta.setDisplayName(ChatColor.GOLD + "Shop Hopper" + ChatColor.RESET);
+                        hopper.setItemMeta(meta);
+                        p.getInventory().addItem(hopper);
+                        p.sendMessage(ChatColor.GREEN + "Issued hopper for slot " + ChatColor.YELLOW + slotIndex + ChatColor.GREEN + " / ホッパーを付与しました" + ChatColor.RESET);
                     } else if (args.length >= 6 && args[1].equalsIgnoreCase("add")) {
                         String shopId = args[2];
                         if (!hasShopPermission(p, shopId)) {
@@ -405,6 +446,56 @@ public class LeCommandExecutor implements CommandExecutor {
                                             p.sendMessage(ChatColor.GREEN + "Done / 完了しました" + ChatColor.RESET);
                                         } else {
                                             p.sendMessage(ChatColor.RED + "Failed / 失敗しました" + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } else if (args.length >= 4 && args[1].equalsIgnoreCase("account")) {
+                        String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                            return true;
+                        }
+                        String accountId = String.join(" ", java.util.Arrays.copyOfRange(args, 3, args.length)).trim();
+                        if (accountId.isEmpty()) {
+                            p.sendMessage(ChatColor.YELLOW + "Usage: /le shop account <id> <company>" + ChatColor.RESET);
+                            return true;
+                        }
+                        Map<String, Object> payload = new HashMap<>();
+                        payload.put("owner_uuid", p.getUniqueId().toString());
+                        payload.put("shop_id", shopId);
+                        payload.put("account_id", accountId);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/account")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Account update failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject res = JsonParser.parseString(body).getAsJsonObject();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        String status = res.has("status") ? res.get("status").getAsString() : "error";
+                                        if ("success".equalsIgnoreCase(status)) {
+                                            p.sendMessage(ChatColor.GREEN + "Shop account updated / 取引口座を更新しました" + ChatColor.RESET);
+                                        } else {
+                                            String reason = res.has("reason") && !res.get("reason").isJsonNull()
+                                                    ? res.get("reason").getAsString() : "unknown";
+                                            String display;
+                                            switch (reason) {
+                                                case "not_owner" -> display = "No permission / 権限がありません";
+                                                case "invalid_account" -> display = "Account not found / 口座が存在しません";
+                                                case "no_access" -> display = "Account access not delegated / 利用権がありません";
+                                                default -> display = "Failed / 失敗しました";
+                                            }
+                                            p.sendMessage(ChatColor.RED + display + ChatColor.RESET);
                                         }
                                     });
                                 }
@@ -726,7 +817,7 @@ public class LeCommandExecutor implements CommandExecutor {
         }
 
         if (args.length == 0) {
-            p.sendMessage(Lang.get("usage"));
+            sendHelp(p);
             return true;
         }
 
@@ -835,6 +926,87 @@ public class LeCommandExecutor implements CommandExecutor {
         return true;
     }
 
+    private void sendHelp(Player p) {
+        String[][] playerCommands = new String[][] {
+                {"help", "/le help", "", "Show this help / ヘルプを表示"},
+                {"wallet", "/le wallet", "", "View your balances / 自分の残高を表示"},
+                {"balance", "/le balance", "[currency] [player]", "Check balances / 残高を確認"},
+                {"pay", "/le pay", "<player> <amount> [currency]", "Pay another player / プレイヤーへ送金"},
+                {"deposit", "/le deposit", "<src> <dst> <currency> <amount>", "Deposit funds / 入金処理"},
+                {"withdraw", "/le withdraw", "<src> <dst> <currency> <amount>", "Withdraw funds / 出金処理"},
+                {"transfer", "/le transfer", "<src> <dst> <currency> <amount>", "Transfer between accounts / 口座間振替"},
+                {"search", "/le search", "<item> [currency] [min] [max]", "Search public shops / ショップを検索"},
+                {"shop", "/le shop help", "", "Shop commands / ショップ操作一覧"},
+                {"lang", "/le lang", "<locale>", "Switch plugin language / 言語を切り替え"},
+                {"weblink", "/le weblink", "", "Generate web link token / Web連携トークン発行"}
+        };
+
+        String[][] adminCommands = new String[][] {
+                {"rewrite", "/le rewrite", "", "Rewrite all scoreboards / 全スコアボードを再同期"},
+                {"start", "/le start", "", "Start the bridge / ブリッジを開始"},
+                {"stop", "/le stop", "", "Stop the bridge / ブリッジを停止"},
+                {"reload", "/le reload", "", "Reload configuration / 設定を再読み込み"},
+                {"admin", "/le admin add", "<player>", "Grant web admin access / ダッシュボード管理者を追加"},
+                {"cash", "/le cash issue", "<amount> [currency]", "Issue paper cash / 紙幣を発行"},
+                {"money", "/le money", "<give|take|pay|top> ...", "Manage balances / 残高を管理"},
+                {"currency", "/le currency", "<create|supply|default|manager|tax|treasury> ...", "Manage currencies / 通貨を管理"},
+                {"setbalance", "/le setbalance", "<player> <currency> <amount>", "Set a player's balance / 残高を直接設定"},
+                {"history", "/le history", "<player> [limit]", "Review transactions / 取引履歴を確認"},
+                {"account", "/le account", "<create|connect> ...", "Manage system accounts / システム口座を管理"},
+                {"backup", "/le <backup|restore>", "[file]", "Backup or restore the database / データベースをバックアップ・復元"},
+                {"undo", "/le <undo|redo>", "", "Undo or redo recent operations / 操作を取り消し・やり直し"}
+        };
+
+        p.sendMessage(ChatColor.GOLD + "" + ChatColor.BOLD + "LumineEconomy Bridge Help" + ChatColor.RESET);
+        p.sendMessage(ChatColor.GRAY + "Filtered by your permissions / 権限に応じて表示しています" + ChatColor.RESET);
+
+        boolean printedPlayerHeader = false;
+        for (String[] entry : playerCommands) {
+            if (canUseCommand(p, entry[0])) {
+                if (!printedPlayerHeader) {
+                    p.sendMessage(ChatColor.GOLD + "" + ChatColor.BOLD + "Player Commands / プレイヤー向け" + ChatColor.RESET);
+                    printedPlayerHeader = true;
+                }
+                sendHelpLine(p, entry[1], entry[2], entry[3]);
+            }
+        }
+
+        boolean printedAdminHeader = false;
+        for (String[] entry : adminCommands) {
+            if (canUseCommand(p, entry[0])) {
+                if (!printedAdminHeader) {
+                    p.sendMessage("");
+                    p.sendMessage(ChatColor.GOLD + "" + ChatColor.BOLD + "Admin Commands / 管理者向け" + ChatColor.RESET);
+                    printedAdminHeader = true;
+                }
+                sendHelpLine(p, entry[1], entry[2], entry[3]);
+            }
+        }
+    }
+
+    private void sendHelpLine(Player p, String command, String args, String description) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(ChatColor.GREEN).append(command);
+        if (!args.isEmpty()) {
+            sb.append(" ").append(ChatColor.YELLOW).append(args);
+        }
+        sb.append(" ").append(ChatColor.GRAY).append("- ").append(description).append(ChatColor.RESET);
+        p.sendMessage(sb.toString());
+    }
+
+    private boolean canUseCommand(Player p, String commandKey) {
+        if (commandKey == null || commandKey.isEmpty()) {
+            return true;
+        }
+        if (!plugin.requiresAdmin(commandKey)) {
+            return true;
+        }
+        if (p.hasPermission("lumineeconomy.admin")) {
+            return true;
+        }
+        return commandKey.equalsIgnoreCase("money") || commandKey.equalsIgnoreCase("currency");
+    }
+
     private boolean canCreateShop(String ownerUuid, String shopId) {
         OkHttpClient http = plugin.getHttpClient();
         if (http == null) return false;
@@ -843,7 +1015,10 @@ public class LeCommandExecutor implements CommandExecutor {
                 .build();
         Request req = new Request.Builder().url(url).build();
         try (Response res = http.newCall(req).execute()) {
-            if (!res.isSuccessful()) return false;
+            if (!res.isSuccessful()) {
+                plugin.getLogger().warning("Shop ID check failed with status " + res.code());
+                return true;
+            }
             String body = res.body() != null ? res.body().string() : "{}";
             JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
             if (obj.has("owners")) {
@@ -863,12 +1038,13 @@ public class LeCommandExecutor implements CommandExecutor {
             }
         } catch (IOException ex) {
             plugin.getLogger().warning("Shop ID check failed: " + ex.getMessage());
+            return true;
         }
-        return false;
+        return true;
     }
 
     private boolean hasShopPermission(Player p, String shopId) {
-        if (p.isOp()) return true;
+        if (p.isOp() || p.hasPermission("lumineeconomy.admin")) return true;
         OkHttpClient http = plugin.getHttpClient();
         if (http == null) return false;
         HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
@@ -892,6 +1068,39 @@ public class LeCommandExecutor implements CommandExecutor {
             }
         } catch (IOException ex) {
             plugin.getLogger().warning("Shop permission check failed: " + ex.getMessage());
+        }
+        return false;
+    }
+
+    private JsonObject fetchShop(String shopId) {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) return null;
+        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items").newBuilder()
+                .addQueryParameter("shop_id", shopId)
+                .build();
+        Request req = new Request.Builder().url(url).build();
+        try (Response res = http.newCall(req).execute()) {
+            if (!res.isSuccessful()) {
+                plugin.getLogger().warning("Fetch shop failed with status " + res.code());
+                return null;
+            }
+            String body = res.body() != null ? res.body().string() : "{}";
+            return JsonParser.parseString(body).getAsJsonObject();
+        } catch (IOException ex) {
+            plugin.getLogger().warning("Fetch shop failed: " + ex.getMessage());
+            return null;
+        }
+    }
+
+    private boolean isDirectOwner(Player p, JsonObject shopData) {
+        if (shopData == null || !shopData.has("owners")) {
+            return false;
+        }
+        String uuid = p.getUniqueId().toString();
+        for (JsonElement el : shopData.getAsJsonArray("owners")) {
+            if (uuid.equalsIgnoreCase(el.getAsString())) {
+                return true;
+            }
         }
         return false;
     }
