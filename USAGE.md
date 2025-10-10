@@ -38,6 +38,15 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le shop autopricedisable <id> [name] [currency]` – Disable an autoprice configuration when you no longer want the backend to adjust prices.
 - `/le admin add <player>` – Grant a player access to the admin dashboard.
 
+### Quests
+Recommended quests are handed out automatically and can be reviewed from the in-game guide book's quest menu. Each quest corresponds to regular shop activity rather than a dedicated `/le quest` command:
+
+- **ショップを作成 / Open a shop** – Complete by running `/le shop create <id>` to place a new barrel shop.【F:src/main/resources/lang.yml†L47-L56】
+- **ショップで購入 / Buy from a shop** – Finish by purchasing any listing from a public shop through the standard trading UI.【F:src/main/resources/lang.yml†L57-L59】
+- **依頼を達成 / Fulfill a request** – Clear this quest by supplying stock to a shop request (sell items into the shop so it restocks).【F:src/main/resources/lang.yml†L60-L62】
+
+The backend tracks which quests you've cleared and only suggests the remaining objectives when the plugin queries `/api/quests/recommended` for your UUID.【F:backend/main.py†L936-L939】【F:backend/main.py†L1586-L1599】
+
 ## Notes
 - All command validation and economy processing happen on the Python backend.
 - Unknown or invalid commands return an error followed by a suggestion to use `/le help`.
