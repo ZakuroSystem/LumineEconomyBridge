@@ -10,7 +10,7 @@ LumineEconomyBridge は Minecraft のスコアボード経済を Python バッ�
 
 ## 2. プレイヤーの操作
 - `/le wallet` : 自分の口座残高を表示。口座が無い場合は自動作成されます。
-- `/le pay <player> <amount> [currency]` : 他プレイヤーへ送金。
+- `/le pay <player> <amount> [currency] [reference]` : 他プレイヤーへ送金。`[reference]` は外部決済の識別子として任意に指定できます。
 - `/le shop` : ショップ管理GUIを開き、自分のショップ一覧や在庫/価格編集メニューに移動できます。従来どおりショップ樽の受け取りやシフトクリックでの売却も可能です。
 - `/le lang <code>` : 経済システムの表示言語を切り替えます (例: `/le lang ja`)。
 - `/le search <item> [currency] [min] [max]` : 公開ショップを検索。

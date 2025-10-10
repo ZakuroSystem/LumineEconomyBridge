@@ -261,7 +261,8 @@ def init_db() -> None:
                 to_account TEXT,
                 currency TEXT NOT NULL,
                 amount INTEGER NOT NULL,
-                reason TEXT NOT NULL
+                reason TEXT NOT NULL,
+                reference TEXT
             );
             CREATE TABLE IF NOT EXISTS currencies (
                 name TEXT PRIMARY KEY,
@@ -356,6 +357,10 @@ def init_db() -> None:
             db.execute(
                 "ALTER TABLE currencies ADD COLUMN transfer_tax_rate INTEGER NOT NULL DEFAULT 0"
             )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("ALTER TABLE transactions ADD COLUMN reference TEXT")
         except sqlite3.OperationalError:
             pass
         db.execute(
@@ -704,7 +709,7 @@ def transactions():
         sql = f"""
             SELECT t.id, t.timestamp, t.from_account, t.to_account,
                    fn.name AS from_name, tn.name AS to_name,
-                   t.currency, t.amount, t.reason
+                   t.currency, t.amount, t.reason, t.reference
             FROM transactions t
             LEFT JOIN name_index fn ON fn.uuid = t.from_account
             LEFT JOIN name_index tn ON tn.uuid = t.to_account
@@ -899,8 +904,8 @@ def adjust():
             from_acc = None if delta >= 0 else uuid
             to_acc = uuid if delta >= 0 else None
             cur.execute(
-                "INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason) VALUES (?,?,?,?,?,?)",
-                (ts, from_acc, to_acc, currency, abs(delta), reason),
+                "INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason, reference) VALUES (?,?,?,?,?,?,?)",
+                (ts, from_acc, to_acc, currency, abs(delta), reason, None),
             )
             db.commit()
         flash("Balance adjusted")
@@ -1132,7 +1137,7 @@ def currency_manage():
                 )
                 ts = int(time.time())
                 db.execute(
-                    "INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason) VALUES (?,?,?,?,?,?)",
+                    "INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason, reference) VALUES (?,?,?,?,?,?,?)",
                     (
                         ts,
                         None if delta > 0 else target_uuid,
@@ -1140,6 +1145,7 @@ def currency_manage():
                         cname,
                         abs(delta),
                         "mint" if delta > 0 else "burn",
+                        None,
                     ),
                 )
                 db.commit()

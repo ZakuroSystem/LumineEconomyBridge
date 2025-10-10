@@ -14,7 +14,7 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le money give <player> <currency> <amount>` – Mint funds for a player.
 - `/le money take <player> <currency> <amount>` – Remove funds from a player.
 - `/le money pay [src] <dst> [currency] <amount>` – Pay from one player to another. Omitting `src` uses the executor; omitting `currency` uses the default.
-- `/le pay <player> <amount> [currency]` – Pay another player using your own funds and optional currency.
+- `/le pay <player> <amount> [currency] [reference]` – Pay another player using your own funds and optional currency. Use `[reference]` to attach an external payment identifier when relaying commands via `/le api`.
 - `/le money top [currency] [page]` – List top balances, 10 players per page.
 - `/le deposit <src> <dst> <currency> <amount>` – Move funds from src to dst (labelled deposit).
 - `/le withdraw <src> <dst> <currency> <amount>` – Move funds from src to dst (labelled withdraw).

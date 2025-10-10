@@ -199,7 +199,8 @@ with conn:
             to_account TEXT,
             currency TEXT NOT NULL,
             amount INTEGER NOT NULL,
-            reason TEXT NOT NULL
+            reason TEXT NOT NULL,
+            reference TEXT
         )
         """
     )
@@ -280,6 +281,10 @@ with conn:
         conn.execute(
             "ALTER TABLE currencies ADD COLUMN transfer_tax_rate INTEGER NOT NULL DEFAULT 0"
         )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE transactions ADD COLUMN reference TEXT")
     except sqlite3.OperationalError:
         pass
     conn.execute(
@@ -1849,13 +1854,14 @@ def record_transaction(
     currency: str,
     amount: int,
     reason: str,
+    reference: Optional[str] = None,
 ) -> None:
     cur.execute(
         """
-        INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason)
-        VALUES (?,?,?,?,?,?)
+        INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason, reference)
+        VALUES (?,?,?,?,?,?,?)
         """,
-        (timestamp, from_account, to_account, currency, amount, reason),
+        (timestamp, from_account, to_account, currency, amount, reason, reference),
     )
 
 
@@ -2364,6 +2370,7 @@ async def message(payload: MessagePayload):
                         else:
                             messages.append({"target": "chat", "text": t("money.top_empty", lang=exec_lang)})
                 elif sub == "pay" and len(cmd) >= 4:
+                    reference_token: Optional[str] = None
                     if len(cmd) >= 6:
                         src_name = cmd[2].lower()
                         dst_name = cmd[3].lower()
@@ -2382,6 +2389,10 @@ async def message(payload: MessagePayload):
                         src_name = payload.executor.lower()
                         dst_name = cmd[2].lower()
                         currency, amt_idx, _ = extract_currency(3)
+                    if len(cmd) > amt_idx + 1:
+                        token = cmd[amt_idx + 1].strip()
+                        if token:
+                            reference_token = token[:64]
                     src_uuid = get_uuid(src_name)
                     dst_uuid = get_uuid(dst_name)
                     if (
@@ -2443,6 +2454,7 @@ async def message(payload: MessagePayload):
                                                     currency,
                                                     tax_amt,
                                                     "tax",
+                                                    reference=reference_token,
                                                 )
                                                 scoreboards[treasury] = get_scoreboard(
                                                     cur, treasury
@@ -2497,6 +2509,7 @@ async def message(payload: MessagePayload):
                                                 currency,
                                                 amt,
                                                 "pay",
+                                                reference=reference_token,
                                             )
                                             actions.append(
                                                 {
@@ -2517,7 +2530,19 @@ async def message(payload: MessagePayload):
                     error_text = t("error.invalid_args", lang=exec_lang)
             elif action == "pay" and len(cmd) >= 3 and parse_amount_token(cmd[2], None) is not None:
                 dst_name = cmd[1].lower()
-                currency = resolve_currency(cur, cmd[3]) if len(cmd) >= 4 else get_default_currency(cur)
+                reference_token: Optional[str] = None
+                if len(cmd) >= 4 and is_currency(cur, cmd[3]):
+                    currency = resolve_currency(cur, cmd[3])
+                    if len(cmd) >= 5:
+                        token = cmd[4].strip()
+                        if token:
+                            reference_token = token[:64]
+                else:
+                    currency = get_default_currency(cur)
+                    if len(cmd) >= 4:
+                        token = cmd[3].strip()
+                        if token:
+                            reference_token = token[:64]
                 src_uuid = exec_uuid
                 dst_uuid = get_uuid(dst_name)
                 base = get_balance(cur, src_uuid, currency)
@@ -2567,6 +2592,7 @@ async def message(payload: MessagePayload):
                                         currency,
                                         tax_amt,
                                         "tax",
+                                        reference=reference_token,
                                     )
                                     scoreboards[treasury] = get_scoreboard(
                                         cur, treasury
@@ -2617,6 +2643,7 @@ async def message(payload: MessagePayload):
                                     currency,
                                     amt,
                                     "pay",
+                                    reference=reference_token,
                                 )
                                 actions.append(
                                     {
