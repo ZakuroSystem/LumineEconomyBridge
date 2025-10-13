@@ -8,16 +8,32 @@
     <form method="post" class="row gy-2 gx-2 align-items-center">
       <input type="hidden" name="currency" value="{{ c.name }}">
       <div class="col-auto">
-        <label class="form-label">Tax %</label>
-        <input name="tax" class="form-control form-control-sm" value="{{ '%.1f'|format(c.tax_rate/10) }}">
+        <label class="form-label">Trade Tax %</label>
+        <div class="input-group input-group-sm">
+          <div class="input-group-text">
+            <input class="form-check-input mt-0" type="checkbox" name="trade_enabled" {% if c.trade_tax_enabled %}checked{% endif %}>
+          </div>
+          <input name="trade_tax" class="form-control form-control-sm" type="number" step="0.1" min="0" value="{{ '%.1f'|format(c.trade_tax_rate/10) }}">
+        </div>
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Transfer Tax %</label>
+        <div class="input-group input-group-sm">
+          <div class="input-group-text">
+            <input class="form-check-input mt-0" type="checkbox" name="transfer_enabled" {% if c.transfer_tax_enabled %}checked{% endif %}>
+          </div>
+          <input name="transfer_tax" class="form-control form-control-sm" type="number" step="0.1" min="0" value="{{ '%.1f'|format(c.transfer_tax_rate/10) }}">
+        </div>
       </div>
       <div class="col-auto">
         <label class="form-label">Treasury</label>
         <input name="treasury" class="form-control form-control-sm" value="{{ c.treasury_name or '' }}">
       </div>
+      {% if c.can_manage %}
       <div class="col-auto mt-4">
         <button class="btn btn-sm btn-primary" name="op" value="set">Save</button>
       </div>
+      {% endif %}
     </form>
     <div class="mt-2">
       <div>Managers:
@@ -40,6 +56,37 @@
       </form>
       {% endif %}
     </div>
+    {% if c.can_manage %}
+    <hr>
+    <form method="post" class="row gy-2 gx-2 align-items-center">
+      <input type="hidden" name="currency" value="{{ c.name }}">
+      <div class="col-auto">
+        <label class="form-label">Issue to</label>
+        <input name="target" class="form-control form-control-sm" placeholder="player or uuid">
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Amount</label>
+        <input name="amount" class="form-control form-control-sm" placeholder="0">
+      </div>
+      <div class="col-auto mt-4">
+        <button class="btn btn-sm btn-success" name="op" value="mint">Issue</button>
+      </div>
+    </form>
+    <form method="post" class="row gy-2 gx-2 align-items-center mt-2">
+      <input type="hidden" name="currency" value="{{ c.name }}">
+      <div class="col-auto">
+        <label class="form-label">Confiscate from</label>
+        <input name="target" class="form-control form-control-sm" placeholder="player or uuid">
+      </div>
+      <div class="col-auto">
+        <label class="form-label">Amount</label>
+        <input name="amount" class="form-control form-control-sm" placeholder="0">
+      </div>
+      <div class="col-auto mt-4">
+        <button class="btn btn-sm btn-danger" name="op" value="burn">Confiscate</button>
+      </div>
+    </form>
+    {% endif %}
   </div>
 </div>
 {% endfor %}

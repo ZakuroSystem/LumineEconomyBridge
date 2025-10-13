@@ -620,13 +620,16 @@ public class ShopListener implements Listener {
         ItemStack preview = si.getRawItem().clone();
         inv.setItem(13, preview);
 
-        int[] amounts = {1, 10, 100};
+        int[] buyAmounts = {100, 10, 1};
         int[] buySlots = {10, 11, 12};
-        int[] sellSlots = {14, 15, 16};
+        for (int i = 0; i < buyAmounts.length; i++) {
+            addBuyButton(inv, menu, holder, si, buySlots[i], buyAmounts[i]);
+        }
 
-        for (int i = 0; i < amounts.length; i++) {
-            addBuyButton(inv, menu, holder, si, buySlots[i], amounts[i]);
-            addSellButton(inv, menu, holder, si, sellSlots[i], amounts[i], p);
+        int[] sellAmounts = {1, 10, 100};
+        int[] sellSlots = {14, 15, 16};
+        for (int i = 0; i < sellAmounts.length; i++) {
+            addSellButton(inv, menu, holder, si, sellSlots[i], sellAmounts[i], p);
         }
 
         ItemStack back = new ItemStack(Material.BARRIER);

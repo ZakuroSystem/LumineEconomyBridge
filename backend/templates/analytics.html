@@ -5,6 +5,50 @@
 <div class="mb-4"><canvas id="txChart"></canvas></div>
 <div class="mb-4"><canvas id="topChart"></canvas></div>
 <div class="mb-4">
+  <h3>Top Shop Trades</h3>
+  <canvas id="shopRankChart"></canvas>
+</div>
+<div class="mb-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <h3 class="mb-0">Daily Shop Activity</h3>
+    <span class="text-muted small">Aggregated per day for the busiest shops</span>
+  </div>
+  <canvas id="shopDailyChart"></canvas>
+</div>
+{% if top_shops %}
+<div class="mb-4">
+  <h3 class="h5">Shop Trade Breakdown</h3>
+  <div class="table-responsive">
+    <table class="table table-striped align-middle">
+      <thead>
+        <tr>
+          <th scope="col">Shop ID</th>
+          <th scope="col">Owner</th>
+          <th scope="col" class="text-end">Total Trades</th>
+          <th scope="col" class="text-end">Buys</th>
+          <th scope="col" class="text-end">Sells</th>
+          <th scope="col">Volume by Currency</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for shop in top_shops %}
+        <tr>
+          <td>{{ shop.shop_id }}</td>
+          <td>{{ shop.owner }}</td>
+          <td class="text-end">{{ shop.total }}</td>
+          <td class="text-end">{{ shop.buys }}</td>
+          <td class="text-end">{{ shop.sells }}</td>
+          <td>{{ shop.volume_display }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<p class="text-muted">No shop transactions have been recorded yet.</p>
+{% endif %}
+<div class="mb-4">
   <h3>Transaction Heatmap</h3>
   <table class="table table-bordered text-center">
     <thead>
@@ -25,6 +69,6 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script id="analytics-data" type="application/json">{{ {'supply': supply_json, 'tx': tx_json, 'top': top_json}|tojson }}</script>
+<script id="analytics-data" type="application/json">{{ {'supply': supply_json, 'tx': tx_json, 'top': top_json, 'shopRank': shop_rank_json, 'shopDaily': shop_daily_json}|tojson }}</script>
 <script src="{{ url_for('static', filename='js/analytics.js') }}"></script>
 {% endblock %}

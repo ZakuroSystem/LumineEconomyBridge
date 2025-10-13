@@ -14,7 +14,7 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le money give <player> <currency> <amount>` – Mint funds for a player.
 - `/le money take <player> <currency> <amount>` – Remove funds from a player.
 - `/le money pay [src] <dst> [currency] <amount>` – Pay from one player to another. Omitting `src` uses the executor; omitting `currency` uses the default.
-- `/le pay <player> <amount> [currency]` – Pay another player using your own funds and optional currency.
+- `/le pay <player> <amount> [currency] [reference]` – Pay another player using your own funds and optional currency. Use `[reference]` to attach an external payment identifier when relaying commands via `/le api`.
 - `/le money top [currency] [page]` – List top balances, 10 players per page.
 - `/le deposit <src> <dst> <currency> <amount>` – Move funds from src to dst (labelled deposit).
 - `/le withdraw <src> <dst> <currency> <amount>` – Move funds from src to dst (labelled withdraw).
@@ -26,7 +26,7 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le currency default <id>` – Set the default currency used when a command omits one.
 - `/le currency manager add <id> <player>` – Grant manager privileges for a currency.
 - `/le currency manager remove <id> <player>` – Revoke a currency manager.
-- `/le currency tax <id> <rate%>` – Set a currency's tax rate (0.1% steps).
+- `/le currency tax <id> <trade|transfer> <rate|off> [on|off]` – Configure trade or transfer tax per currency (0.1% steps, separate enable toggles).
 - `/le currency treasury <id> <account>` – Choose the treasury account to receive tax.
 - `/le account create <id>` – Create a system account.
 - `/le account connect <user> <system>` – Link a user to a system account they can control.
@@ -37,6 +37,15 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le search <item> [currency] [min] [max]` – Search public shops for an item.
 - `/le shop autopricedisable <id> [name] [currency]` – Disable an autoprice configuration when you no longer want the backend to adjust prices.
 - `/le admin add <player>` – Grant a player access to the admin dashboard.
+
+### Quests
+Recommended quests are handed out automatically and can be reviewed from the in-game guide book's quest menu. Each quest corresponds to regular shop activity rather than a dedicated `/le quest` command:
+
+- **ショップを作成 / Open a shop** – Complete by running `/le shop create <id>` to place a new barrel shop.【F:src/main/resources/lang.yml†L47-L56】
+- **ショップで購入 / Buy from a shop** – Finish by purchasing any listing from a public shop through the standard trading UI.【F:src/main/resources/lang.yml†L57-L59】
+- **依頼を達成 / Fulfill a request** – Clear this quest by supplying stock to a shop request (sell items into the shop so it restocks).【F:src/main/resources/lang.yml†L60-L62】
+
+The backend tracks which quests you've cleared and only suggests the remaining objectives when the plugin queries `/api/quests/recommended` for your UUID.【F:backend/main.py†L936-L939】【F:backend/main.py†L1586-L1599】
 
 ## Notes
 - All command validation and economy processing happen on the Python backend.

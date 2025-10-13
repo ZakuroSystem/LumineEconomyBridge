@@ -1,6 +1,7 @@
 package com.grapelemon.lumineeconomybridge;
 
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
+import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
@@ -34,6 +35,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -69,12 +71,51 @@ public class LeCommandExecutor implements CommandExecutor {
 
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
+        String sub = args.length > 0 ? args[0].toLowerCase() : "";
+
+        if (sub.equals("api")) {
+            if (args.length < 3) {
+                sender.sendMessage(ChatColor.YELLOW + "Usage: /le api <player> <command...>" + ChatColor.RESET);
+                return true;
+            }
+
+            if (sender instanceof Player playerSender && !plugin.hasBypass(playerSender)
+                    && !playerSender.isOp() && !playerSender.hasPermission("lumineeconomy.admin")) {
+                sender.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                return true;
+            }
+
+            String runnerName = args[1];
+            Player runner = Bukkit.getPlayerExact(runnerName);
+            if (runner == null) {
+                sender.sendMessage(ChatColor.RED + "Player " + runnerName + " is not online" + ChatColor.RESET);
+                return true;
+            }
+
+            String command = String.join(" ", Arrays.asList(args).subList(2, args.length));
+            if (command.isBlank()) {
+                sender.sendMessage(ChatColor.YELLOW + "Usage: /le api <player> <command...>" + ChatColor.RESET);
+                return true;
+            }
+
+            if (command.startsWith("/")) {
+                command = command.substring(1);
+            }
+
+            boolean executed = runner.performCommand(command);
+            if (!executed) {
+                sender.sendMessage(ChatColor.RED + "Failed to execute command" + ChatColor.RESET);
+            } else {
+                sender.sendMessage(ChatColor.GREEN + "Executed as " + runner.getName() + ChatColor.RESET);
+            }
+            return true;
+        }
+
         if (!(sender instanceof Player p)) {
             sender.sendMessage(Lang.get("player-only"));
             return true;
         }
 
-        String sub = args.length > 0 ? args[0].toLowerCase() : "";
         boolean hasBypass = plugin.hasBypass(p);
         if (plugin.requiresAdmin(sub) && !hasBypass && !p.isOp() && !p.hasPermission("lumineeconomy.admin")
                 && !sub.equalsIgnoreCase("money") && !sub.equalsIgnoreCase("currency")) {
@@ -1140,6 +1181,12 @@ public class LeCommandExecutor implements CommandExecutor {
         payload.put("executor", p.getName());
         payload.put("command", "/" + String.join(" ", args));
         payload.put("timestamp", System.currentTimeMillis() / 1000);
+        if (args[0].equalsIgnoreCase("wallet")) {
+            Map<String, Integer> snapshot = ScoreboardUtil.readAllSync(p);
+            if (!snapshot.isEmpty()) {
+                payload.put("scoreboard", new HashMap<>(snapshot));
+            }
+        }
         Location loc = p.getLocation();
         Map<String, Object> locMap = new HashMap<>();
         locMap.put("world", loc.getWorld().getName());

@@ -8,8 +8,19 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from pydantic import BaseModel
-from typing import Dict, Optional, List, Union, Tuple, Any, Set, Sequence
+from pydantic import BaseModel, Field
+from typing import (
+    Dict,
+    Optional,
+    List,
+    Union,
+    Tuple,
+    Any,
+    Set,
+    Sequence,
+    NamedTuple,
+    Mapping,
+)
 from tile_store import TileStore
 from tile_format import PIXEL_COUNT
 import sqlite3
@@ -188,7 +199,8 @@ with conn:
             to_account TEXT,
             currency TEXT NOT NULL,
             amount INTEGER NOT NULL,
-            reason TEXT NOT NULL
+            reason TEXT NOT NULL,
+            reference TEXT
         )
         """
     )
@@ -198,7 +210,13 @@ with conn:
             name TEXT PRIMARY KEY,
             symbol TEXT,
             description TEXT,
-            active INTEGER NOT NULL DEFAULT 1
+            active INTEGER NOT NULL DEFAULT 1,
+            treasury TEXT,
+            tax_rate INTEGER NOT NULL DEFAULT 0,
+            trade_tax_enabled INTEGER NOT NULL DEFAULT 0,
+            trade_tax_rate INTEGER NOT NULL DEFAULT 0,
+            transfer_tax_enabled INTEGER NOT NULL DEFAULT 0,
+            transfer_tax_rate INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -241,6 +259,45 @@ with conn:
         conn.execute("ALTER TABLE currencies ADD COLUMN tax_rate INTEGER NOT NULL DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute(
+            "ALTER TABLE currencies ADD COLUMN trade_tax_enabled INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute(
+            "ALTER TABLE currencies ADD COLUMN trade_tax_rate INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute(
+            "ALTER TABLE currencies ADD COLUMN transfer_tax_enabled INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute(
+            "ALTER TABLE currencies ADD COLUMN transfer_tax_rate INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE transactions ADD COLUMN reference TEXT")
+    except sqlite3.OperationalError:
+        pass
+    conn.execute(
+        """
+        UPDATE currencies
+        SET transfer_tax_rate=tax_rate,
+            transfer_tax_enabled=CASE WHEN tax_rate>0 THEN 1 ELSE transfer_tax_enabled END,
+            tax_rate=0
+        WHERE tax_rate>0
+            AND transfer_tax_rate=0
+            AND transfer_tax_enabled=0
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS currency_managers (
@@ -263,12 +320,19 @@ with conn:
         CREATE TABLE IF NOT EXISTS players (
             uuid TEXT PRIMARY KEY,
             last_seen INTEGER NOT NULL,
-            lang_hint INTEGER NOT NULL DEFAULT 0
+            lang_hint INTEGER NOT NULL DEFAULT 0,
+            wallet_initialized INTEGER NOT NULL DEFAULT 0
         )
         """
     )
     try:
         conn.execute("ALTER TABLE players ADD COLUMN lang_hint INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute(
+            "ALTER TABLE players ADD COLUMN wallet_initialized INTEGER NOT NULL DEFAULT 0"
+        )
     except sqlite3.OperationalError:
         pass
     conn.execute(
@@ -428,6 +492,8 @@ with conn:
             qty INTEGER NOT NULL,
             currency TEXT NOT NULL,
             total_price INTEGER NOT NULL,
+            tax_amount INTEGER NOT NULL DEFAULT 0,
+            tax_account TEXT,
             timestamp INTEGER NOT NULL,
             result TEXT NOT NULL,
             reason TEXT,
@@ -477,6 +543,16 @@ with conn:
         pass
     try:
         conn.execute("ALTER TABLE shop_tx ADD COLUMN grant_token TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute(
+            "ALTER TABLE shop_tx ADD COLUMN tax_amount INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE shop_tx ADD COLUMN tax_account TEXT")
     except sqlite3.OperationalError:
         pass
     for col, typ in [
@@ -912,6 +988,7 @@ class MessagePayload(BaseModel):
     command: str
     timestamp: int
     location: Location
+    scoreboard: Dict[str, int] = Field(default_factory=dict)
 
 
 class DeltaPayload(BaseModel):
@@ -1266,14 +1343,35 @@ def is_currency_manager(cur: sqlite3.Cursor, uuid: str, currency: str) -> bool:
     )
 
 
-def tax_info(cur: sqlite3.Cursor, currency: str) -> Tuple[int, Optional[str]]:
+class TaxConfig(NamedTuple):
+    rate: int
+    enabled: bool
+    treasury: Optional[str]
+
+
+def compute_tax_amount(amount: int, tax: TaxConfig) -> int:
+    if not tax.enabled or tax.rate <= 0 or amount <= 0:
+        return 0
+    return max((amount * tax.rate + 500) // 1000, 0)
+
+
+def tax_info(cur: sqlite3.Cursor, currency: str, kind: str) -> TaxConfig:
     row = cur.execute(
-        "SELECT tax_rate, treasury FROM currencies WHERE name=?",
+        """
+        SELECT treasury, trade_tax_rate, trade_tax_enabled,
+               transfer_tax_rate, transfer_tax_enabled
+        FROM currencies WHERE name=?
+        """,
         (currency,),
     ).fetchone()
     if not row:
-        return 0, None
-    return row["tax_rate"], row["treasury"]
+        return TaxConfig(0, False, None)
+    treasury = row["treasury"]
+    if kind == "trade":
+        return TaxConfig(row["trade_tax_rate"], bool(row["trade_tax_enabled"]), treasury)
+    return TaxConfig(
+        row["transfer_tax_rate"], bool(row["transfer_tax_enabled"]), treasury
+    )
 
 
 def set_balance(cur: sqlite3.Cursor, uuid: str, currency: str, amount: int) -> None:
@@ -1327,6 +1425,94 @@ def list_balances(cur: sqlite3.Cursor, uuid: str) -> Dict[str, int]:
 
 def get_scoreboard(cur: sqlite3.Cursor, uuid: str) -> Dict[str, int]:
     return list_balances(cur, uuid)
+
+
+def maybe_initialize_wallet(
+    cur: sqlite3.Cursor,
+    player_uuid: str,
+    scoreboard_snapshot: Mapping[str, int],
+) -> bool:
+    """Seed account balances from the provided scoreboard snapshot.
+
+    The wallet command ships the caller's scoreboard values so that players who
+    earned currency before linking their account no longer lose their funds on
+    first use.  The snapshot is applied only once per player; subsequent calls
+    simply mark the wallet as initialized without overwriting existing data.
+    Returns ``True`` when balances were updated.
+    """
+
+    row = cur.execute(
+        "SELECT wallet_initialized FROM players WHERE uuid=?",
+        (player_uuid,),
+    ).fetchone()
+    if row and row["wallet_initialized"]:
+        return False
+
+    normalized: Dict[str, int] = {}
+    for raw_currency, value in scoreboard_snapshot.items():
+        try:
+            amount = int(value)
+        except (TypeError, ValueError):
+            continue
+        resolved = resolve_currency(cur, raw_currency)
+        if not is_currency(cur, resolved):
+            continue
+        normalized[resolved] = max(0, amount)
+
+    cur.execute(
+        "INSERT OR IGNORE INTO players(uuid, last_seen, lang_hint) VALUES(?,?,0)",
+        (player_uuid, int(time.time())),
+    )
+
+    updated = False
+    for currency, amount in normalized.items():
+        existing = cur.execute(
+            "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
+            (player_uuid, currency),
+        ).fetchone()
+        if existing is None or existing["balance"] != amount:
+            set_balance(cur, player_uuid, currency, amount)
+            updated = True
+
+    if normalized:
+        default_currency = get_default_currency(cur)
+        if default_currency not in normalized:
+            cur.execute(
+                "INSERT OR IGNORE INTO accounts(uuid, currency, balance) VALUES (?,?,0)",
+                (player_uuid, default_currency),
+            )
+
+    has_account = cur.execute(
+        "SELECT 1 FROM accounts WHERE uuid=? LIMIT 1", (player_uuid,)
+    ).fetchone()
+    if has_account or normalized:
+        cur.execute(
+            "UPDATE players SET wallet_initialized=1 WHERE uuid=?",
+            (player_uuid,),
+        )
+    return updated
+
+
+def increment_quest_progress(
+    cur: sqlite3.Cursor, player_uuid: str, quest_id: str, amount: int
+) -> bool:
+    """Increment quest progress when the optional quest tables exist.
+
+    Some deployments omit the quest schema entirely. In that case we should
+    ignore the missing table instead of aborting the surrounding shop
+    transaction.
+    """
+
+    try:
+        cur.execute(
+            "UPDATE quest_progress SET progress=progress+? WHERE player_uuid=? AND quest_id=?",
+            (amount, player_uuid, quest_id),
+        )
+        return True
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower() and "quest_progress" in str(exc).lower():
+            return False
+        raise
 
 
 def format_amount(cur: sqlite3.Cursor, amount: int, currency: str) -> str:
@@ -1668,13 +1854,14 @@ def record_transaction(
     currency: str,
     amount: int,
     reason: str,
+    reference: Optional[str] = None,
 ) -> None:
     cur.execute(
         """
-        INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason)
-        VALUES (?,?,?,?,?,?)
+        INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason, reference)
+        VALUES (?,?,?,?,?,?,?)
         """,
-        (timestamp, from_account, to_account, currency, amount, reason),
+        (timestamp, from_account, to_account, currency, amount, reason, reference),
     )
 
 
@@ -1934,37 +2121,93 @@ async def message(payload: MessagePayload):
                                         ),
                                     }
                                 )
-                    elif sub == "tax" and len(cmd) >= 4:
+                    elif sub == "tax" and len(cmd) >= 5:
                         cname = resolve_currency(cur, cmd[2])
-                        if not (
+                        mode = cmd[3].lower()
+                        if mode not in {"trade", "transfer"}:
+                            success = False
+                            error_text = t("error.invalid_args", lang=exec_lang)
+                        elif not (
                             is_exec_admin
                             or is_currency_manager(cur, exec_uuid, cname)
                         ):
                             success = False
                             error_text = t("error.no_permission", lang=exec_lang)
                         else:
-                            try:
-                                rate_dec = Decimal(cmd[3])
-                            except InvalidOperation:
-                                success = False
-                                error_text = t("error.invalid_args", lang=exec_lang)
-                            else:
-                                rate = int((rate_dec * 10).to_integral_value(rounding=ROUND_HALF_UP))
-                                cur.execute(
-                                    "UPDATE currencies SET tax_rate=? WHERE name=?",
-                                    (rate, cname),
-                                )
-                                messages.append(
-                                    {
-                                        "target": "chat",
-                                        "text": t(
-                                            "currency.tax",
-                                            lang=exec_lang,
-                                            currency=cname,
-                                            rate=f"{rate/10:.1f}",
-                                        ),
-                                    }
-                                )
+                            value_token = cmd[4].lower()
+                            explicit_toggle: Optional[int] = None
+                            if len(cmd) >= 6:
+                                toggle = cmd[5].lower()
+                                if toggle in {"on", "enable"}:
+                                    explicit_toggle = 1
+                                elif toggle in {"off", "disable"}:
+                                    explicit_toggle = 0
+                                else:
+                                    success = False
+                                    error_text = t("error.invalid_args", lang=exec_lang)
+                            if success:
+                                if value_token == "off":
+                                    rate = 0
+                                    enabled = 0
+                                else:
+                                    try:
+                                        rate_dec = Decimal(value_token)
+                                    except InvalidOperation:
+                                        success = False
+                                        error_text = t("error.invalid_args", lang=exec_lang)
+                                    else:
+                                        rate = int(
+                                            (rate_dec * 10).to_integral_value(
+                                                rounding=ROUND_HALF_UP
+                                            )
+                                        )
+                                        rate = max(rate, 0)
+                                        enabled = 1 if rate > 0 else 0
+                                if success:
+                                    if explicit_toggle is not None:
+                                        enabled = explicit_toggle
+                                    column_rate = (
+                                        "trade_tax_rate"
+                                        if mode == "trade"
+                                        else "transfer_tax_rate"
+                                    )
+                                    column_enabled = (
+                                        "trade_tax_enabled"
+                                        if mode == "trade"
+                                        else "transfer_tax_enabled"
+                                    )
+                                    cur.execute(
+                                        f"UPDATE currencies SET {column_rate}=?, {column_enabled}=? WHERE name=?",
+                                        (rate, enabled, cname),
+                                    )
+                                    mode_label = t(
+                                        f"currency.tax_mode_{mode}", lang=exec_lang
+                                    )
+                                    if enabled:
+                                        messages.append(
+                                            {
+                                                "target": "chat",
+                                                "text": t(
+                                                    "currency.tax_set",
+                                                    lang=exec_lang,
+                                                    currency=cname,
+                                                    rate=f"{rate/10:.1f}",
+                                                    mode=mode_label,
+                                                ),
+                                            }
+                                        )
+                                    else:
+                                        messages.append(
+                                            {
+                                                "target": "chat",
+                                                "text": t(
+                                                    "currency.tax_disabled",
+                                                    lang=exec_lang,
+                                                    currency=cname,
+                                                    mode=mode_label,
+                                                ),
+                                            }
+                                        )
                     elif sub == "treasury" and len(cmd) >= 4:
                         cname = resolve_currency(cur, cmd[2])
                         target_name = cmd[3].lower()
@@ -2127,6 +2370,7 @@ async def message(payload: MessagePayload):
                         else:
                             messages.append({"target": "chat", "text": t("money.top_empty", lang=exec_lang)})
                 elif sub == "pay" and len(cmd) >= 4:
+                    reference_token: Optional[str] = None
                     if len(cmd) >= 6:
                         src_name = cmd[2].lower()
                         dst_name = cmd[3].lower()
@@ -2145,6 +2389,10 @@ async def message(payload: MessagePayload):
                         src_name = payload.executor.lower()
                         dst_name = cmd[2].lower()
                         currency, amt_idx, _ = extract_currency(3)
+                    if len(cmd) > amt_idx + 1:
+                        token = cmd[amt_idx + 1].strip()
+                        if token:
+                            reference_token = token[:64]
                     src_uuid = get_uuid(src_name)
                     dst_uuid = get_uuid(dst_name)
                     if (
@@ -2166,9 +2414,11 @@ async def message(payload: MessagePayload):
                             success = False
                             error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                         else:
-                            rate, treasury = tax_info(cur, currency)
-                            tax_amt = amt * rate // 1000
-                            required = amt + tax_amt
+                            transfer_tax = tax_info(cur, currency, "transfer")
+                            tax_amt = min(compute_tax_amount(amt, transfer_tax), amt)
+                            net_amt = amt - tax_amt
+                            treasury = transfer_tax.treasury
+                            required = amt
                             if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
                                 success = False
                                 error_text = t("error.frozen", lang=exec_lang)
@@ -2180,63 +2430,119 @@ async def message(payload: MessagePayload):
                                     success = False
                                     error_text = t("error.pay_failed", lang=exec_lang)
                                 else:
-                                    add_balance(cur, dst_uuid, currency, amt)
-                                    if tax_amt > 0 and treasury:
-                                        add_balance(cur, treasury, currency, tax_amt)
-                                        record_transaction(
-                                            cur,
-                                            payload.timestamp,
-                                            src_uuid,
-                                            treasury,
-                                            currency,
-                                            tax_amt,
-                                            "tax",
+                                    credited = True
+                                    if net_amt > 0:
+                                        credited = add_balance(
+                                            cur, dst_uuid, currency, net_amt
                                         )
-                                    messages.append({
-                                        "target": "chat",
-                                        "text": t(
-                                            "money.pay",
-                                            lang=exec_lang,
-                                            src=src_name,
-                                            dst=dst_name,
-                                            amount=format_amount(cur, amt, currency),
-                                        ),
-                                    })
-                                    messages.append(
-                                        {
-                                            "target": "chat",
-                                            "player": dst_uuid,
-                                            "text": t(
-                                                "receive",
-                                                lang=get_lang(dst_uuid),
-                                                src=src_name,
-                                                amount=format_amount(cur, amt, currency),
-                                            ),
-                                        }
-                                    )
-                                    record_transaction(
-                                        cur,
-                                        payload.timestamp,
-                                        src_uuid,
-                                        dst_uuid,
-                                        currency,
-                                        amt,
-                                        "pay",
-                                    )
-                                    actions.append({
-                                        "src": src_uuid,
-                                        "dst": dst_uuid,
-                                        "currency": currency,
-                                        "amount": amt,
-                                    })
-                                    scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
-                                    scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
+                                    if not credited:
+                                        add_balance(cur, src_uuid, currency, required)
+                                        success = False
+                                        error_text = t("error.pay_failed", lang=exec_lang)
+                                    else:
+                                        tax_recorded = True
+                                        if tax_amt > 0 and transfer_tax.enabled and treasury:
+                                            tax_recorded = add_balance(
+                                                cur, treasury, currency, tax_amt
+                                            )
+                                            if tax_recorded:
+                                                record_transaction(
+                                                    cur,
+                                                    payload.timestamp,
+                                                    src_uuid,
+                                                    treasury,
+                                                    currency,
+                                                    tax_amt,
+                                                    "tax",
+                                                    reference=reference_token,
+                                                )
+                                                scoreboards[treasury] = get_scoreboard(
+                                                    cur, treasury
+                                                )
+                                        if not tax_recorded:
+                                            if net_amt > 0:
+                                                add_balance(
+                                                    cur,
+                                                    dst_uuid,
+                                                    currency,
+                                                    -net_amt,
+                                                )
+                                            add_balance(
+                                                cur, src_uuid, currency, required
+                                            )
+                                            success = False
+                                            error_text = t("error.pay_failed", lang=exec_lang)
+                                        else:
+                                            messages.append(
+                                                {
+                                                    "target": "chat",
+                                                    "text": t(
+                                                        "money.pay",
+                                                        lang=exec_lang,
+                                                        src=src_name,
+                                                        dst=dst_name,
+                                                        amount=format_amount(
+                                                            cur, amt, currency
+                                                        ),
+                                                    ),
+                                                }
+                                            )
+                                            messages.append(
+                                                {
+                                                    "target": "chat",
+                                                    "player": dst_uuid,
+                                                    "text": t(
+                                                        "receive",
+                                                        lang=get_lang(dst_uuid),
+                                                        src=src_name,
+                                                        amount=format_amount(
+                                                            cur, net_amt, currency
+                                                        ),
+                                                    ),
+                                                }
+                                            )
+                                            record_transaction(
+                                                cur,
+                                                payload.timestamp,
+                                                src_uuid,
+                                                dst_uuid,
+                                                currency,
+                                                amt,
+                                                "pay",
+                                                reference=reference_token,
+                                            )
+                                            actions.append(
+                                                {
+                                                    "src": src_uuid,
+                                                    "dst": dst_uuid,
+                                                    "currency": currency,
+                                                    "amount": amt,
+                                                }
+                                            )
+                                            scoreboards[src_uuid] = get_scoreboard(
+                                                cur, src_uuid
+                                            )
+                                            scoreboards[dst_uuid] = get_scoreboard(
+                                                cur, dst_uuid
+                                            )
                 else:
                     success = False
                     error_text = t("error.invalid_args", lang=exec_lang)
             elif action == "pay" and len(cmd) >= 3 and parse_amount_token(cmd[2], None) is not None:
                 dst_name = cmd[1].lower()
-                currency = resolve_currency(cur, cmd[3]) if len(cmd) >= 4 else get_default_currency(cur)
+                reference_token: Optional[str] = None
+                if len(cmd) >= 4 and is_currency(cur, cmd[3]):
+                    currency = resolve_currency(cur, cmd[3])
+                    if len(cmd) >= 5:
+                        token = cmd[4].strip()
+                        if token:
+                            reference_token = token[:64]
+                else:
+                    currency = get_default_currency(cur)
+                    if len(cmd) >= 4:
+                        token = cmd[3].strip()
+                        if token:
+                            reference_token = token[:64]
                 src_uuid = exec_uuid
                 dst_uuid = get_uuid(dst_name)
                 base = get_balance(cur, src_uuid, currency)
@@ -2249,9 +2555,11 @@ async def message(payload: MessagePayload):
                     success = False
                     error_text = t("error.invalid_args", lang=exec_lang) if amt is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                 else:
-                    rate, treasury = tax_info(cur, currency)
-                    tax_amt = amt * rate // 1000
-                    required = amt + tax_amt
+                    transfer_tax = tax_info(cur, currency, "transfer")
+                    tax_amt = min(compute_tax_amount(amt, transfer_tax), amt)
+                    net_amt = amt - tax_amt
+                    treasury = transfer_tax.treasury
+                    required = amt
                     if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
                         success = False
                         error_text = t("error.frozen", lang=exec_lang)
@@ -2262,57 +2570,91 @@ async def message(payload: MessagePayload):
                         success = False
                         error_text = t("error.pay_failed", lang=exec_lang)
                     else:
-                        add_balance(cur, dst_uuid, currency, amt)
-                        if tax_amt > 0 and treasury:
-                            add_balance(cur, treasury, currency, tax_amt)
-                            record_transaction(
-                                cur,
-                                payload.timestamp,
-                                src_uuid,
-                                treasury,
-                                currency,
-                                tax_amt,
-                                "tax",
-                            )
-                        messages.append({
-                            "target": "chat",
-                            "text": t(
-                                "money.pay",
-                                lang=exec_lang,
-                                src=payload.executor.lower(),
-                                dst=dst_name,
-                                amount=format_amount(cur, amt, currency),
-                            ),
-                        })
-                        messages.append(
-                            {
-                                "target": "chat",
-                                "player": dst_uuid,
-                                "text": t(
-                                    "receive",
-                                    lang=get_lang(dst_uuid),
-                                    src=payload.executor.lower(),
-                                    amount=format_amount(cur, amt, currency),
-                                ),
-                            }
-                        )
-                        record_transaction(
-                            cur,
-                            payload.timestamp,
-                            src_uuid,
-                            dst_uuid,
-                            currency,
-                            amt,
-                            "pay",
-                        )
-                        actions.append({
-                            "src": src_uuid,
-                            "dst": dst_uuid,
-                            "currency": currency,
-                            "amount": amt,
-                        })
-                        scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
-                        scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
+                        credited = True
+                        if net_amt > 0:
+                            credited = add_balance(cur, dst_uuid, currency, net_amt)
+                        if not credited:
+                            add_balance(cur, src_uuid, currency, required)
+                            success = False
+                            error_text = t("error.pay_failed", lang=exec_lang)
+                        else:
+                            tax_recorded = True
+                            if tax_amt > 0 and transfer_tax.enabled and treasury:
+                                tax_recorded = add_balance(
+                                    cur, treasury, currency, tax_amt
+                                )
+                                if tax_recorded:
+                                    record_transaction(
+                                        cur,
+                                        payload.timestamp,
+                                        src_uuid,
+                                        treasury,
+                                        currency,
+                                        tax_amt,
+                                        "tax",
+                                        reference=reference_token,
+                                    )
+                                    scoreboards[treasury] = get_scoreboard(
+                                        cur, treasury
+                                    )
+                            if not tax_recorded:
+                                if net_amt > 0:
+                                    add_balance(
+                                        cur,
+                                        dst_uuid,
+                                        currency,
+                                        -net_amt,
+                                    )
+                                add_balance(cur, src_uuid, currency, required)
+                                success = False
+                                error_text = t("error.pay_failed", lang=exec_lang)
+                            else:
+                                messages.append(
+                                    {
+                                        "target": "chat",
+                                        "text": t(
+                                            "money.pay",
+                                            lang=exec_lang,
+                                            src=payload.executor.lower(),
+                                            dst=dst_name,
+                                            amount=format_amount(cur, amt, currency),
+                                        ),
+                                    }
+                                )
+                                messages.append(
+                                    {
+                                        "target": "chat",
+                                        "player": dst_uuid,
+                                        "text": t(
+                                            "receive",
+                                            lang=get_lang(dst_uuid),
+                                            src=payload.executor.lower(),
+                                            amount=format_amount(
+                                                cur, net_amt, currency
+                                            ),
+                                        ),
+                                    }
+                                )
+                                record_transaction(
+                                    cur,
+                                    payload.timestamp,
+                                    src_uuid,
+                                    dst_uuid,
+                                    currency,
+                                    amt,
+                                    "pay",
+                                    reference=reference_token,
+                                )
+                                actions.append(
+                                    {
+                                        "src": src_uuid,
+                                        "dst": dst_uuid,
+                                        "currency": currency,
+                                        "amount": amt,
+                                    }
+                                )
+                                scoreboards[src_uuid] = get_scoreboard(cur, src_uuid)
+                                scoreboards[dst_uuid] = get_scoreboard(cur, dst_uuid)
             elif action in {"pay", "transfer"} and len(cmd) >= 4:
                 src_name = cmd[1].lower()
                 dst_name = cmd[2].lower()
@@ -2339,8 +2681,9 @@ async def message(payload: MessagePayload):
                         success = False
                         error_text = t("error.invalid_args", lang=exec_lang) if amt is None or src_uuid is None or dst_uuid is None else t("error.invalid_currency", lang=exec_lang)
                     else:
-                        rate, treasury = tax_info(cur, currency)
-                        tax_amt = amt * rate // 1000
+                        transfer_tax = tax_info(cur, currency, "transfer")
+                        tax_amt = compute_tax_amount(amt, transfer_tax)
+                        treasury = transfer_tax.treasury
                         required = amt + tax_amt
                         if is_frozen(cur, src_uuid, currency) or is_frozen(cur, dst_uuid, currency):
                             success = False
@@ -2353,7 +2696,7 @@ async def message(payload: MessagePayload):
                             error_text = t("error.pay_failed", lang=exec_lang)
                         else:
                             add_balance(cur, dst_uuid, currency, amt)
-                            if tax_amt > 0 and treasury:
+                            if tax_amt > 0 and transfer_tax.enabled and treasury:
                                 add_balance(cur, treasury, currency, tax_amt)
                                 record_transaction(
                                     cur,
@@ -2497,6 +2840,8 @@ async def message(payload: MessagePayload):
                         success = False
                         error_text = t("error.invalid_args", lang=exec_lang)
                     else:
+                        if action == "wallet" and target_uuid == exec_uuid:
+                            maybe_initialize_wallet(cur, target_uuid, payload.scoreboard)
                         if currency:
                             bal = get_balance(cur, target_uuid, currency)
                             key = "balance.other_single" if target_uuid != exec_uuid else "balance.single"
@@ -3072,6 +3417,8 @@ async def shop_buy(payload: ShopBuyPayload):
     success = False
     reason: Optional[str] = None
     total_price = 0
+    tax_amount = 0
+    tax_account: Optional[str] = None
     grant_token: Optional[str] = None
     location: Optional[sqlite3.Row] = None
     with transaction() as cur:
@@ -3083,6 +3430,16 @@ async def shop_buy(payload: ShopBuyPayload):
             success = existing["result"] == "success"
             reason = existing["reason"]
             total_price = existing["total_price"]
+            tax_amount = (
+                existing["tax_amount"]
+                if "tax_amount" in existing.keys()
+                else 0
+            )
+            tax_account = (
+                existing["tax_account"]
+                if "tax_account" in existing.keys()
+                else None
+            )
             grant_token = existing["grant_token"]
             shop = cur.execute(
                 "SELECT owner_uuid, account_uuid FROM shops WHERE shop_id=?",
@@ -3098,6 +3455,7 @@ async def shop_buy(payload: ShopBuyPayload):
                     (existing["shop_id"], existing["item_key"]),
                 ).fetchone()
                 remaining = stock_row["stock"] if stock_row else 0
+                net_amount = max(total_price - tax_amount, 0)
                 grant.append(
                     {
                         "item_key": existing["item_key"],
@@ -3113,19 +3471,33 @@ async def shop_buy(payload: ShopBuyPayload):
                 if account and account != owner:
                     scoreboards[account] = get_scoreboard(cur, account)
                 buyer_name = get_name(existing["buyer_uuid"]) or existing["buyer_uuid"]
+                buyer_text = (
+                    f"Bought x{existing['qty']} for {existing['currency']} {total_price}"
+                )
+                if tax_amount > 0:
+                    buyer_text += f" (tax {tax_amount})"
+                buyer_text += f" (left {remaining})"
+                owner_text = (
+                    f"Sold x{existing['qty']} to {buyer_name} for {existing['currency']} {net_amount}"
+                )
+                if tax_amount > 0:
+                    owner_text += f" (tax {tax_amount})"
+                owner_text += f" (left {remaining})"
                 buyer_msg = {
                     "target": "chat",
                     "player": existing["buyer_uuid"],
-                    "text": f"Bought x{existing['qty']} for {existing['currency']} {existing['total_price']} (left {remaining})",
+                    "text": buyer_text,
                 }
                 owner_msg = {
                     "target": "chat",
                     "player": owner,
-                    "text": f"Sold x{existing['qty']} to {buyer_name} for {existing['currency']} {existing['total_price']} (left {remaining})",
+                    "text": owner_text,
                 }
                 messages.append(buyer_msg)
                 if owner:
                     messages.append(owner_msg)
+                if tax_account:
+                    scoreboards[tax_account] = get_scoreboard(cur, tax_account)
             else:
                 messages.append(
                     {
@@ -3207,100 +3579,168 @@ async def shop_buy(payload: ShopBuyPayload):
                                 total_price = base_price
                         else:
                             total_price = base_price
-                        if get_balance(cur, payload.player_uuid, payload.currency) < total_price:
+                        trade_tax = tax_info(cur, payload.currency, "trade")
+                        tax_amount = min(
+                            compute_tax_amount(total_price, trade_tax), total_price
+                        )
+                        net_amount = total_price - tax_amount
+                        required = total_price
+                        tax_account = trade_tax.treasury if trade_tax.enabled else None
+                        if is_frozen(
+                            cur, payload.player_uuid, payload.currency
+                        ) or is_frozen(cur, account, payload.currency):
+                            reason = "account_frozen"
+                        elif (
+                            get_balance(cur, payload.player_uuid, payload.currency)
+                            < required
+                        ):
                             reason = "insufficient_funds"
-                        elif not transfer(
-                            cur,
-                            payload.player_uuid,
-                            account,
-                            payload.currency,
-                            total_price,
+                        elif not add_balance(
+                            cur, payload.player_uuid, payload.currency, -required
                         ):
                             reason = "transfer_failed"
                         else:
-                            grant_token = secrets.token_hex(8)
-                            cur.execute(
-                                "UPDATE shop_stock SET stock=stock-? WHERE shop_id=? AND item_key=?",
-                                (payload.qty, payload.shop_id, payload.item_key),
-                            )
-                            cur.execute(
-                                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-                                (payload.timestamp, payload.shop_id),
-                            )
-                            rows = cur.execute(
-                                "SELECT currency FROM shop_autoprice WHERE shop_id=? AND item_key=?",
-                                (payload.shop_id, payload.item_key),
-                            ).fetchall()
-                            for cfg in rows:
-                                apply_autoprice(
-                                    cur, payload.shop_id, payload.item_key, cfg["currency"]
+                            credited_shop = True
+                            if net_amount > 0:
+                                credited_shop = add_balance(
+                                    cur, account, payload.currency, net_amount
                                 )
-                            cur.execute(
-                                "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,grant_token,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                                (
-                                    payload.client_tx_id,
-                                    payload.shop_id,
-                                    payload.player_uuid,
-                                    payload.item_key,
-                                    payload.qty,
-                                    payload.currency,
-                                    total_price,
-                                    payload.timestamp,
-                                    "success",
-                                    grant_token,
-                                    location["world"] if location else None,
-                                    location["x"] if location else None,
-                                    location["y"] if location else None,
-                                    location["z"] if location else None,
-                                    "buy",
-                                ),
-                            )
-                            success = True
-                            stock_row = cur.execute(
-                                "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
-                                (payload.shop_id, payload.item_key),
-                            ).fetchone()
-                            remaining = stock_row["stock"] if stock_row else 0
-                            buyer_name = get_name(payload.player_uuid) or payload.player_uuid
-                            buyer_msg = {
-                                "target": "chat",
-                                "player": payload.player_uuid,
-                                "text": f"Bought x{payload.qty} for {payload.currency} {total_price} (left {remaining})",
-                            }
-                            owner_msg = {
-                                "target": "chat",
-                                "player": owner,
-                                "text": f"Sold x{payload.qty} to {buyer_name} for {payload.currency} {total_price} (left {remaining})",
-                            }
-                            messages.append(buyer_msg)
-                            if is_online(cur, owner, payload.timestamp):
-                                messages.append(owner_msg)
+                            if not credited_shop:
+                                add_balance(
+                                    cur, payload.player_uuid, payload.currency, required
+                                )
+                                reason = "transfer_failed"
                             else:
-                                queue_message(cur, owner_msg)
-                            scoreboards[payload.player_uuid] = get_scoreboard(
-                                cur, payload.player_uuid
-                            )
-                            scoreboards[owner] = get_scoreboard(cur, owner)
-                            if account and account != owner:
-                                scoreboards[account] = get_scoreboard(cur, account)
-                            grant.append(
-                                {
-                                    "item_key": payload.item_key,
-                                    "qty": payload.qty,
-                                    "grant_token": grant_token,
-                                }
-                            )
-                            complete_quest(
-                                cur,
-                                payload.player_uuid,
-                                "shop_buy",
-                                payload.timestamp,
-                                messages=messages,
-                                scoreboards=scoreboards,
-                            )
+                                tax_recorded = True
+                                if tax_amount > 0 and trade_tax.enabled and tax_account:
+                                    tax_recorded = add_balance(
+                                        cur, tax_account, payload.currency, tax_amount
+                                    )
+                                    if tax_recorded:
+                                        record_transaction(
+                                            cur,
+                                            payload.timestamp,
+                                            payload.player_uuid,
+                                            tax_account,
+                                            payload.currency,
+                                            tax_amount,
+                                            "tax",
+                                        )
+                                if not tax_recorded:
+                                    if net_amount > 0:
+                                        add_balance(
+                                            cur,
+                                            account,
+                                            payload.currency,
+                                            -net_amount,
+                                        )
+                                    add_balance(
+                                        cur, payload.player_uuid, payload.currency, required
+                                    )
+                                    reason = "transfer_failed"
+                                    tax_account = None
+                                if reason is None:
+                                    grant_token = secrets.token_hex(8)
+                                    cur.execute(
+                                        "UPDATE shop_stock SET stock=stock-? WHERE shop_id=? AND item_key=?",
+                                        (payload.qty, payload.shop_id, payload.item_key),
+                                    )
+                                    cur.execute(
+                                        "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                                        (payload.timestamp, payload.shop_id),
+                                    )
+                                    rows = cur.execute(
+                                        "SELECT currency FROM shop_autoprice WHERE shop_id=? AND item_key=?",
+                                        (payload.shop_id, payload.item_key),
+                                    ).fetchall()
+                                    for cfg in rows:
+                                        apply_autoprice(
+                                            cur, payload.shop_id, payload.item_key, cfg["currency"]
+                                        )
+                                    cur.execute(
+                                        "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,tax_amount,tax_account,timestamp,result,grant_token,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                        (
+                                            payload.client_tx_id,
+                                            payload.shop_id,
+                                            payload.player_uuid,
+                                            payload.item_key,
+                                            payload.qty,
+                                            payload.currency,
+                                            total_price,
+                                            tax_amount,
+                                            tax_account,
+                                            payload.timestamp,
+                                            "success",
+                                            grant_token,
+                                            location["world"] if location else None,
+                                            location["x"] if location else None,
+                                            location["y"] if location else None,
+                                            location["z"] if location else None,
+                                            "buy",
+                                        ),
+                                    )
+                                    success = True
+                                    stock_row = cur.execute(
+                                        "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
+                                        (payload.shop_id, payload.item_key),
+                                    ).fetchone()
+                                    remaining = stock_row["stock"] if stock_row else 0
+                                    buyer_name = get_name(payload.player_uuid) or payload.player_uuid
+                                    buyer_text = (
+                                        f"Bought x{payload.qty} for {payload.currency} {total_price}"
+                                    )
+                                    if tax_amount > 0:
+                                        buyer_text += f" (tax {tax_amount})"
+                                    buyer_text += f" (left {remaining})"
+                                    owner_text = (
+                                        f"Sold x{payload.qty} to {buyer_name} for {payload.currency} {net_amount}"
+                                    )
+                                    if tax_amount > 0:
+                                        owner_text += f" (tax {tax_amount})"
+                                    owner_text += f" (left {remaining})"
+                                    buyer_msg = {
+                                        "target": "chat",
+                                        "player": payload.player_uuid,
+                                        "text": buyer_text,
+                                    }
+                                    owner_msg = {
+                                        "target": "chat",
+                                        "player": owner,
+                                        "text": owner_text,
+                                    }
+                                    messages.append(buyer_msg)
+                                    if is_online(cur, owner, payload.timestamp):
+                                        messages.append(owner_msg)
+                                    else:
+                                        queue_message(cur, owner_msg)
+                                    scoreboards[payload.player_uuid] = get_scoreboard(
+                                        cur, payload.player_uuid
+                                    )
+                                    scoreboards[owner] = get_scoreboard(cur, owner)
+                                    if account and account != owner:
+                                        scoreboards[account] = get_scoreboard(cur, account)
+                                    if tax_account:
+                                        scoreboards[tax_account] = get_scoreboard(
+                                            cur, tax_account
+                                        )
+                                    grant.append(
+                                        {
+                                            "item_key": payload.item_key,
+                                            "qty": payload.qty,
+                                            "grant_token": grant_token,
+                                        }
+                                    )
+                                    complete_quest(
+                                        cur,
+                                        payload.player_uuid,
+                                        "shop_buy",
+                                        payload.timestamp,
+                                        messages=messages,
+                                        scoreboards=scoreboards,
+                                    )
             if not success:
                 cur.execute(
-                    "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,reason,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,tax_amount,tax_account,timestamp,result,reason,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         payload.client_tx_id,
                         payload.shop_id,
@@ -3309,6 +3749,8 @@ async def shop_buy(payload: ShopBuyPayload):
                         payload.qty,
                         payload.currency,
                         total_price,
+                        tax_amount,
+                        tax_account,
                         payload.timestamp,
                         "fail",
                         reason,
@@ -3336,6 +3778,8 @@ async def shop_buy(payload: ShopBuyPayload):
         "qty": payload.qty,
         "currency": payload.currency,
         "total_price": total_price,
+        "tax_amount": tax_amount,
+        "tax_account": tax_account,
         "result": "success" if success else "error",
         "reason": reason,
         "client_tx_id": payload.client_tx_id,
@@ -3364,6 +3808,8 @@ async def shop_sell(payload: ShopSellPayload):
     success = False
     reason: Optional[str] = None
     total_price = 0
+    tax_amount = 0
+    tax_account: Optional[str] = None
     location: Optional[sqlite3.Row] = None
     with transaction() as cur:
         existing = cur.execute(
@@ -3374,6 +3820,16 @@ async def shop_sell(payload: ShopSellPayload):
             success = existing["result"] == "success"
             reason = existing["reason"]
             total_price = existing["total_price"]
+            tax_amount = (
+                existing["tax_amount"]
+                if "tax_amount" in existing.keys()
+                else 0
+            )
+            tax_account = (
+                existing["tax_account"]
+                if "tax_account" in existing.keys()
+                else None
+            )
             shop = cur.execute(
                 "SELECT owner_uuid, account_uuid FROM shops WHERE shop_id=?",
                 (existing["shop_id"],),
@@ -3388,16 +3844,29 @@ async def shop_sell(payload: ShopSellPayload):
                     scoreboards[owner] = get_scoreboard(cur, owner)
                 if account and account != owner:
                     scoreboards[account] = get_scoreboard(cur, account)
+                if tax_account:
+                    scoreboards[tax_account] = get_scoreboard(cur, tax_account)
                 player_name = get_name(payload.player_uuid) or payload.player_uuid
+                net_amount = max(total_price - tax_amount, 0)
+                player_text = (
+                    f"Sold x{existing['qty']} for {existing['currency']} {net_amount}"
+                )
+                if tax_amount > 0:
+                    player_text += f" (- tax {tax_amount})"
+                owner_text = (
+                    f"Bought x{existing['qty']} from {player_name} for {existing['currency']} {total_price}"
+                )
+                if tax_amount > 0:
+                    owner_text += f" (tax {tax_amount})"
                 buyer_msg = {
                     "target": "chat",
                     "player": payload.player_uuid,
-                    "text": f"Sold x{existing['qty']} for {existing['currency']} {existing['total_price']}",
+                    "text": player_text,
                 }
                 owner_msg = {
                     "target": "chat",
                     "player": owner,
-                    "text": f"Bought x{existing['qty']} from {player_name} for {existing['currency']} {existing['total_price']}",
+                    "text": owner_text,
                 }
                 messages.extend([buyer_msg, owner_msg])
             else:
@@ -3467,80 +3936,154 @@ async def shop_sell(payload: ShopSellPayload):
                             )
                         else:
                             total_price = buy_price * payload.qty
-                        if get_balance(cur, account, payload.currency) < total_price:
+                        trade_tax = tax_info(cur, payload.currency, "trade")
+                        tax_amount = compute_tax_amount(total_price, trade_tax)
+                        if tax_amount > total_price:
+                            tax_amount = total_price
+                        net_amount = total_price - tax_amount
+                        tax_account = trade_tax.treasury if trade_tax.enabled else None
+                        if is_frozen(cur, account, payload.currency) or is_frozen(
+                            cur, payload.player_uuid, payload.currency
+                        ):
+                            reason = "account_frozen"
+                        elif get_balance(cur, account, payload.currency) < total_price:
                             reason = "insufficient_funds"
-                        elif not transfer(
-                            cur, account, payload.player_uuid, payload.currency, total_price
+                        elif not add_balance(
+                            cur, account, payload.currency, -total_price
                         ):
                             reason = "transfer_failed"
                         else:
-                            cur.execute(
-                                "UPDATE shop_stock SET stock=stock+? WHERE shop_id=? AND item_key=?",
-                                (payload.qty, payload.shop_id, payload.item_key),
-                            )
-                            cur.execute(
-                                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
-                                (payload.timestamp, payload.shop_id),
-                            )
-                            rows = cur.execute(
-                                "SELECT currency FROM shop_autoprice WHERE shop_id=? AND item_key=?",
-                                (payload.shop_id, payload.item_key),
-                            ).fetchall()
-                            for cfg in rows:
-                                apply_autoprice(
-                                    cur, payload.shop_id, payload.item_key, cfg["currency"]
+                            credited_player = True
+                            if net_amount > 0:
+                                credited_player = add_balance(
+                                    cur, payload.player_uuid, payload.currency, net_amount
                                 )
-                            cur.execute(
-                                "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                                (
-                                    payload.client_tx_id,
-                                    payload.shop_id,
-                                    payload.player_uuid,
-                                    payload.item_key,
-                                    payload.qty,
-                                    payload.currency,
-                                    total_price,
-                                    payload.timestamp,
-                                    "success",
-                                    location["world"] if location else None,
-                                    location["x"] if location else None,
-                                    location["y"] if location else None,
-                                    location["z"] if location else None,
-                                    "sell",
-                                ),
-                            )
-                            success = True
-                            player_name = get_name(payload.player_uuid) or payload.player_uuid
-                            buyer_msg = {
-                                "target": "chat",
-                                "player": payload.player_uuid,
-                                "text": f"Sold x{payload.qty} for {payload.currency} {total_price}",
-                            }
-                            owner_msg = {
-                                "target": "chat",
-                                "player": owner,
-                                "text": f"Bought x{payload.qty} from {player_name} for {payload.currency} {total_price}",
-                            }
-                            messages.append(buyer_msg)
-                            if is_online(cur, owner, payload.timestamp):
-                                messages.append(owner_msg)
+                            if not credited_player:
+                                add_balance(cur, account, payload.currency, total_price)
+                                reason = "transfer_failed"
                             else:
-                                queue_message(cur, owner_msg)
-                            scoreboards[payload.player_uuid] = get_scoreboard(cur, payload.player_uuid)
-                            scoreboards[owner] = get_scoreboard(cur, owner)
-                        if account and account != owner:
-                            scoreboards[account] = get_scoreboard(cur, account)
-                        complete_quest(
-                            cur,
-                            payload.player_uuid,
-                            "shop_sell",
-                            payload.timestamp,
-                            messages=messages,
-                            scoreboards=scoreboards,
-                        )
+                                if tax_amount > 0 and trade_tax.enabled:
+                                    if tax_account:
+                                        if not add_balance(
+                                            cur, tax_account, payload.currency, tax_amount
+                                        ):
+                                            if net_amount > 0:
+                                                add_balance(
+                                                    cur,
+                                                    payload.player_uuid,
+                                                    payload.currency,
+                                                    -net_amount,
+                                                )
+                                            add_balance(
+                                                cur, account, payload.currency, total_price
+                                            )
+                                            reason = "transfer_failed"
+                                            tax_account = None
+                                        else:
+                                            record_transaction(
+                                                cur,
+                                                payload.timestamp,
+                                                account,
+                                                tax_account,
+                                                payload.currency,
+                                                tax_amount,
+                                                "tax",
+                                            )
+                                    else:
+                                        tax_account = None
+                                if reason is None:
+                                    cur.execute(
+                                        "UPDATE shop_stock SET stock=stock+? WHERE shop_id=? AND item_key=?",
+                                        (payload.qty, payload.shop_id, payload.item_key),
+                                    )
+                                    cur.execute(
+                                        "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                                        (payload.timestamp, payload.shop_id),
+                                    )
+                                    rows = cur.execute(
+                                        "SELECT currency FROM shop_autoprice WHERE shop_id=? AND item_key=?",
+                                        (payload.shop_id, payload.item_key),
+                                    ).fetchall()
+                                    for cfg in rows:
+                                        apply_autoprice(
+                                            cur, payload.shop_id, payload.item_key, cfg["currency"]
+                                        )
+                                    cur.execute(
+                                        "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,tax_amount,tax_account,timestamp,result,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                        (
+                                            payload.client_tx_id,
+                                            payload.shop_id,
+                                            payload.player_uuid,
+                                            payload.item_key,
+                                            payload.qty,
+                                            payload.currency,
+                                            total_price,
+                                            tax_amount,
+                                            tax_account,
+                                            payload.timestamp,
+                                            "success",
+                                            location["world"] if location else None,
+                                            location["x"] if location else None,
+                                            location["y"] if location else None,
+                                            location["z"] if location else None,
+                                            "sell",
+                                        ),
+                                    )
+                                    success = True
+                                    increment_quest_progress(
+                                        cur,
+                                        payload.player_uuid,
+                                        "shop_sell",
+                                        payload.qty,
+                                    )
+                                    player_name = get_name(payload.player_uuid) or payload.player_uuid
+                                    net_display = net_amount
+                                    player_text = (
+                                        f"Sold x{payload.qty} for {payload.currency} {net_display}"
+                                    )
+                                    if tax_amount > 0:
+                                        player_text += f" (- tax {tax_amount})"
+                                    owner_text = (
+                                        f"Bought x{payload.qty} from {player_name} for {payload.currency} {total_price}"
+                                    )
+                                    if tax_amount > 0:
+                                        owner_text += f" (tax {tax_amount})"
+                                    buyer_msg = {
+                                        "target": "chat",
+                                        "player": payload.player_uuid,
+                                        "text": player_text,
+                                    }
+                                    owner_msg = {
+                                        "target": "chat",
+                                        "player": owner,
+                                        "text": owner_text,
+                                    }
+                                    messages.append(buyer_msg)
+                                    if is_online(cur, owner, payload.timestamp):
+                                        messages.append(owner_msg)
+                                    else:
+                                        queue_message(cur, owner_msg)
+                                    scoreboards[payload.player_uuid] = get_scoreboard(
+                                        cur, payload.player_uuid
+                                    )
+                                    scoreboards[owner] = get_scoreboard(cur, owner)
+                                    if account and account != owner:
+                                        scoreboards[account] = get_scoreboard(cur, account)
+                                    if tax_account:
+                                        scoreboards[tax_account] = get_scoreboard(
+                                            cur, tax_account
+                                        )
+                                    complete_quest(
+                                        cur,
+                                        payload.player_uuid,
+                                        "shop_sell",
+                                        payload.timestamp,
+                                        messages=messages,
+                                        scoreboards=scoreboards,
+                                    )
         if not success and not existing:
             cur.execute(
-                "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,timestamp,result,reason,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,tax_amount,tax_account,timestamp,result,reason,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     payload.client_tx_id,
                     payload.shop_id,
@@ -3549,6 +4092,8 @@ async def shop_sell(payload: ShopSellPayload):
                     payload.qty,
                     payload.currency,
                     total_price,
+                    tax_amount,
+                    tax_account,
                     payload.timestamp,
                     "fail",
                     reason,
@@ -3576,6 +4121,8 @@ async def shop_sell(payload: ShopSellPayload):
         "qty": payload.qty,
         "currency": payload.currency,
         "total_price": total_price,
+        "tax_amount": tax_amount,
+        "tax_account": tax_account,
         "result": "success" if success else "error",
         "reason": reason,
         "client_tx_id": payload.client_tx_id,

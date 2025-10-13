@@ -225,6 +225,10 @@ public class ShopGuiManager {
         }
     }
 
+    public LumineEconomyBridge getPlugin() {
+        return plugin;
+    }
+
     private void cancelPrompt(UUID playerId, boolean runCancel) {
         ChatPrompt prompt = prompts.remove(playerId);
         if (prompt != null) {
@@ -1942,7 +1946,7 @@ public class ShopGuiManager {
             payload.addProperty("upper_threshold", Math.max(0, newConfig.getUpperThreshold()));
             payload.addProperty("high_price", Math.max(0, newConfig.getHighPrice()));
             payload.addProperty("low_price", Math.max(0, newConfig.getLowPrice()));
-            postJson(player, "/api/shop/set_autoprice", payload, json -> {
+            postJson(player, "/api/shop/autoprice", payload, json -> {
                 String status = json.has("status") ? json.get("status").getAsString() : "error";
                 if ("success".equalsIgnoreCase(status)) {
                     info.setAutoprice(newConfig);

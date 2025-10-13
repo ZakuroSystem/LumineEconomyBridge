@@ -34,7 +34,7 @@
   <h2>経済の基本操作</h2>
   <ul>
     <li><code>/le wallet</code> <button class="copy" data-copy="/le wallet">copy</button> – 自分の全通貨残高を表示。未登録ならアカウントを自動作成。</li>
-    <li><code>/le pay &lt;player&gt; &lt;amount&gt; [currency]</code> <button class="copy" data-copy="/le pay ">copy</button> – 自分の資金から指定プレイヤーへ送金。通貨省略時はデフォルト通貨。</li>
+    <li><code>/le pay &lt;player&gt; &lt;amount&gt; [currency] [reference]</code> <button class="copy" data-copy="/le pay ">copy</button> – 自分の資金から指定プレイヤーへ送金。通貨省略時はデフォルト通貨。`[reference]` を付けると外部決済の識別子として記録されます。</li>
     <li><code>/le deposit &lt;src&gt; &lt;dst&gt; &lt;currency&gt; &lt;amount&gt;</code> <button class="copy" data-copy="/le deposit ">copy</button> – srcアカウントからdstへ資金を移動（理由: deposit）。</li>
     <li><code>/le withdraw &lt;src&gt; &lt;dst&gt; &lt;currency&gt; &lt;amount&gt;</code> <button class="copy" data-copy="/le withdraw ">copy</button> – srcからdstへ資金を移動（理由: withdraw）。</li>
     <li><code>/le transfer &lt;src&gt; &lt;dst&gt; &lt;currency&gt; &lt;amount&gt;</code> <button class="copy" data-copy="/le transfer ">copy</button> – 任意アカウント間で資金を移動。</li>
@@ -80,7 +80,7 @@
   <ul>
     <li><code>/le admin add &lt;player&gt;</code> <button class="copy" data-copy="/le admin add ">copy</button> – プレイヤーを管理者に昇格。</li>
     <li><code>/le account connect &lt;UserAccount&gt; &lt;SystemAccount&gt;</code> <button class="copy" data-copy="/le account connect ">copy</button> – ユーザーにシステムアカウントを紐付け、WebUIとコマンドから制御可能にする。</li>
-    <li><code>/le currency tax &lt;currency&gt; &lt;rate&gt;</code> <button class="copy" data-copy="/le currency tax ">copy</button> – 通貨ごとに税率と国庫アカウントを設定。</li>
+    <li><code>/le currency tax &lt;currency&gt; &lt;trade|transfer&gt; &lt;rate|off&gt; [on|off]</code> <button class="copy" data-copy="/le currency tax ">copy</button> – 通貨ごとに売買/送金税を個別に設定。</li>
     <li><code>/le shop list &lt;id&gt;</code> / <code>/le shop hide &lt;id&gt;</code> – ショップの掲載/非掲載を切替。</li>
   </ul>
 </section>

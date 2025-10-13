@@ -20,6 +20,7 @@ import shutil
 import requests
 import re
 import logging
+import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime
@@ -225,6 +226,15 @@ def parse_amount_field(value: str) -> int:
     return int(scaled)
 
 
+def format_amount_units(value: int) -> str:
+    places = current_decimal_places()
+    scale = Decimal(compute_scale(places))
+    quant = Decimal(1) / scale
+    dec = (Decimal(value) / scale).quantize(quant, rounding=ROUND_HALF_UP)
+    txt = f"{dec:.{places}f}" if places else f"{int(dec)}"
+    return txt.rstrip("0").rstrip(".") if "." in txt else txt
+
+
 def is_currency_manager(db: sqlite3.Connection, uuid: str, currency: str) -> bool:
     row = db.execute(
         "SELECT 1 FROM currency_managers WHERE currency=? AND uuid=?",
@@ -251,7 +261,8 @@ def init_db() -> None:
                 to_account TEXT,
                 currency TEXT NOT NULL,
                 amount INTEGER NOT NULL,
-                reason TEXT NOT NULL
+                reason TEXT NOT NULL,
+                reference TEXT
             );
             CREATE TABLE IF NOT EXISTS currencies (
                 name TEXT PRIMARY KEY,
@@ -259,7 +270,11 @@ def init_db() -> None:
                 description TEXT,
                 active INTEGER NOT NULL DEFAULT 1,
                 treasury TEXT,
-                tax_rate INTEGER NOT NULL DEFAULT 0
+                tax_rate INTEGER NOT NULL DEFAULT 0,
+                trade_tax_enabled INTEGER NOT NULL DEFAULT 0,
+                trade_tax_rate INTEGER NOT NULL DEFAULT 0,
+                transfer_tax_enabled INTEGER NOT NULL DEFAULT 0,
+                transfer_tax_rate INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS currency_managers (
                 currency TEXT NOT NULL,
@@ -320,6 +335,45 @@ def init_db() -> None:
             db.execute("ALTER TABLE currencies ADD COLUMN tax_rate INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        try:
+            db.execute(
+                "ALTER TABLE currencies ADD COLUMN trade_tax_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute(
+                "ALTER TABLE currencies ADD COLUMN trade_tax_rate INTEGER NOT NULL DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute(
+                "ALTER TABLE currencies ADD COLUMN transfer_tax_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute(
+                "ALTER TABLE currencies ADD COLUMN transfer_tax_rate INTEGER NOT NULL DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            db.execute("ALTER TABLE transactions ADD COLUMN reference TEXT")
+        except sqlite3.OperationalError:
+            pass
+        db.execute(
+            """
+            UPDATE currencies
+            SET transfer_tax_rate=tax_rate,
+                transfer_tax_enabled=CASE WHEN tax_rate>0 THEN 1 ELSE transfer_tax_enabled END,
+                tax_rate=0
+            WHERE tax_rate>0
+                AND transfer_tax_rate=0
+                AND transfer_tax_enabled=0
+            """
+        )
         db.execute(
             "CREATE TABLE IF NOT EXISTS currency_managers (currency TEXT NOT NULL, uuid TEXT NOT NULL, PRIMARY KEY(currency, uuid))"
         )
@@ -655,7 +709,7 @@ def transactions():
         sql = f"""
             SELECT t.id, t.timestamp, t.from_account, t.to_account,
                    fn.name AS from_name, tn.name AS to_name,
-                   t.currency, t.amount, t.reason
+                   t.currency, t.amount, t.reason, t.reference
             FROM transactions t
             LEFT JOIN name_index fn ON fn.uuid = t.from_account
             LEFT JOIN name_index tn ON tn.uuid = t.to_account
@@ -850,8 +904,8 @@ def adjust():
             from_acc = None if delta >= 0 else uuid
             to_acc = uuid if delta >= 0 else None
             cur.execute(
-                "INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason) VALUES (?,?,?,?,?,?)",
-                (ts, from_acc, to_acc, currency, abs(delta), reason),
+                "INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason, reference) VALUES (?,?,?,?,?,?,?)",
+                (ts, from_acc, to_acc, currency, abs(delta), reason, None),
             )
             db.commit()
         flash("Balance adjusted")
@@ -976,11 +1030,21 @@ def currency_manage():
                     or is_currency_manager(db, g.user["uuid"], cname)
                 ):
                     abort(403)
-                try:
-                    tax = Decimal(request.form.get("tax", "0"))
-                except InvalidOperation:
-                    tax = Decimal(0)
-                tax_int = int((tax * 10).to_integral_value(rounding=ROUND_HALF_UP))
+                def parse_rate(field: str) -> int:
+                    raw = request.form.get(field, "0")
+                    try:
+                        value = Decimal(raw)
+                    except InvalidOperation:
+                        value = Decimal(0)
+                    rate_int = int(
+                        (value * 10).to_integral_value(rounding=ROUND_HALF_UP)
+                    )
+                    return max(rate_int, 0)
+
+                trade_rate = parse_rate("trade_tax")
+                transfer_rate = parse_rate("transfer_tax")
+                trade_enabled = 1 if request.form.get("trade_enabled") else 0
+                transfer_enabled = 1 if request.form.get("transfer_enabled") else 0
                 tre_name = request.form.get("treasury", "").strip().lower()
                 tre_uuid = None
                 if tre_name:
@@ -988,18 +1052,134 @@ def currency_manage():
                     if row:
                         tre_uuid = row["uuid"]
                 db.execute(
-                    "UPDATE currencies SET tax_rate=?, treasury=? WHERE name=?",
-                    (tax_int, tre_uuid, cname),
+                    """
+                    UPDATE currencies
+                    SET trade_tax_rate=?,
+                        trade_tax_enabled=?,
+                        transfer_tax_rate=?,
+                        transfer_tax_enabled=?,
+                        treasury=?
+                    WHERE name=?
+                    """,
+                    (
+                        trade_rate,
+                        trade_enabled,
+                        transfer_rate,
+                        transfer_enabled,
+                        tre_uuid,
+                        cname,
+                    ),
                 )
                 db.commit()
                 return redirect(url_for("currency_manage"))
+            elif op in {"mint", "burn"}:
+                if not (
+                    g.user["is_admin"]
+                    and session.get("admin_mode", False)
+                    or is_currency_manager(db, g.user["uuid"], cname)
+                ):
+                    abort(403)
+                target_raw = request.form.get("target", "").strip()
+                amount_raw = request.form.get("amount", "").strip()
+                if not target_raw:
+                    flash("Account name is required")
+                    return redirect(url_for("currency_manage"))
+                try:
+                    amount = parse_amount_field(amount_raw)
+                except ValueError:
+                    flash("Amount must be a number")
+                    return redirect(url_for("currency_manage"))
+                if amount <= 0:
+                    flash("Amount must be positive")
+                    return redirect(url_for("currency_manage"))
+
+                target_uuid = None
+                target_label = target_raw
+                try:
+                    parsed_uuid = str(uuid.UUID(target_raw))
+                except ValueError:
+                    row = db.execute(
+                        "SELECT uuid FROM name_index WHERE name=?",
+                        (target_raw.lower(),),
+                    ).fetchone()
+                    if row:
+                        target_uuid = row["uuid"]
+                    else:
+                        flash("Account not found")
+                        return redirect(url_for("currency_manage"))
+                else:
+                    target_uuid = parsed_uuid
+                    name_row = db.execute(
+                        "SELECT name FROM name_index WHERE uuid=?",
+                        (parsed_uuid,),
+                    ).fetchone()
+                    if name_row and name_row["name"]:
+                        target_label = name_row["name"]
+
+                db.execute(
+                    "INSERT OR IGNORE INTO accounts(uuid, currency, balance) VALUES (?,?,0)",
+                    (target_uuid, cname),
+                )
+                row = db.execute(
+                    "SELECT balance FROM accounts WHERE uuid=? AND currency=?",
+                    (target_uuid, cname),
+                ).fetchone()
+                current_balance = row["balance"] if row else 0
+                delta = amount if op == "mint" else -min(amount, current_balance)
+                if delta == 0:
+                    flash("Account has no balance to confiscate" if op == "burn" else "No change applied")
+                    return redirect(url_for("currency_manage"))
+
+                new_balance = current_balance + delta
+                db.execute(
+                    "UPDATE accounts SET balance=? WHERE uuid=? AND currency=?",
+                    (new_balance, target_uuid, cname),
+                )
+                ts = int(time.time())
+                db.execute(
+                    "INSERT INTO transactions(timestamp, from_account, to_account, currency, amount, reason, reference) VALUES (?,?,?,?,?,?,?)",
+                    (
+                        ts,
+                        None if delta > 0 else target_uuid,
+                        target_uuid if delta > 0 else None,
+                        cname,
+                        abs(delta),
+                        "mint" if delta > 0 else "burn",
+                        None,
+                    ),
+                )
+                db.commit()
+                action_word = "issued" if delta > 0 else "confiscated"
+                flash(
+                    f"{action_word.capitalize()} {format_amount_units(abs(delta))} {cname} for {target_label}"
+                )
+                return redirect(url_for("currency_manage"))
         if g.user["is_admin"] and session.get("admin_mode", False):
             rows = db.execute(
-                "SELECT c.name, c.tax_rate, n.name AS treasury_name FROM currencies c LEFT JOIN name_index n ON n.uuid=c.treasury"
+                """
+                SELECT c.name,
+                       c.trade_tax_rate,
+                       c.trade_tax_enabled,
+                       c.transfer_tax_rate,
+                       c.transfer_tax_enabled,
+                       n.name AS treasury_name
+                FROM currencies c
+                LEFT JOIN name_index n ON n.uuid=c.treasury
+                """
             ).fetchall()
         else:
             rows = db.execute(
-                "SELECT c.name, c.tax_rate, n.name AS treasury_name FROM currencies c JOIN currency_managers m ON m.currency=c.name AND m.uuid=? LEFT JOIN name_index n ON n.uuid=c.treasury",
+                """
+                SELECT c.name,
+                       c.trade_tax_rate,
+                       c.trade_tax_enabled,
+                       c.transfer_tax_rate,
+                       c.transfer_tax_enabled,
+                       n.name AS treasury_name
+                FROM currencies c
+                JOIN currency_managers m ON m.currency=c.name AND m.uuid=?
+                LEFT JOIN name_index n ON n.uuid=c.treasury
+                """,
                 (g.user["uuid"],),
             ).fetchall()
         currencies = []
@@ -1011,9 +1191,15 @@ def currency_manage():
             currencies.append(
                 {
                     "name": r["name"],
-                    "tax_rate": r["tax_rate"],
+                    "trade_tax_rate": r["trade_tax_rate"],
+                    "trade_tax_enabled": bool(r["trade_tax_enabled"]),
+                    "transfer_tax_rate": r["transfer_tax_rate"],
+                    "transfer_tax_enabled": bool(r["transfer_tax_enabled"]),
                     "treasury_name": r["treasury_name"],
                     "managers": [m["name"] for m in mgrs],
+                    "can_manage": g.user["is_admin"]
+                    and session.get("admin_mode", False)
+                    or is_currency_manager(db, g.user["uuid"], r["name"]),
                 }
             )
     return render_template("currency_manage.html", currencies=currencies)
@@ -1127,14 +1313,19 @@ def shop_detail(shop_id: str):
             )
         sales = db.execute(
             """
-            SELECT timestamp, buyer_uuid, item_key, qty, currency, total_price
+            SELECT timestamp, buyer_uuid, item_key, qty, currency, total_price, tax_amount
             FROM shop_tx WHERE shop_id=? AND result='success'
             ORDER BY id DESC LIMIT 100
             """,
             (shop_id,),
         ).fetchall()
     sales_fmt = [
-        {**dict(r), "total_price": r["total_price"] / scale} for r in sales
+        {
+            **dict(r),
+            "total_price": r["total_price"] / scale,
+            "tax_amount": r["tax_amount"] / scale,
+        }
+        for r in sales
     ]
     return render_template("shop_detail.html", shop=shop, items=items, sales=sales_fmt)
 
@@ -1309,13 +1500,20 @@ def portal_shop(shop_id: str):
             )
         sales = db.execute(
             """
-            SELECT timestamp, buyer_uuid, item_key, qty, currency, total_price
+            SELECT timestamp, buyer_uuid, item_key, qty, currency, total_price, tax_amount
             FROM shop_tx WHERE shop_id=? AND result='success'
             ORDER BY id DESC LIMIT 100
             """,
             (shop_id,),
         ).fetchall()
-        sales = [{**dict(r), "total_price": r["total_price"] / scale} for r in sales]
+        sales = [
+            {
+                **dict(r),
+                "total_price": r["total_price"] / scale,
+                "tax_amount": r["tax_amount"] / scale,
+            }
+            for r in sales
+        ]
         series = db.execute(
             """
             SELECT strftime('%Y-%m-%d', timestamp, 'unixepoch') AS day, SUM(total_price) total
@@ -1515,6 +1713,118 @@ def analytics():
                 {"label": "Balance", "data": [r["total"] for r in top_rows]}
             ],
         }
+        shop_rank_rows = db.execute(
+            """
+            SELECT st.shop_id,
+                   s.owner_uuid,
+                   ni.name AS owner_name,
+                   COUNT(*) AS total_count,
+                   SUM(CASE WHEN st.tx_type='buy' THEN 1 ELSE 0 END) AS buy_count,
+                   SUM(CASE WHEN st.tx_type='sell' THEN 1 ELSE 0 END) AS sell_count
+            FROM shop_tx st
+            LEFT JOIN shops s ON st.shop_id = s.shop_id
+            LEFT JOIN name_index ni ON ni.uuid = s.owner_uuid
+            WHERE st.result='success'
+            GROUP BY st.shop_id
+            ORDER BY total_count DESC
+            LIMIT 10
+            """
+        ).fetchall()
+        shop_labels = [r["shop_id"] for r in shop_rank_rows]
+        shop_rank = {
+            "labels": shop_labels,
+            "datasets": [
+                {
+                    "label": "Buys",
+                    "data": [r["buy_count"] for r in shop_rank_rows],
+                    "backgroundColor": "#0d6efd",
+                },
+                {
+                    "label": "Sells",
+                    "data": [r["sell_count"] for r in shop_rank_rows],
+                    "backgroundColor": "#20c997",
+                },
+            ],
+        }
+        top_ids = [r["shop_id"] for r in shop_rank_rows]
+        volume_map: Dict[str, List[str]] = {shop_id: [] for shop_id in top_ids}
+        if top_ids:
+            placeholders = ",".join(["?"] * len(top_ids))
+            volume_rows = db.execute(
+                f"""
+                SELECT shop_id,
+                       currency,
+                       SUM(CASE WHEN tx_type='buy' THEN total_price ELSE 0 END) AS buy_volume,
+                       SUM(CASE WHEN tx_type='sell' THEN total_price ELSE 0 END) AS sell_volume
+                FROM shop_tx
+                WHERE result='success' AND shop_id IN ({placeholders})
+                GROUP BY shop_id, currency
+                """,
+                top_ids,
+            ).fetchall()
+            for vr in volume_rows:
+                buy_volume = vr["buy_volume"] or 0
+                sell_volume = vr["sell_volume"] or 0
+                total_volume = buy_volume + sell_volume
+                parts: List[str] = []
+                if buy_volume:
+                    parts.append(f"buy {format_amount_units(buy_volume)}")
+                if sell_volume:
+                    parts.append(f"sell {format_amount_units(sell_volume)}")
+                detail = f" ({', '.join(parts)})" if parts else ""
+                volume_map.setdefault(vr["shop_id"], []).append(
+                    f"{vr['currency']} {format_amount_units(total_volume)}{detail}"
+                )
+        shop_table = []
+        owner_labels = {
+            r["shop_id"]: (r["owner_name"] or r["owner_uuid"] or "—")
+            for r in shop_rank_rows
+        }
+        for r in shop_rank_rows:
+            volumes = volume_map.get(r["shop_id"], [])
+            shop_table.append(
+                {
+                    "shop_id": r["shop_id"],
+                    "owner": owner_labels.get(r["shop_id"], "—"),
+                    "total": r["total_count"],
+                    "buys": r["buy_count"],
+                    "sells": r["sell_count"],
+                    "volume_display": ", ".join(volumes) if volumes else "—",
+                }
+            )
+        top_daily_ids = top_ids[:5]
+        shop_daily = {"labels": [], "datasets": []}
+        if top_daily_ids:
+            placeholders = ",".join(["?"] * len(top_daily_ids))
+            daily_rows = db.execute(
+                f"""
+                SELECT shop_id,
+                       date(timestamp,'unixepoch') AS day,
+                       COUNT(*) AS cnt
+                FROM shop_tx
+                WHERE result='success' AND shop_id IN ({placeholders})
+                GROUP BY shop_id, day
+                ORDER BY day
+                """,
+                top_daily_ids,
+            ).fetchall()
+            day_labels = sorted({row["day"] for row in daily_rows})
+            day_idx = {day: i for i, day in enumerate(day_labels)}
+            series: Dict[str, List[int]] = {
+                shop_id: [0] * len(day_labels) for shop_id in top_daily_ids
+            }
+            for row in daily_rows:
+                series[row["shop_id"]][day_idx[row["day"]]] = row["cnt"]
+            shop_daily = {
+                "labels": day_labels,
+                "datasets": [
+                    {
+                        "label": shop_id,
+                        "data": series[shop_id],
+                    }
+                    for shop_id in top_daily_ids
+                ],
+            }
         heat = [[0] * 24 for _ in range(7)]
         heat_rows = db.execute(
             "SELECT strftime('%w',timestamp,'unixepoch') d, strftime('%H',timestamp,'unixepoch') h, COUNT(*) c FROM transactions GROUP BY d,h"
@@ -1532,6 +1842,9 @@ def analytics():
         supply_json=json.dumps(supply),
         tx_json=json.dumps(tx),
         top_json=json.dumps(top),
+        shop_rank_json=json.dumps(shop_rank),
+        shop_daily_json=json.dumps(shop_daily),
+        top_shops=shop_table,
         heat=heat,
         max_heat=max_heat,
     )

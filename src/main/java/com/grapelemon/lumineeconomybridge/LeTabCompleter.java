@@ -100,12 +100,20 @@ public class LeTabCompleter implements TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-              return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo", "help", "lang", "backup", "restore", "weblink", "shop", "pay", "wallet")
+              return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo", "help", "lang", "backup", "restore", "weblink", "shop", "pay", "wallet", "api")
                       .filter(s -> s.startsWith(args[0].toLowerCase()))
                       .toList();
         }
         if (args.length == 2) {
             String first = args[0].toLowerCase();
+            if (first.equals("api")) {
+                List<String> names = new ArrayList<>();
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    names.add(p.getName());
+                }
+                names.removeIf(n -> !n.toLowerCase().startsWith(args[1].toLowerCase()));
+                return names;
+            }
             if (first.equals("deposit") || first.equals("withdraw") || first.equals("transfer") || first.equals("setbalance") || first.equals("history")) {
                 List<String> names = new ArrayList<>();
                 for (Player p : Bukkit.getOnlinePlayers()) {
@@ -167,6 +175,19 @@ public class LeTabCompleter implements TabCompleter {
             if (first.equals("currency") && args[1].equalsIgnoreCase("default")) {
                 return Collections.singletonList("<id>");
             }
+            if (first.equals("currency") && args[1].equalsIgnoreCase("manager")) {
+                return Stream.of("add", "remove")
+                        .filter(s -> s.startsWith(args[2].toLowerCase()))
+                        .collect(Collectors.toList());
+            }
+            if (first.equals("currency") && args[1].equalsIgnoreCase("tax")) {
+                return Stream.of("trade", "transfer")
+                        .filter(s -> s.startsWith(args[2].toLowerCase()))
+                        .collect(Collectors.toList());
+            }
+            if (first.equals("currency") && args[1].equalsIgnoreCase("treasury")) {
+                return Collections.singletonList("<account>");
+            }
             if (first.equals("money") && (args[1].equalsIgnoreCase("give") || args[1].equalsIgnoreCase("take") || args[1].equalsIgnoreCase("pay"))) {
                 List<String> names = new ArrayList<>();
                 for (Player p : Bukkit.getOnlinePlayers()) {
@@ -221,6 +242,15 @@ public class LeTabCompleter implements TabCompleter {
                 }
                 names.removeIf(n -> !n.toLowerCase().startsWith(args[3].toLowerCase()));
                 return names;
+            }
+            if (args[0].equalsIgnoreCase("currency") && args[1].equalsIgnoreCase("manager")
+                    && (args[2].equalsIgnoreCase("add") || args[2].equalsIgnoreCase("remove"))) {
+                return Collections.singletonList("<currency>");
+            }
+            if (args[0].equalsIgnoreCase("currency") && args[1].equalsIgnoreCase("tax")) {
+                return Stream.of("0.0", "off")
+                        .filter(s -> s.startsWith(args[3].toLowerCase()))
+                        .collect(Collectors.toList());
             }
             if (args[0].equalsIgnoreCase("money") && args[1].equalsIgnoreCase("top")) {
                 return Collections.singletonList("1");
@@ -291,11 +321,27 @@ public class LeTabCompleter implements TabCompleter {
             }
         }
         if (args.length == 5) {
+            if (args[0].equalsIgnoreCase("currency") && args[1].equalsIgnoreCase("tax")) {
+                return Stream.of("on", "off")
+                        .filter(s -> s.startsWith(args[4].toLowerCase()))
+                        .collect(Collectors.toList());
+            }
+        }
+        if (args.length == 5) {
             if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("partner")) {
                 return Bukkit.getOnlinePlayers().stream()
                         .map(Player::getName)
                         .filter(n -> n.toLowerCase().startsWith(args[4].toLowerCase()))
                         .collect(Collectors.toList());
+            }
+            if (args[0].equalsIgnoreCase("currency") && args[1].equalsIgnoreCase("manager")
+                    && (args[2].equalsIgnoreCase("add") || args[2].equalsIgnoreCase("remove"))) {
+                List<String> names = new ArrayList<>();
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    names.add(p.getName());
+                }
+                names.removeIf(n -> !n.toLowerCase().startsWith(args[4].toLowerCase()));
+                return names;
             }
         }
         return Collections.emptyList();

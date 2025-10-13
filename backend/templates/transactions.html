@@ -24,7 +24,7 @@
 <table id="txTable" class="table table-striped datatable">
   <thead>
     <tr>
-      <th>ID</th><th>Time</th><th>From</th><th>To</th><th>Currency</th><th>Amount</th><th>Type</th><th>Reason</th>
+      <th>ID</th><th>Time</th><th>From</th><th>To</th><th>Currency</th><th>Amount</th><th>Type</th><th>Reason</th><th>Reference</th>
     </tr>
   </thead>
   <tbody>
@@ -39,6 +39,7 @@
       <td>{{ tx['amount'] }}</td>
       <td>{{ type }}</td>
       <td>{{ tx['reason'] }}</td>
+      <td>{{ tx['reference'] or '-' }}</td>
     </tr>
     {% endfor %}
   </tbody>
