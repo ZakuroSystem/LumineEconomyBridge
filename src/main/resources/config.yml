@@ -14,5 +14,10 @@ vault:
   enabled: false
   currency: "thy"
 
+protect:
+  price_per_block: "1"
+  collect_account: "treasury"
+  currency: ""
+
 currency:
   decimal_places: 2

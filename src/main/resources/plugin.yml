@@ -10,8 +10,15 @@ commands:
     usage: /le <content> | /le rewrite | /le start | /le stop | /le reload
     permission: lumineeconomy.le
     aliases: [lumineeconomy]
+  let:
+    description: Territory utilities for Lumine Economy
+    usage: /let protect add [id]
+    permission: lumineeconomy.let
+    aliases: [lep]
 permissions:
   lumineeconomy.le:
     default: true
   lumineeconomy.admin:
     default: op
+  lumineeconomy.let:
+    default: true

@@ -18,6 +18,8 @@ import com.grapelemon.lumineeconomybridge.cash.PaperCurrencyService;
 import com.grapelemon.lumineeconomybridge.cash.PaperNoteListener;
 import com.grapelemon.lumineeconomybridge.guide.GuideBookListener;
 import com.grapelemon.lumineeconomybridge.vault.VaultEconomyBridge;
+import com.grapelemon.lumineeconomybridge.protect.ProtectManager;
+import com.grapelemon.lumineeconomybridge.protect.ProtectListener;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -57,6 +59,7 @@ public class LumineEconomyBridge extends JavaPlugin {
     private VaultEconomyBridge vaultEconomy;
     private GuideBookListener guideBookListener;
     private ShopGuiManager shopGuiManager;
+    private ProtectManager protectManager;
 
     private String baseUrl;
     private int timeout = 2000;
@@ -91,10 +94,14 @@ public class LumineEconomyBridge extends JavaPlugin {
         executor = new LeCommandExecutor(this);
         getCommand("le").setExecutor(executor);
         getCommand("le").setTabCompleter(new LeTabCompleter(this));
+        protectManager = new ProtectManager(this);
+        getCommand("let").setExecutor(new LetCommandExecutor(protectManager));
+        getCommand("let").setTabCompleter(new LetTabCompleter(protectManager));
         getServer().getPluginManager().registerEvents(new PlayerListener(this), this);
         getServer().getPluginManager().registerEvents(new ShopListener(this), this);
         shopGuiManager = new ShopGuiManager(this);
         getServer().getPluginManager().registerEvents(new ShopGuiListener(shopGuiManager), this);
+        getServer().getPluginManager().registerEvents(new ProtectListener(this, protectManager), this);
         guideBookListener = new GuideBookListener(this);
         getServer().getPluginManager().registerEvents(guideBookListener, this);
         guideBookListener.distributeToOnline();
@@ -236,6 +243,9 @@ public class LumineEconomyBridge extends JavaPlugin {
     public void reloadBridge() {
         reloadConfig();
         loadDecimalConfig();
+        if (protectManager != null) {
+            protectManager.reload();
+        }
         baseUrl = normalizeBaseUrl(getConfig().getString("api.base_url", baseUrl));
         timeout = getConfig().getInt("api.timeout", timeout);
         Lang.load(this);
