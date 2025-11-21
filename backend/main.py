@@ -1812,6 +1812,16 @@ async def auto_backup_loop():
         trim_backups(get_setting("auto_backup_keep", 10))
 
 
+def refresh_shop_activity_on_startup() -> None:
+    now = int(time.time())
+    with transaction() as cur:
+        cur.execute(
+            "UPDATE shops SET last_activity_at=? WHERE status='active'",
+            (now,),
+        )
+    logging.info("Refreshed shop activity timestamps on startup")
+
+
 async def suspend_loop():
     while True:
         await asyncio.sleep(3600)
@@ -1825,6 +1835,7 @@ async def suspend_loop():
 async def lifespan(app: FastAPI):
     asyncio.create_task(auto_backup_loop())
     asyncio.create_task(suspend_loop())
+    refresh_shop_activity_on_startup()
     yield
 
 app.router.lifespan_context = lifespan

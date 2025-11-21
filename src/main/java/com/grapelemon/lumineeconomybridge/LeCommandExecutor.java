@@ -123,6 +123,13 @@ public class LeCommandExecutor implements CommandExecutor {
             return true;
         }
 
+        if (!hasBypass && args.length > 0 && requiresWalletAcknowledgement(sub)) {
+            if (!plugin.hasAcknowledgedWallet(p.getUniqueId())) {
+                p.sendMessage(ChatColor.RED + "経済機能を使う前に /le wallet を実行してください / Please run /le wallet before using economy features" + ChatColor.RESET);
+                return true;
+            }
+        }
+
         if (args.length > 0) {
             switch (args[0].toLowerCase()) {
                 case "rewrite" -> {
@@ -1182,6 +1189,7 @@ public class LeCommandExecutor implements CommandExecutor {
         payload.put("command", "/" + String.join(" ", args));
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         if (args[0].equalsIgnoreCase("wallet")) {
+            plugin.markWalletAcknowledged(p.getUniqueId());
             Map<String, Integer> snapshot = ScoreboardUtil.readAllSync(p);
             if (!snapshot.isEmpty()) {
                 payload.put("scoreboard", new HashMap<>(snapshot));
@@ -1273,6 +1281,14 @@ public class LeCommandExecutor implements CommandExecutor {
 
         p.sendActionBar(Lang.get("send-pending"));
         return true;
+    }
+
+    private boolean requiresWalletAcknowledgement(String sub) {
+        if (sub.isBlank()) return false;
+        return switch (sub.toLowerCase()) {
+            case "wallet", "help", "lang", "start", "stop", "reload", "api", "admin", "weblink" -> false;
+            default -> true;
+        };
     }
 
     private void sendHelp(Player p) {
