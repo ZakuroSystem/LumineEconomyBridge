@@ -47,6 +47,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.UUID;
+import java.io.FileWriter;
+import java.io.BufferedWriter;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.BufferedReader;
 
 public class LumineEconomyBridge extends JavaPlugin {
 
@@ -79,6 +85,7 @@ public class LumineEconomyBridge extends JavaPlugin {
     private Map<String, Boolean> commandPermissions = new HashMap<>();
     private PaperCurrencyService cashService;
     private final Set<String> bypassUsers = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> walletAcknowledged = ConcurrentHashMap.newKeySet();
 
     @Override
     public void onEnable() {
@@ -88,6 +95,7 @@ public class LumineEconomyBridge extends JavaPlugin {
         Lang.load(this);
         saveResource("permission_confg.txt", false);
         loadPermissions();
+        loadWalletAcknowledged();
         baseUrl = normalizeBaseUrl(getConfig().getString("api.base_url", "http://127.0.0.1:8000"));
         timeout = getConfig().getInt("api.timeout", timeout);
 
@@ -236,6 +244,7 @@ public class LumineEconomyBridge extends JavaPlugin {
         if (shopGuiManager != null) {
             shopGuiManager.shutdown();
         }
+        saveWalletAcknowledged();
         snapshotService = null;
         tileDebounceManager = null;
     }
@@ -250,8 +259,59 @@ public class LumineEconomyBridge extends JavaPlugin {
         timeout = getConfig().getInt("api.timeout", timeout);
         Lang.load(this);
         loadPermissions();
+        loadWalletAcknowledged();
         stopBridge();
         startBridge();
+    }
+
+    private void loadWalletAcknowledged() {
+        walletAcknowledged.clear();
+        File file = new File(getDataFolder(), "wallet_ack.txt");
+        if (!file.exists()) {
+            return;
+        }
+        try (BufferedReader reader = new BufferedReader(new FileReader(file, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) continue;
+                try {
+                    walletAcknowledged.add(UUID.fromString(trimmed));
+                } catch (IllegalArgumentException ignored) {
+                    getLogger().warning("Ignoring invalid wallet ack entry: " + trimmed);
+                }
+            }
+        } catch (FileNotFoundException ignored) {
+        } catch (IOException e) {
+            getLogger().warning("Failed to load wallet acknowledgements: " + e.getMessage());
+        }
+    }
+
+    private synchronized void saveWalletAcknowledged() {
+        File dir = getDataFolder();
+        if (!dir.exists() && !dir.mkdirs()) {
+            getLogger().warning("Failed to create data folder for wallet acknowledgements");
+            return;
+        }
+        File file = new File(dir, "wallet_ack.txt");
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, false))) {
+            for (UUID id : walletAcknowledged) {
+                writer.write(id.toString());
+                writer.newLine();
+            }
+        } catch (IOException e) {
+            getLogger().warning("Failed to save wallet acknowledgements: " + e.getMessage());
+        }
+    }
+
+    public boolean hasAcknowledgedWallet(UUID playerId) {
+        return walletAcknowledged.contains(playerId);
+    }
+
+    public void markWalletAcknowledged(UUID playerId) {
+        if (walletAcknowledged.add(playerId)) {
+            saveWalletAcknowledged();
+        }
     }
 
     private String normalizeBaseUrl(String raw) {
