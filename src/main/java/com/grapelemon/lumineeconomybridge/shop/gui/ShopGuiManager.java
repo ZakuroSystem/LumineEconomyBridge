@@ -112,6 +112,7 @@ public class ShopGuiManager {
         private String tradeMode = "both";
         private boolean listed = true;
         private String accountUuid;
+        private String sortMode = "created";
         private final List<String> owners = new ArrayList<>();
         private final List<ShopEntry> entries = new ArrayList<>();
 
@@ -678,6 +679,9 @@ public class ShopGuiManager {
                     if (json.has("trade_mode") && !json.get("trade_mode").isJsonNull()) {
                         data.tradeMode = json.get("trade_mode").getAsString();
                     }
+                    if (json.has("sort_mode") && !json.get("sort_mode").isJsonNull()) {
+                        data.sortMode = json.get("sort_mode").getAsString();
+                    }
                     if (json.has("listed")) {
                         data.listed = json.get("listed").getAsBoolean();
                     }
@@ -1103,6 +1107,10 @@ public class ShopGuiManager {
                     data.listed ? ChatColor.GREEN + "Listed" : ChatColor.RED + "Hidden",
                     ChatColor.GRAY + (data.listed ? "Click to hide from catalog" : "Click to publish")));
             actions.put(12, () -> toggleListing(data));
+            inv.setItem(13, button(Material.COMPASS, ChatColor.AQUA + "Sort: " + formatSortMode(data.sortMode),
+                    ChatColor.GRAY + "Cycle item ordering",
+                    ChatColor.YELLOW + "Registered \u2192 Name \u2192 Price \u2192 Stock"));
+            actions.put(13, () -> cycleSortMode(data));
             inv.setItem(14, button(Material.LEVER, ChatColor.AQUA + "Mode: " + data.tradeMode.toUpperCase(),
                     ChatColor.GRAY + "Toggle buy/sell permissions"));
             actions.put(14, () -> cycleTradeMode(data));
@@ -1129,6 +1137,7 @@ public class ShopGuiManager {
             lore.add(ChatColor.GRAY + "Status: " + ChatColor.YELLOW + data.status.toUpperCase());
             lore.add(ChatColor.GRAY + "Mode: " + ChatColor.YELLOW + data.tradeMode.toUpperCase());
             lore.add(ChatColor.GRAY + "Listed: " + (data.listed ? ChatColor.GREEN + "Yes" : ChatColor.RED + "No"));
+            lore.add(ChatColor.GRAY + "Sort: " + ChatColor.YELLOW + formatSortMode(data.sortMode));
             lore.add(ChatColor.GRAY + "Items: " + ChatColor.YELLOW + data.entries.size());
             return button(Material.PAPER, ChatColor.AQUA + "Overview", lore.toArray(new String[0]));
         }
@@ -1152,6 +1161,16 @@ public class ShopGuiManager {
                 return ChatColor.YELLOW + "Self";
             }
             return ChatColor.YELLOW + displayName(account);
+        }
+
+        private String formatSortMode(String mode) {
+            String normalized = mode == null ? "created" : mode.toLowerCase();
+            return switch (normalized) {
+                case "name" -> "Name";
+                case "price" -> "Price";
+                case "stock" -> "Stock";
+                default -> "Registered";
+            };
         }
 
         private String displayName(String raw) {
@@ -1224,6 +1243,35 @@ public class ShopGuiManager {
                 String status = json.has("status") ? json.get("status").getAsString() : "error";
                 if ("success".equalsIgnoreCase(status)) {
                     player.sendMessage(ChatColor.GREEN + (desired ? "Shop published / 掲載しました" : "Shop hidden / 非掲載にしました") + ChatColor.RESET);
+                    openShop(data.shopId);
+                } else {
+                    notifyFailure(player, json.has("reason") ? json.get("reason").getAsString() : "error");
+                    showShopDetails(data);
+                }
+            }, msg -> {
+                player.sendMessage(msg);
+                showShopDetails(data);
+            });
+        }
+
+        private void cycleSortMode(ShopData data) {
+            Player player = player();
+            if (player == null) return;
+            String mode = data.sortMode == null ? "created" : data.sortMode.toLowerCase();
+            String next = switch (mode) {
+                case "created" -> "name";
+                case "name" -> "price";
+                case "price" -> "stock";
+                default -> "created";
+            };
+            JsonObject payload = new JsonObject();
+            payload.addProperty("owner_uuid", player.getUniqueId().toString());
+            payload.addProperty("shop_id", data.shopId);
+            payload.addProperty("sort_mode", next);
+            postJson(player, "/api/shop/sort", payload, json -> {
+                String status = json.has("status") ? json.get("status").getAsString() : "error";
+                if ("success".equalsIgnoreCase(status)) {
+                    player.sendMessage(ChatColor.GREEN + "Sort order updated / 並び順を更新しました" + ChatColor.RESET);
                     openShop(data.shopId);
                 } else {
                     notifyFailure(player, json.has("reason") ? json.get("reason").getAsString() : "error");
@@ -2389,6 +2437,7 @@ public class ShopGuiManager {
             switch (reason) {
                 case "not_owner" -> message = "No permission / 権限がありません";
                 case "invalid_mode" -> message = "Invalid mode / 種別が不正です";
+                case "invalid_sort_mode" -> message = "Invalid sort / 並び順が不正です";
                 case "invalid_account" -> message = "Account not found / 口座が存在しません";
                 case "no_access" -> message = "Account access missing / 利用権がありません";
                 case "shop_not_buying" -> message = "Shop is not buying / 買取を行っていません";

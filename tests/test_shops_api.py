@@ -1367,3 +1367,85 @@ def test_account_ensure_creates_default_balance():
         assert rows
         for row in rows:
             assert row["balance"] == 0
+
+def test_shop_sort_modes_order_items():
+    with main.conn:
+        main.conn.execute("DELETE FROM shop_prices")
+        main.conn.execute("DELETE FROM shop_stock")
+        main.conn.execute("DELETE FROM shop_items")
+        main.conn.execute("DELETE FROM shop_owners")
+        main.conn.execute("DELETE FROM shops")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("sort-shop", "owner-sort", "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("sort-shop", "owner-sort"),
+        )
+        items = [
+            ("k1", "DIAMOND", "Banana", b"1"),
+            ("k2", "DIAMOND", "Apple", b"2"),
+            ("k3", "DIAMOND", "Carrot", b"3"),
+        ]
+        for key, material, name, blob in items:
+            main.conn.execute(
+                "INSERT INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+                (key, material, name, blob),
+            )
+        stocks = [
+            ("sort-shop", "k1", "Banana", 5, now),
+            ("sort-shop", "k2", "Apple", 10, now),
+            ("sort-shop", "k3", "Carrot", 2, now),
+        ]
+        for stock in stocks:
+            main.conn.execute(
+                "INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at) VALUES(?,?,?,?,?)",
+                stock,
+            )
+        prices = [
+            ("sort-shop", "k1", "coin", 300, 300),
+            ("sort-shop", "k2", "coin", 100, 100),
+            ("sort-shop", "k3", "coin", 200, 200),
+        ]
+        for price in prices:
+            main.conn.execute(
+                "INSERT INTO shop_prices(shop_id, item_key, currency, price, buy_price) VALUES(?,?,?,?,?)",
+                price,
+            )
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    with TestClient(app) as client:
+        resp = client.get("/api/shop/items", params={"shop_id": "sort-shop"})
+        assert resp.status_code == 200
+        data = resp.json()
+        names = [item["sale_name"] for item in data.get("items", [])]
+        assert names == ["Banana", "Apple", "Carrot"]
+
+        resp = client.post(
+            "/api/shop/sort",
+            headers=headers,
+            json={"owner_uuid": "owner-sort", "shop_id": "sort-shop", "sort_mode": "name"},
+        )
+        assert resp.status_code == 200
+        resp = client.get("/api/shop/items", params={"shop_id": "sort-shop"})
+        names = [item["sale_name"] for item in resp.json().get("items", [])]
+        assert names == ["Apple", "Banana", "Carrot"]
+
+        client.post(
+            "/api/shop/sort",
+            headers=headers,
+            json={"owner_uuid": "owner-sort", "shop_id": "sort-shop", "sort_mode": "price"},
+        )
+        resp = client.get("/api/shop/items", params={"shop_id": "sort-shop"})
+        names = [item["sale_name"] for item in resp.json().get("items", [])]
+        assert names == ["Apple", "Carrot", "Banana"]
+
+        client.post(
+            "/api/shop/sort",
+            headers=headers,
+            json={"owner_uuid": "owner-sort", "shop_id": "sort-shop", "sort_mode": "stock"},
+        )
+        resp = client.get("/api/shop/items", params={"shop_id": "sort-shop"})
+        names = [item["sale_name"] for item in resp.json().get("items", [])]
+        assert names == ["Apple", "Banana", "Carrot"]
