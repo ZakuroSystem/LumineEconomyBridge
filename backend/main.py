@@ -387,7 +387,8 @@ with conn:
             last_activity_at INTEGER NOT NULL,
             listed INTEGER NOT NULL DEFAULT 1,
             account_uuid TEXT,
-            trade_mode TEXT NOT NULL DEFAULT 'both'
+            trade_mode TEXT NOT NULL DEFAULT 'both',
+            sort_mode TEXT NOT NULL DEFAULT 'created'
         )
         """
     )
@@ -405,7 +406,16 @@ with conn:
         )
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute(
+            "ALTER TABLE shops ADD COLUMN sort_mode TEXT NOT NULL DEFAULT 'created'"
+        )
+    except sqlite3.OperationalError:
+        pass
     conn.execute("UPDATE shops SET account_uuid=owner_uuid WHERE account_uuid IS NULL")
+    conn.execute(
+        "UPDATE shops SET sort_mode='created' WHERE sort_mode IS NULL OR sort_mode=''"
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS shop_locations (
@@ -1161,6 +1171,12 @@ class ShopListingPayload(BaseModel):
     owner_uuid: str
     shop_id: str
     listed: bool
+
+
+class ShopSortPayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    sort_mode: str
 
 
 class AdminUserPayload(BaseModel):
@@ -3296,7 +3312,11 @@ async def shop_items(shop_id: str):
     start = time.time()
     with transaction() as cur:
         srow = cur.execute(
-            "SELECT owner_uuid,status,last_activity_at,trade_mode,listed,account_uuid FROM shops WHERE shop_id=?",
+            """
+            SELECT owner_uuid, status, last_activity_at, trade_mode, listed, account_uuid, sort_mode
+            FROM shops
+            WHERE shop_id=?
+            """,
             (shop_id,),
         ).fetchone()
         owners: List[str] = []
@@ -3332,10 +3352,18 @@ async def shop_items(shop_id: str):
                 "owners": owners,
                 "listed": bool(srow["listed"]),
                 "account_uuid": srow["account_uuid"],
+                "sort_mode": srow["sort_mode"] if srow["sort_mode"] else "created",
             }
         else:
+            sort_mode = (srow["sort_mode"] or "created").lower()
             rows = cur.execute(
-                "SELECT st.item_key, st.sale_name, st.stock, it.material, it.display_name, it.nbt_blob FROM shop_stock st JOIN shop_items it ON st.item_key=it.item_key WHERE st.shop_id=?",
+                """
+                SELECT st.rowid AS sort_index, st.item_key, st.sale_name, st.stock, it.material, it.display_name, it.nbt_blob
+                FROM shop_stock st
+                JOIN shop_items it ON st.item_key=it.item_key
+                WHERE st.shop_id=?
+                ORDER BY sort_index ASC
+                """,
                 (shop_id,),
             ).fetchall()
             items = []
@@ -3393,8 +3421,44 @@ async def shop_items(shop_id: str):
                         "nbt_blob": base64.b64encode(r["nbt_blob"]).decode("ascii"),
                         "stock": r["stock"],
                         "prices": prices,
+                        "_sort_index": r["sort_index"],
                     }
                 )
+            def sort_price(entry: Dict[str, Any]) -> int:
+                values: List[int] = []
+                for cfg in entry.get("prices", {}).values():
+                    if not isinstance(cfg, dict):
+                        continue
+                    sell = cfg.get("sell")
+                    buy = cfg.get("buy")
+                    if sell is not None:
+                        values.append(sell)
+                    elif buy is not None:
+                        values.append(buy)
+                return min(values) if values else 2 ** 31 - 1
+
+            if sort_mode == "name":
+                items.sort(key=lambda e: (str(e.get("sale_name", "")).lower(), e.get("_sort_index", 0)))
+            elif sort_mode == "price":
+                items.sort(
+                    key=lambda e: (
+                        sort_price(e),
+                        str(e.get("sale_name", "")).lower(),
+                        e.get("_sort_index", 0),
+                    )
+                )
+            elif sort_mode == "stock":
+                items.sort(
+                    key=lambda e: (
+                        -int(e.get("stock", 0)),
+                        str(e.get("sale_name", "")).lower(),
+                        e.get("_sort_index", 0),
+                    )
+                )
+            else:
+                items.sort(key=lambda e: e.get("_sort_index", 0))
+            for item in items:
+                item.pop("_sort_index", None)
             result = {
                 "status": "active",
                 "owner_uuid": srow["owner_uuid"],
@@ -3402,6 +3466,7 @@ async def shop_items(shop_id: str):
                 "trade_mode": srow["trade_mode"] if srow["trade_mode"] else "both",
                 "listed": bool(srow["listed"]),
                 "account_uuid": srow["account_uuid"],
+                "sort_mode": sort_mode,
                 "items": items,
             }
             if sale:
@@ -4939,6 +5004,52 @@ async def shop_mode(
     append_log(log_entry)
     if result == "success":
         return {"status": "success"}
+    return {"status": "error", "reason": reason}
+
+
+@app.post("/api/shop/sort")
+async def shop_sort(
+    payload: ShopSortPayload, _auth: None = Depends(ensure_plugin_request)
+):
+    start = time.time()
+    mode = payload.sort_mode.lower()
+    result = "success"
+    reason: Optional[str] = None
+    if mode not in {"created", "name", "price", "stock"}:
+        result = "error"
+        reason = "invalid_sort_mode"
+    else:
+        with transaction() as cur:
+            shop = cur.execute(
+                "SELECT status FROM shops WHERE shop_id=?",
+                (payload.shop_id,),
+            ).fetchone()
+            if not shop or shop["status"] != "active":
+                result = "error"
+                reason = "shop_not_found"
+            elif not is_shop_owner(cur, payload.shop_id, payload.owner_uuid):
+                result = "error"
+                reason = "not_owner"
+            else:
+                ts = int(time.time())
+                cur.execute(
+                    "UPDATE shops SET sort_mode=?, last_activity_at=? WHERE shop_id=?",
+                    (mode, ts, payload.shop_id),
+                )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry = {
+        "type": "shop_sort_mode",
+        "timestamp": int(time.time()),
+        "owner": payload.owner_uuid,
+        "shop_id": payload.shop_id,
+        "sort_mode": mode,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    if result == "success":
+        return {"status": "success", "sort_mode": mode}
     return {"status": "error", "reason": reason}
 
 
