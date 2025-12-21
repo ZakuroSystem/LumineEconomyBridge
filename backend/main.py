@@ -1839,14 +1839,9 @@ def refresh_shop_activity_on_startup() -> None:
 
 
 async def suspend_loop():
+    logging.info("Shop auto-suspension disabled; shops will remain active until manually updated")
     while True:
-        await asyncio.sleep(3600)
-        cutoff = int(time.time()) - 5 * 86400
-        with transaction() as cur:
-            cur.execute(
-                "UPDATE shops SET status='suspended' WHERE status='active' AND last_activity_at<?",
-                (cutoff,),
-            )
+        await asyncio.sleep(86400)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     asyncio.create_task(auto_backup_loop())
