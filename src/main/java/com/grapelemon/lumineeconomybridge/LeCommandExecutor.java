@@ -1190,10 +1190,6 @@ public class LeCommandExecutor implements CommandExecutor {
         payload.put("timestamp", System.currentTimeMillis() / 1000);
         if (args[0].equalsIgnoreCase("wallet")) {
             plugin.markWalletAcknowledged(p.getUniqueId());
-            Map<String, Integer> snapshot = ScoreboardUtil.readAllSync(p);
-            if (!snapshot.isEmpty()) {
-                payload.put("scoreboard", new HashMap<>(snapshot));
-            }
         }
         Location loc = p.getLocation();
         Map<String, Object> locMap = new HashMap<>();
