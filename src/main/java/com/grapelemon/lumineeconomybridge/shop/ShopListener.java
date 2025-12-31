@@ -3,6 +3,7 @@ package com.grapelemon.lumineeconomybridge.shop;
 import com.grapelemon.lumineeconomybridge.Lang;
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
+import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
@@ -38,6 +39,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.ChatColor;
+import org.bukkit.scoreboard.Scoreboard;
 import java.time.Instant;
 
 import java.io.IOException;
@@ -588,9 +590,7 @@ public class ShopListener implements Listener {
                                         String ik = gg.get("item_key").getAsString();
                                         int qty2 = gg.get("qty").getAsInt();
                                         if (si.getItemKey().equals(ik)) {
-                                            ItemStack stack = si.getRawItem().clone();
-                                            stack.setAmount(qty2);
-                                            p.getInventory().addItem(stack);
+                                            giveStackedItems(p, si.getRawItem(), qty2);
                                         }
                                     }
                                 });
@@ -628,31 +628,36 @@ public class ShopListener implements Listener {
         ItemStack preview = si.getRawItem().clone();
         inv.setItem(13, preview);
 
-        int[] buyAmounts = {100, 10, 1};
-        int[] buySlots = {10, 11, 12};
+        int[] buyAmounts = {1, 4, 16, 64, 256};
+        int[] buySlots = {0, 1, 2, 3, 4};
         for (int i = 0; i < buyAmounts.length; i++) {
-            addBuyButton(inv, menu, holder, si, buySlots[i], buyAmounts[i]);
+            addBuyButton(inv, menu, holder, si, p, buySlots[i], buyAmounts[i], false);
         }
+        int maxBuySlot = 5;
+        int maxBuyQty = computeMaxBuyQuantity(p, si);
+        addBuyButton(inv, menu, holder, si, p, maxBuySlot, maxBuyQty, true);
 
-        int[] sellAmounts = {1, 10, 100};
-        int[] sellSlots = {14, 15, 16};
+        int[] sellAmounts = {1, 4, 16, 64, 256};
+        int[] sellSlots = {18, 19, 20, 21, 22};
         for (int i = 0; i < sellAmounts.length; i++) {
-            addSellButton(inv, menu, holder, si, sellSlots[i], sellAmounts[i], p);
+            addSellButton(inv, menu, holder, si, sellSlots[i], sellAmounts[i], p, false);
         }
+        int sellAllSlot = 23;
+        addSellButton(inv, menu, holder, si, sellAllSlot, countMatchingItems(p, si), p, true);
 
         ItemStack back = new ItemStack(Material.BARRIER);
         ItemMeta bm = back.getItemMeta();
         bm.setDisplayName(ChatColor.RED + "Back / 戻る");
         bm.setLore(Collections.singletonList(ChatColor.GRAY + "Return to listings / 一覧に戻ります"));
         back.setItemMeta(bm);
-        int backSlot = 22;
+        int backSlot = 26;
         inv.setItem(backSlot, back);
         menu.setBackSlot(backSlot);
 
         p.openInventory(inv);
     }
 
-    private void addBuyButton(Inventory inv, ConfirmMenuHolder menu, ShopMenuHolder holder, ShopItem si, int slot, int qty) {
+    private void addBuyButton(Inventory inv, ConfirmMenuHolder menu, ShopMenuHolder holder, ShopItem si, Player p, int slot, int qty, boolean isMax) {
         String currency = si.firstSellCurrency();
         ShopItem.ShopPrice price = currency != null ? si.getPrices().get(currency) : null;
         Integer sellPrice = price != null ? price.getSellPrice() : null;
@@ -663,21 +668,41 @@ public class ShopListener implements Listener {
         if (currency == null || sellPrice == null || sellPrice <= 0) {
             errors.add("No sell price available / 販売価格が設定されていません");
         }
-        if (si.getStock() < qty) {
+        int availableQty = qty;
+        if (isMax) {
+            availableQty = qty;
+            if (availableQty <= 0) {
+                errors.add("Nothing to buy / 購入できる商品がありません");
+            }
+        }
+        int carryCapacity = computeMaxCarry(p, si);
+        if (!isMax && availableQty > carryCapacity) {
+            errors.add("Not enough inventory space / インベントリの空きが不足しています");
+        }
+        if (si.getStock() < availableQty) {
             errors.add("Not enough stock / 在庫が不足しています");
+        }
+
+        if (currency != null && sellPrice != null && sellPrice > 0) {
+            int balance = getPlayerBalance(p, currency);
+            if (!isMax && multiplyPrice(sellPrice, availableQty) > balance) {
+                errors.add("Insufficient funds / 所持金が不足しています");
+            }
         }
 
         boolean enabled = errors.isEmpty();
         ItemStack button = new ItemStack(enabled ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE);
         ItemMeta meta = button.getItemMeta();
-        meta.setDisplayName(ChatColor.GREEN + "Buy ×" + qty);
+        String qtyLabel = isMax ? "Max" : String.valueOf(qty);
+        meta.setDisplayName(ChatColor.GREEN + "Buy ×" + (isMax ? availableQty : qtyLabel));
         List<String> lore = new ArrayList<>();
         if (enabled) {
-            int total = multiplyPrice(sellPrice, qty);
+            int total = multiplyPrice(sellPrice, availableQty);
             String currencyLabel = currency != null && !currency.isEmpty() ? " " + currency : "";
             lore.add(ChatColor.GREEN + "Cost: " + ChatColor.YELLOW + formatAmount(total) + currencyLabel);
             lore.add(ChatColor.DARK_GRAY + "Stock: " + ChatColor.GRAY + si.getStock());
-            menu.registerAction(slot, ConfirmMenuHolder.ActionType.BUY, qty);
+            lore.add(ChatColor.DARK_GRAY + "Space: " + ChatColor.GRAY + carryCapacity);
+            menu.registerAction(slot, ConfirmMenuHolder.ActionType.BUY, availableQty);
         } else {
             for (String err : errors) {
                 lore.add(ChatColor.RED + err);
@@ -688,7 +713,7 @@ public class ShopListener implements Listener {
         inv.setItem(slot, button);
     }
 
-    private void addSellButton(Inventory inv, ConfirmMenuHolder menu, ShopMenuHolder holder, ShopItem si, int slot, int qty, Player p) {
+    private void addSellButton(Inventory inv, ConfirmMenuHolder menu, ShopMenuHolder holder, ShopItem si, int slot, int qty, Player p, boolean sellAll) {
         String currency = si.firstBuyCurrency();
         ShopItem.ShopPrice price = currency != null ? si.getPrices().get(currency) : null;
         Integer buyPrice = price != null ? price.getBuyPrice() : null;
@@ -700,21 +725,24 @@ public class ShopListener implements Listener {
             errors.add("No buy price available / 買取価格が設定されていません");
         }
         int available = countMatchingItems(p, si);
-        if (available < qty) {
+        int actualQty = sellAll ? available : qty;
+        if (actualQty <= 0) {
+            errors.add("Not enough matching items / 手持ちの対象アイテムが不足しています");
+        } else if (!sellAll && available < qty) {
             errors.add("Not enough matching items / 手持ちの対象アイテムが不足しています");
         }
 
         boolean enabled = errors.isEmpty();
         ItemStack button = new ItemStack(enabled ? Material.LIGHT_BLUE_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE);
         ItemMeta meta = button.getItemMeta();
-        meta.setDisplayName(ChatColor.AQUA + "Sell ×" + qty);
+        meta.setDisplayName(ChatColor.AQUA + "Sell ×" + (sellAll ? actualQty : qty));
         List<String> lore = new ArrayList<>();
         if (enabled) {
-            int total = multiplyPrice(buyPrice, qty);
+            int total = multiplyPrice(buyPrice, actualQty);
             String currencyLabel = currency != null && !currency.isEmpty() ? " " + currency : "";
             lore.add(ChatColor.AQUA + "Payout: " + ChatColor.YELLOW + formatAmount(total) + currencyLabel);
             lore.add(ChatColor.DARK_GRAY + "You have: " + ChatColor.GRAY + available);
-            menu.registerAction(slot, ConfirmMenuHolder.ActionType.SELL, qty);
+            menu.registerAction(slot, ConfirmMenuHolder.ActionType.SELL, actualQty);
         } else {
             for (String err : errors) {
                 lore.add(ChatColor.RED + err);
@@ -961,15 +989,14 @@ public class ShopListener implements Listener {
                     JsonObject res = JsonParser.parseString(body).getAsJsonObject();
                     String status = res.has("status") ? res.get("status").getAsString() : "";
                     if ("success".equals(status) && res.has("grant")) {
-                        res.getAsJsonArray("grant").forEach(g -> {
-                            JsonObject gg = g.getAsJsonObject();
-                            String token = gg.get("grant_token").getAsString();
-                            if (plugin.consumeGrantToken(token)) {
-                                ItemStack item = si.getRawItem().clone();
-                                item.setAmount(gg.get("qty").getAsInt());
-                                Bukkit.getScheduler().runTask(plugin, () -> p.getInventory().addItem(item));
-                            }
-                        });
+                                res.getAsJsonArray("grant").forEach(g -> {
+                                    JsonObject gg = g.getAsJsonObject();
+                                    String token = gg.get("grant_token").getAsString();
+                                    if (plugin.consumeGrantToken(token)) {
+                                        int qty = gg.get("qty").getAsInt();
+                                        Bukkit.getScheduler().runTask(plugin, () -> giveStackedItems(p, si.getRawItem(), qty));
+                                    }
+                                });
                         si.setStock(Math.max(0, si.getStock() - 1));
                         Bukkit.getScheduler().runTask(plugin, () -> {
                             if (si.getStock() <= 0) {
@@ -1455,6 +1482,65 @@ public class ShopListener implements Listener {
             @Override public void onFailure(Call call, IOException ex) { }
             @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
         });
+    }
+
+    private int getPlayerBalance(Player p, String currency) {
+        Scoreboard sb = p.getScoreboard() != null ? p.getScoreboard() : Bukkit.getScoreboardManager().getMainScoreboard();
+        String entry = p.getName();
+        String objective = (currency == null || currency.isBlank()) ? "currency" : currency;
+        int balance = ScoreboardUtil.readCurrency(sb, objective, entry);
+        if (balance == 0) {
+            if (!objective.startsWith("currency_")) {
+                balance = ScoreboardUtil.readCurrency(sb, "currency_" + objective, entry);
+            } else {
+                balance = ScoreboardUtil.readCurrency(sb, objective.substring("currency_".length()), entry);
+            }
+        }
+        return balance;
+    }
+
+    private int computeMaxCarry(Player p, ShopItem si) {
+        ItemStack template = si.getRawItem();
+        int maxStack = Math.max(1, template.getMaxStackSize());
+        int total = 0;
+        String key = si.getItemKey();
+        for (ItemStack content : p.getInventory().getContents()) {
+            if (content == null || content.getType() == Material.AIR) {
+                total += maxStack;
+                continue;
+            }
+            if (matchesShopItem(content, key) && content.getAmount() < maxStack) {
+                total += (maxStack - content.getAmount());
+            }
+        }
+        return total;
+    }
+
+    private int computeMaxBuyQuantity(Player p, ShopItem si) {
+        String currency = si.firstSellCurrency();
+        ShopItem.ShopPrice price = currency != null ? si.getPrices().get(currency) : null;
+        Integer sellPrice = price != null ? price.getSellPrice() : null;
+        if (currency == null || sellPrice == null || sellPrice <= 0) {
+            return 0;
+        }
+        int balance = getPlayerBalance(p, currency);
+        int affordable = sellPrice > 0 ? balance / sellPrice : 0;
+        int stock = si.getStock();
+        int carry = computeMaxCarry(p, si);
+        return Math.max(0, Math.min(stock, Math.min(affordable, carry)));
+    }
+
+    private void giveStackedItems(Player p, ItemStack template, int totalAmount) {
+        ItemStack base = template.clone();
+        int maxStack = Math.max(1, base.getMaxStackSize());
+        int remaining = totalAmount;
+        while (remaining > 0) {
+            int toGive = Math.min(maxStack, remaining);
+            ItemStack portion = base.clone();
+            portion.setAmount(toGive);
+            p.getInventory().addItem(portion);
+            remaining -= toGive;
+        }
     }
 
     private int parseAmount(String s) throws NumberFormatException {
