@@ -57,6 +57,7 @@ public class PlayerListener implements Listener {
         String name = player.getName();
         JsonObject payload = new JsonObject();
         payload.addProperty("player_uuid", uuid);
+        payload.addProperty("player_name", name);
         Request req = new Request.Builder()
                 .url(plugin.getBaseUrl() + "/api/account/ensure")
                 .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
