@@ -972,9 +972,17 @@ public class ShopGuiManager {
             menu.setItem(13, button(Material.BARREL, ChatColor.GREEN + "Create Shop",
                     ChatColor.GRAY + "Get a new shop barrel"));
             actions.put(13, this::promptCreateShop);
-            menu.setItem(15, button(Material.BOOK, ChatColor.GREEN + "Help",
-                    ChatColor.GRAY + "Click to view shop commands"));
+            menu.setItem(15, button(Material.EMERALD, ChatColor.AQUA + "Market",
+                    ChatColor.GRAY + "Browse shared shops"));
             actions.put(15, () -> {
+                Player pl = player();
+                if (pl != null) {
+                    plugin.getMarketManager().openMarket(pl);
+                }
+            });
+            menu.setItem(17, button(Material.BOOK, ChatColor.GREEN + "Help",
+                    ChatColor.GRAY + "Click to view shop commands"));
+            actions.put(17, () -> {
                 Player pl = player();
                 if (pl != null) {
                     pl.closeInventory();

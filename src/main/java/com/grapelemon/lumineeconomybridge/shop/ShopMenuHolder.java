@@ -15,6 +15,7 @@ public class ShopMenuHolder implements InventoryHolder {
     private int quantity = 1;
     private final java.util.Set<String> ownerUuids = new java.util.HashSet<>();
     private String tradeMode = "both";
+    private boolean ownerAsCustomer = false;
 
     public ShopMenuHolder(String shopId) {
         this.shopId = shopId;
@@ -55,6 +56,14 @@ public class ShopMenuHolder implements InventoryHolder {
 
     public void addOwnerUuid(String uuid) {
         ownerUuids.add(uuid);
+    }
+
+    public void setOwnerAsCustomer(boolean ownerAsCustomer) {
+        this.ownerAsCustomer = ownerAsCustomer;
+    }
+
+    public boolean isOwnerActingAsCustomer() {
+        return ownerAsCustomer;
     }
 
     public void setTradeMode(String mode) {

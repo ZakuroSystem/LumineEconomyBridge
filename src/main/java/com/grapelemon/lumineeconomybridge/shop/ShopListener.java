@@ -299,7 +299,11 @@ public class ShopListener implements Listener {
         p.sendMessage(ChatColor.RED + "You are not the owner / あなたはオーナーではありません" + ChatColor.RESET);
     }
 
-    private void openShop(Player p, String shopId) {
+    public void openShop(Player p, String shopId) {
+        openShop(p, shopId, false);
+    }
+
+    public void openShop(Player p, String shopId, boolean ownerAsCustomer) {
         if (!plugin.isActive()) {
             p.sendMessage(Lang.get("error-unavailable"));
             return;
@@ -307,7 +311,7 @@ public class ShopListener implements Listener {
         CacheEntry ce = itemCache.get(shopId);
         long now = System.currentTimeMillis();
         if (ce != null && now - ce.timestamp < CACHE_MS) {
-            buildInventory(p, shopId, ce.data);
+            buildInventory(p, shopId, ce.data, ownerAsCustomer);
             sendPing(shopId);
             return;
         }
@@ -342,7 +346,7 @@ public class ShopListener implements Listener {
                         return;
                     }
                     itemCache.put(shopId, new CacheEntry(obj, System.currentTimeMillis()));
-                    buildInventory(p, shopId, obj);
+                    buildInventory(p, shopId, obj, ownerAsCustomer);
                     sendPing(shopId);
                     sendVisit(p, shopId);
                 }
@@ -381,12 +385,13 @@ public class ShopListener implements Listener {
         });
     }
 
-    private void buildInventory(Player p, String shopId, JsonObject dataObj) {
+    private void buildInventory(Player p, String shopId, JsonObject dataObj, boolean ownerAsCustomer) {
         Bukkit.getScheduler().runTask(plugin, () -> {
             var arr = dataObj.getAsJsonArray("items");
             int size = ((arr.size() + 8) / 9) * 9;
             if (size < 9) size = 9;
             ShopMenuHolder holder = new ShopMenuHolder(shopId);
+            holder.setOwnerAsCustomer(ownerAsCustomer);
             if (dataObj.has("trade_mode") && !dataObj.get("trade_mode").isJsonNull()) {
                 holder.setTradeMode(dataObj.get("trade_mode").getAsString());
             }
@@ -486,6 +491,9 @@ public class ShopListener implements Listener {
         if (!(holderObj instanceof ShopMenuHolder holder)) return;
         Player p = (Player) e.getWhoClicked();
         boolean isOwner = holder.isOwner(p.getUniqueId().toString());
+        if (holder.isOwnerActingAsCustomer()) {
+            isOwner = false;
+        }
         if (e.getClickedInventory() == p.getInventory() && e.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY) {
             ItemStack stack = e.getCurrentItem();
             if (stack == null) return;

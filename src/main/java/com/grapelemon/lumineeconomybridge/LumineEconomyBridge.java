@@ -14,6 +14,9 @@ import okhttp3.Response;
 import com.grapelemon.lumineeconomybridge.shop.ShopListener;
 import com.grapelemon.lumineeconomybridge.shop.gui.ShopGuiListener;
 import com.grapelemon.lumineeconomybridge.shop.gui.ShopGuiManager;
+import com.grapelemon.lumineeconomybridge.shop.market.MarketCommandExecutor;
+import com.grapelemon.lumineeconomybridge.shop.market.MarketListener;
+import com.grapelemon.lumineeconomybridge.shop.market.MarketManager;
 import com.grapelemon.lumineeconomybridge.cash.PaperCurrencyService;
 import com.grapelemon.lumineeconomybridge.cash.PaperNoteListener;
 import com.grapelemon.lumineeconomybridge.guide.GuideBookListener;
@@ -65,6 +68,8 @@ public class LumineEconomyBridge extends JavaPlugin {
     private VaultEconomyBridge vaultEconomy;
     private GuideBookListener guideBookListener;
     private ShopGuiManager shopGuiManager;
+    private MarketManager marketManager;
+    private ShopListener shopListener;
     private ProtectManager protectManager;
 
     private String baseUrl;
@@ -106,7 +111,10 @@ public class LumineEconomyBridge extends JavaPlugin {
         getCommand("let").setExecutor(new LetCommandExecutor(protectManager));
         getCommand("let").setTabCompleter(new LetTabCompleter(protectManager));
         getServer().getPluginManager().registerEvents(new PlayerListener(this), this);
-        getServer().getPluginManager().registerEvents(new ShopListener(this), this);
+        shopListener = new ShopListener(this);
+        getServer().getPluginManager().registerEvents(shopListener, this);
+        marketManager = new MarketManager(this, shopListener);
+        getServer().getPluginManager().registerEvents(new MarketListener(marketManager), this);
         shopGuiManager = new ShopGuiManager(this);
         getServer().getPluginManager().registerEvents(new ShopGuiListener(shopGuiManager), this);
         getServer().getPluginManager().registerEvents(new ProtectListener(this, protectManager), this);
@@ -114,12 +122,24 @@ public class LumineEconomyBridge extends JavaPlugin {
         getServer().getPluginManager().registerEvents(guideBookListener, this);
         guideBookListener.distributeToOnline();
 
+        MarketCommandExecutor marketExecutor = new MarketCommandExecutor(this, marketManager);
+        getCommand("market").setExecutor(marketExecutor);
+        getCommand("market").setTabCompleter(marketExecutor);
+
         startBridge();
         startTileUpdates();
     }
 
     public ShopGuiManager getShopGuiManager() {
         return shopGuiManager;
+    }
+
+    public MarketManager getMarketManager() {
+        return marketManager;
+    }
+
+    public ShopListener getShopListener() {
+        return shopListener;
     }
 
     public void startBridge() {
