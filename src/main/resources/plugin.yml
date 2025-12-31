@@ -15,6 +15,10 @@ commands:
     usage: /let protect add [id]
     permission: lumineeconomy.let
     aliases: [lep]
+  market:
+    description: Open the shared market
+    usage: /market [add|remove <shop>]
+    permission: lumineeconomy.market
 permissions:
   lumineeconomy.le:
     default: true
@@ -22,3 +26,7 @@ permissions:
     default: op
   lumineeconomy.let:
     default: true
+  lumineeconomy.market:
+    default: true
+  lumineeconomy.market.admin:
+    default: op
