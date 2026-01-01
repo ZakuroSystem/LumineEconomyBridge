@@ -146,7 +146,7 @@ public class LeTabCompleter implements TabCompleter {
                 return names;
             }
             if (first.equals("shop")) {
-                return Stream.of("gui", "create", "add", "take", "price", "buyprice", "autoprice", "autopricedisable", "remove", "partner", "account", "reopen", "hopper", "help")
+                return Stream.of("gui", "create", "add", "take", "price", "buyprice", "autoprice", "autopricedisable", "remove", "partner", "account", "reopen", "hopper", "search", "limit", "help")
                         .filter(s -> s.startsWith(args[1].toLowerCase()))
                         .toList();
             }
@@ -219,6 +219,9 @@ public class LeTabCompleter implements TabCompleter {
                         .collect(Collectors.toList());
             }
             if (first.equals("shop")) {
+                if (args[1].equalsIgnoreCase("search")) {
+                    return Collections.emptyList();
+                }
                 if (sender instanceof Player player) {
                     ShopIdCache cache = shopIdCache.get(player.getUniqueId());
                     long now = System.currentTimeMillis();

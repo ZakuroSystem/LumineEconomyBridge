@@ -35,6 +35,8 @@ Use `/le` followed by a subcommand. Common commands:
 - `/le help` – Show in‑game help.
 - `/le weblink` – Generate a token to link your account with the web dashboard.
 - `/le search <item> [currency] [min] [max]` – Search public shops for an item.
+- `/le shop search <item-id|name> [currency] [min] [max]` – Locate shops with coordinates, stock, and prices.
+- `/le shop limit <id> <qty> <once|day|week|month>` – Set per-player purchase caps for a shop (0 disables the limit).
 - `/le shop autopricedisable <id> [name] [currency]` – Disable an autoprice configuration when you no longer want the backend to adjust prices.
 - `/le admin add <player>` – Grant a player access to the admin dashboard.
 

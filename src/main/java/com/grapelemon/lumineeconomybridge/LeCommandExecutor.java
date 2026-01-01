@@ -23,6 +23,7 @@ import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.NamespacedKey;
+import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.TileState;
 import org.bukkit.ChatColor;
@@ -299,10 +300,124 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop partner remove " + ChatColor.YELLOW + "<id> <player> " + ChatColor.GRAY + "- Remove co-owner / 共同オーナー削除");
                         p.sendMessage(ChatColor.GREEN + "/le shop account " + ChatColor.YELLOW + "<id> <company> " + ChatColor.GRAY + "- Set payout account / 取引口座設定");
                         p.sendMessage(ChatColor.GREEN + "/le shop mode " + ChatColor.YELLOW + "<id> <buy|sell|both> " + ChatColor.GRAY + "- Set shop mode / ショップ種別設定");
+                        p.sendMessage(ChatColor.GREEN + "/le shop limit " + ChatColor.YELLOW + "<id> <qty> <once|day|week|month> " + ChatColor.GRAY + "- Limit sales per player / 個別販売上限");
                         p.sendMessage(ChatColor.GREEN + "/le shop hopper " + ChatColor.YELLOW + "<id> <slot> " + ChatColor.GRAY + "- Issue hopper (slot is 1-based) / ホッパー付与 (スロット番号は1始まり)");
                         p.sendMessage(ChatColor.GREEN + "/le shop publish " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- List shop / 掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item-id|name> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops with location, stock, and price / 座標・在庫・価格検索");
+                    } else if (args.length >= 3 && args[1].equalsIgnoreCase("search")) {
+                        String item = args[2];
+                        HttpUrl.Builder url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shops/search").newBuilder();
+                        url.addQueryParameter("item", item);
+                        if (args.length >= 4) url.addQueryParameter("currency", args[3]);
+                        if (args.length >= 5) url.addQueryParameter("min_price", args[4]);
+                        if (args.length >= 6) url.addQueryParameter("max_price", args[5]);
+                        Request req = new Request.Builder().url(url.build()).get().build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Shop search failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "[]";
+                                    var arr = JsonParser.parseString(body).getAsJsonArray();
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (arr.size() == 0) {
+                                            p.sendMessage(ChatColor.YELLOW + "No results / 該当なし" + ChatColor.RESET);
+                                        } else {
+                                            int limit = Math.min(10, arr.size());
+                                            for (int i = 0; i < limit; i++) {
+                                                JsonObject r = arr.get(i).getAsJsonObject();
+                                                int price = r.get("price").getAsInt();
+                                                int stock = r.has("stock") ? r.get("stock").getAsInt() : -1;
+                                                String msg = ChatColor.GREEN + r.get("item").getAsString() + ChatColor.WHITE +
+                                                        " @ " + ChatColor.YELLOW + formatAmount(price) + " " +
+                                                        r.get("currency").getAsString() + ChatColor.WHITE + " - " +
+                                                        ChatColor.AQUA + r.get("shop_id").getAsString() + ChatColor.WHITE +
+                                                        " (" + r.get("world").getAsString() + " " + r.get("x").getAsInt() +
+                                                        "," + r.get("y").getAsInt() + "," + r.get("z").getAsInt() + ") " +
+                                                        ChatColor.GRAY + "[Stock: " + (stock >= 0 ? stock : "?") + "]";
+                                                p.sendMessage(msg);
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                        return true;
+                    } else if (args.length >= 4 && args[1].equalsIgnoreCase("limit")) {
+                        int quantityIndex = 2;
+                        int periodIndex = 3;
+                        String shopId = null;
+                        if (args.length >= 5) {
+                            shopId = args[2];
+                            quantityIndex = 3;
+                            periodIndex = 4;
+                        } else {
+                            shopId = findTargetShopId(p);
+                        }
+                        if (shopId == null) {
+                            p.sendMessage(ChatColor.YELLOW + "Usage: /le shop limit <id> <qty> <once|day|week|month>" + ChatColor.RESET);
+                            p.sendMessage(ChatColor.GRAY + "Look at a shop barrel to omit <id> / ショップを見て省略できます" + ChatColor.RESET);
+                            return true;
+                        }
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "Not your shop / 自分のショップではありません" + ChatColor.RESET);
+                            return true;
+                        }
+                        int qty;
+                        try {
+                            qty = Integer.parseInt(args[quantityIndex]);
+                        } catch (NumberFormatException ex) {
+                            p.sendMessage(ChatColor.RED + "Invalid quantity / 個数が不正です" + ChatColor.RESET);
+                            return true;
+                        }
+                        if (qty < 0) {
+                            p.sendMessage(ChatColor.RED + "Quantity must be 0 or more / 0以上を入力してください" + ChatColor.RESET);
+                            return true;
+                        }
+                        String periodRaw = args[periodIndex].toLowerCase();
+                        Set<String> allowed = Set.of("once", "day", "week", "month");
+                        if (!allowed.contains(periodRaw)) {
+                            p.sendMessage(ChatColor.RED + "Invalid period / 期間を指定してください (once/day/week/month)" + ChatColor.RESET);
+                            return true;
+                        }
+                        JsonObject payload = new JsonObject();
+                        payload.addProperty("owner_uuid", p.getUniqueId().toString());
+                        payload.addProperty("shop_id", shopId);
+                        payload.addProperty("quantity", qty);
+                        payload.addProperty("period", periodRaw);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/limit")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Limit update failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject json = JsonParser.parseString(body).getAsJsonObject();
+                                    String status = json.has("status") ? json.get("status").getAsString() : "error";
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equalsIgnoreCase(status)) {
+                                            String label = qty == 0 ? "disabled / 無制限" : (qty + " per " + periodRaw);
+                                            p.sendMessage(ChatColor.GREEN + "Limit updated: " + label + ChatColor.RESET);
+                                        } else {
+                                            String reason = json.has("reason") ? json.get("reason").getAsString() : "error";
+                                            p.sendMessage(ChatColor.RED + "Failed to update limit: " + reason + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                        return true;
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
                         if (args.length != 3) {
                             p.sendMessage(ChatColor.YELLOW + "Usage: /le shop create <id>" + ChatColor.RESET);
@@ -1539,6 +1654,23 @@ public class LeCommandExecutor implements CommandExecutor {
 
     private String formatAmount(int amount) {
         return plugin.formatAmountPlain(amount);
+    }
+
+    private String findTargetShopId(Player player) {
+        Block target = player.getTargetBlockExact(5);
+        if (target == null) {
+            return null;
+        }
+        BlockState state = target.getState();
+        if (state instanceof TileState tile) {
+            PersistentDataContainer container = tile.getPersistentDataContainer();
+            Byte marker = container.get(keyShop, PersistentDataType.BYTE);
+            String id = container.get(keyId, PersistentDataType.STRING);
+            if (marker != null && marker == 1 && id != null && !id.isBlank()) {
+                return id;
+            }
+        }
+        return null;
     }
 
     private ItemStack prepareForSerialization(ItemStack item) {
