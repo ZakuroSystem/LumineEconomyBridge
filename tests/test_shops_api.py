@@ -404,7 +404,7 @@ def test_shop_take_stock_uses_first_available_item_key():
         assert remaining and remaining["stock"] == 2
 
 
-def test_shop_buy_leaves_one_item_in_stock():
+def test_shop_buy_can_deplete_stock_to_zero():
     buyer = "buyer-min-stock"
     owner = "owner-min-stock"
     item_blob = b"min-stock-item"
@@ -479,17 +479,23 @@ def test_shop_buy_leaves_one_item_in_stock():
         resp = client.post("/api/shop/buy", json=base_payload)
         assert resp.status_code == 200
         data = resp.json()
-        assert data["status"] == "error"
-        assert data["reason"] == "insufficient_stock"
+        assert data["status"] == "success"
     with main.conn:
-        final_stock = main.conn.execute(
+        zero_stock = main.conn.execute(
             "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
             ("min-stock-shop", item_key),
         ).fetchone()
-        assert final_stock and final_stock["stock"] == 1
+        assert zero_stock and zero_stock["stock"] == 0
+    base_payload["client_tx_id"] = "min-stock-tx-3"
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/buy", json=base_payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "error"
+        assert data["reason"] == "insufficient_stock"
 
 
-def test_take_stock_removes_listing_when_empty():
+def test_take_stock_keeps_listing_when_empty_by_default():
     owner = "owner-empty"
     item_blob = b"empty-item"
     item_key = hashlib.sha256(item_blob).hexdigest()
@@ -540,13 +546,75 @@ def test_take_stock_removes_listing_when_empty():
         assert data["grant"] and data["grant"][0]["item_key"] == item_key
     with main.conn:
         stock_row = main.conn.execute(
-            "SELECT 1 FROM shop_stock WHERE shop_id=? AND item_key=?",
+            "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
             ("empty-shop", item_key),
+        ).fetchone()
+        assert stock_row and stock_row["stock"] == 0
+        price_row = main.conn.execute(
+            "SELECT price FROM shop_prices WHERE shop_id=? AND item_key=?",
+            ("empty-shop", item_key),
+        ).fetchone()
+        assert price_row and price_row["price"] == 75
+
+
+def test_take_stock_can_remove_listing_in_freemarket_mode():
+    owner = "owner-flea"
+    item_blob = b"flea-item"
+    item_key = hashlib.sha256(item_blob).hexdigest()
+    with main.conn:
+        for table in [
+            "shop_tx",
+            "shop_stock",
+            "shop_prices",
+            "shop_items",
+            "shop_locations",
+            "shop_owners",
+            "shops",
+        ]:
+            main.conn.execute(f"DELETE FROM {table}")
+        now = int(time.time())
+        main.conn.execute(
+            "INSERT INTO shops(shop_id, owner_uuid, status, created_at, last_activity_at) VALUES(?,?,?,?,?)",
+            ("flea-shop", owner, "active", now, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_owners(shop_id, owner_uuid) VALUES(?,?)",
+            ("flea-shop", owner),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_items(item_key, material, display_name, nbt_blob) VALUES(?,?,?,?)",
+            (item_key, "STONE", "Flea", item_blob),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_stock(shop_id, item_key, sale_name, stock, updated_at) VALUES(?,?,?,?,?)",
+            ("flea-shop", item_key, "flea", 1, now),
+        )
+        main.conn.execute(
+            "INSERT INTO shop_prices(shop_id, item_key, currency, price) VALUES(?,?,?,?)",
+            ("flea-shop", item_key, "thy", 75),
+        )
+    headers = {"X-LE-Token": main.SHARED_TOKEN}
+    payload = {
+        "owner_uuid": owner,
+        "shop_id": "flea-shop",
+        "item_key": item_key,
+        "qty": 1,
+        "delete_if_empty": True,
+    }
+    with TestClient(app) as client:
+        resp = client.post("/api/shop/take_stock", json=payload, headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+    with main.conn:
+        stock_row = main.conn.execute(
+            "SELECT 1 FROM shop_stock WHERE shop_id=? AND item_key=?",
+            ("flea-shop", item_key),
         ).fetchone()
         assert stock_row is None
         price_row = main.conn.execute(
             "SELECT 1 FROM shop_prices WHERE shop_id=? AND item_key=?",
-            ("empty-shop", item_key),
+            ("flea-shop", item_key),
         ).fetchone()
         assert price_row is None
 

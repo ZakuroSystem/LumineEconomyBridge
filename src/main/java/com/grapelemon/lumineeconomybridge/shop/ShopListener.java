@@ -406,7 +406,6 @@ public class ShopListener implements Listener {
             holder.setInventory(inv);
             int idx = 0;
             for (var el : arr) {
-                if (idx >= size - 1) break;
                 JsonObject it = el.getAsJsonObject();
                 String key = it.get("item_key").getAsString();
                 String saleName = it.has("sale_name") ? it.get("sale_name").getAsString() : "";
