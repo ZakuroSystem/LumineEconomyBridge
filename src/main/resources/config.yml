@@ -21,3 +21,14 @@ protect:
 
 currency:
   decimal_places: 2
+
+market:
+  # Percentage fee applied to seller profit after tax, e.g. 0.1 = 10%
+  fee_percent: 0.0
+  # Flat fee charged when listing a shop on the market
+  listing_fee: 0
+  upkeep:
+    # Flat recurring upkeep cost for keeping a shop listed
+    amount: 0
+    # When to charge the upkeep fee: daily or weekly
+    interval: "daily"

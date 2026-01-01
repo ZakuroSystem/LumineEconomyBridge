@@ -7,6 +7,7 @@ import com.google.gson.JsonParser;
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.shop.ShopItem;
 import com.grapelemon.lumineeconomybridge.shop.ShopMenuHolder;
+import com.grapelemon.lumineeconomybridge.shop.market.MarketManager;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.HttpUrl;
@@ -1122,6 +1123,8 @@ public class ShopGuiManager {
             inv.setItem(14, button(Material.LEVER, ChatColor.AQUA + "Mode: " + data.tradeMode.toUpperCase(),
                     ChatColor.GRAY + "Toggle buy/sell permissions"));
             actions.put(14, () -> cycleTradeMode(data));
+            inv.setItem(15, marketListingButton(data));
+            actions.put(15, () -> toggleMarketListing(data));
             inv.setItem(16, button(Material.PLAYER_HEAD, ChatColor.AQUA + "Partners",
                     ChatColor.GRAY + "Manage co-owners"));
             actions.put(16, () -> openPartnerManager(data));
@@ -1260,6 +1263,34 @@ public class ShopGuiManager {
                 player.sendMessage(msg);
                 showShopDetails(data);
             });
+        }
+
+        private ItemStack marketListingButton(ShopData data) {
+            MarketManager manager = plugin.getMarketManager();
+            MarketManager.MarketFees fees = manager.getFees();
+            boolean listed = manager.isListed(data.shopId);
+            List<String> lore = new ArrayList<>();
+            lore.add(listed
+                    ? ChatColor.GRAY + "マーケットから取り下げます"
+                    : ChatColor.GRAY + "マーケットに掲載します");
+            lore.add(ChatColor.GRAY + "出店料: " + ChatColor.YELLOW + plugin.formatAmountPlain(fees.listingFee()));
+            lore.add(ChatColor.GRAY + "維持費: " + ChatColor.YELLOW + plugin.formatAmountPlain(fees.upkeepAmount())
+                    + ChatColor.GRAY + " (" + fees.upkeepInterval() + ")");
+            lore.add(ChatColor.GRAY + "取引手数料: " + ChatColor.YELLOW + fees.feePercent() + "%");
+            return button(listed ? Material.EMERALD_BLOCK : Material.EMERALD,
+                    listed ? ChatColor.GREEN + "Listed on Market" : ChatColor.GOLD + "List on Market",
+                    lore.toArray(new String[0]));
+        }
+
+        private void toggleMarketListing(ShopData data) {
+            Player player = player();
+            if (player == null) return;
+            MarketManager manager = plugin.getMarketManager();
+            if (manager.isListed(data.shopId)) {
+                manager.removeListing(player, data.shopId, () -> openShop(data.shopId));
+            } else {
+                manager.requestPlayerListing(player, data.shopId, () -> openShop(data.shopId));
+            }
         }
 
         private void cycleSortMode(ShopData data) {
