@@ -113,6 +113,7 @@ public class ShopGuiManager {
         private boolean listed = true;
         private String accountUuid;
         private String sortMode = "created";
+        private SaleLimit saleLimit;
         private final List<String> owners = new ArrayList<>();
         private final List<ShopEntry> entries = new ArrayList<>();
 
@@ -136,6 +137,16 @@ public class ShopGuiManager {
                 return null;
             }
             return entries.get(index);
+        }
+    }
+
+    private static final class SaleLimit {
+        private final int quantity;
+        private final String period;
+
+        private SaleLimit(int quantity, String period) {
+            this.quantity = quantity;
+            this.period = period;
         }
     }
 
@@ -682,6 +693,13 @@ public class ShopGuiManager {
                     if (json.has("sort_mode") && !json.get("sort_mode").isJsonNull()) {
                         data.sortMode = json.get("sort_mode").getAsString();
                     }
+                    if (json.has("sale_limit") && json.get("sale_limit").isJsonObject()) {
+                        JsonObject limit = json.getAsJsonObject("sale_limit");
+                        int qty = limit.has("quantity") ? limit.get("quantity").getAsInt() : 0;
+                        String period = limit.has("period") && !limit.get("period").isJsonNull()
+                                ? limit.get("period").getAsString() : null;
+                        data.saleLimit = new SaleLimit(qty, period);
+                    }
                     if (json.has("listed")) {
                         data.listed = json.get("listed").getAsBoolean();
                     }
@@ -936,6 +954,17 @@ public class ShopGuiManager {
         private ShopItem.AutoPriceConfig autopriceWorking;
         private boolean autopriceNew;
         private boolean autopriceDirty;
+        private SaleLimitDraft limitDraft;
+
+        private static final class SaleLimitDraft {
+            private int quantity;
+            private String period;
+
+            private SaleLimitDraft(int quantity, String period) {
+                this.quantity = quantity;
+                this.period = period;
+            }
+        }
 
         private ShopGuiSession(Player player) {
             this.playerId = player.getUniqueId();
@@ -948,6 +977,7 @@ public class ShopGuiManager {
             this.autopriceWorking = null;
             this.autopriceNew = false;
             this.autopriceDirty = false;
+            this.limitDraft = null;
         }
 
         private Player player() {
@@ -1028,6 +1058,16 @@ public class ShopGuiManager {
             autopriceDirty = false;
         }
 
+        private SaleLimitDraft currentLimitDraft(ShopData data) {
+            if (limitDraft == null) {
+                int qty = data.saleLimit != null ? Math.max(0, data.saleLimit.quantity) : 0;
+                String period = data.saleLimit != null && data.saleLimit.period != null && !data.saleLimit.period.isBlank()
+                        ? data.saleLimit.period : "day";
+                limitDraft = new SaleLimitDraft(qty, period);
+            }
+            return limitDraft;
+        }
+
         private boolean startPrompt() {
             if (closed || awaitingPrompt) {
                 return false;
@@ -1067,6 +1107,7 @@ public class ShopGuiManager {
             priceCurrency = null;
             priceAutopriceView = false;
             currencySelections.clear();
+            limitDraft = null;
             this.currentShop = data;
             if (!"active".equalsIgnoreCase(data.status)) {
                 showInactiveShop(data);
@@ -1122,6 +1163,10 @@ public class ShopGuiManager {
             inv.setItem(14, button(Material.LEVER, ChatColor.AQUA + "Mode: " + data.tradeMode.toUpperCase(),
                     ChatColor.GRAY + "Toggle buy/sell permissions"));
             actions.put(14, () -> cycleTradeMode(data));
+            inv.setItem(15, button(Material.PLAYER_HEAD, ChatColor.AQUA + "Buyer Limit",
+                    ChatColor.GRAY + "Per-player cap:",
+                    formatLimit(data.saleLimit)));
+            actions.put(15, () -> openLimitManager(data));
             inv.setItem(16, button(Material.PLAYER_HEAD, ChatColor.AQUA + "Partners",
                     ChatColor.GRAY + "Manage co-owners"));
             actions.put(16, () -> openPartnerManager(data));
@@ -1144,6 +1189,7 @@ public class ShopGuiManager {
             List<String> lore = new ArrayList<>();
             lore.add(ChatColor.GRAY + "Status: " + ChatColor.YELLOW + data.status.toUpperCase());
             lore.add(ChatColor.GRAY + "Mode: " + ChatColor.YELLOW + data.tradeMode.toUpperCase());
+            lore.add(ChatColor.GRAY + "Limit: " + formatLimit(data.saleLimit));
             lore.add(ChatColor.GRAY + "Listed: " + (data.listed ? ChatColor.GREEN + "Yes" : ChatColor.RED + "No"));
             lore.add(ChatColor.GRAY + "Sort: " + ChatColor.YELLOW + formatSortMode(data.sortMode));
             lore.add(ChatColor.GRAY + "Items: " + ChatColor.YELLOW + data.entries.size());
@@ -1179,6 +1225,20 @@ public class ShopGuiManager {
                 case "stock" -> "Stock";
                 default -> "Registered";
             };
+        }
+
+        private String formatLimit(SaleLimit limit) {
+            if (limit == null || limit.quantity <= 0 || limit.period == null || limit.period.isBlank()) {
+                return ChatColor.YELLOW + "Unlimited";
+            }
+            String periodLabel = switch (limit.period.toLowerCase()) {
+                case "once" -> "Once";
+                case "day" -> "Daily";
+                case "week" -> "Weekly";
+                case "month" -> "Monthly";
+                default -> limit.period;
+            };
+            return ChatColor.YELLOW + Integer.toString(limit.quantity) + ChatColor.GRAY + " / " + ChatColor.YELLOW + periodLabel;
         }
 
         private String displayName(String raw) {
@@ -1469,6 +1529,119 @@ public class ShopGuiManager {
             }, msg -> {
                 player.sendMessage(msg);
                 openPartnerManager(data);
+            });
+        }
+
+        private void openLimitManager(ShopData data) {
+            Player player = player();
+            if (player == null) return;
+            SaleLimitDraft draft = currentLimitDraft(data);
+            Inventory inv = Bukkit.createInventory(new ShopGuiSessionHolder(playerId), 45,
+                    ChatColor.GOLD + "Buyer Limit - " + data.shopId);
+            actions.clear();
+            inv.setItem(4, shopInfo(data));
+            inv.setItem(19, limitButton("once", "Once", Material.NETHER_STAR, draft));
+            actions.put(19, () -> {
+                draft.period = "once";
+                openLimitManager(data);
+            });
+            inv.setItem(20, limitButton("day", "Daily", Material.CLOCK, draft));
+            actions.put(20, () -> {
+                draft.period = "day";
+                openLimitManager(data);
+            });
+            inv.setItem(21, limitButton("week", "Weekly", Material.CALIBRATED_SCULK_SENSOR, draft));
+            actions.put(21, () -> {
+                draft.period = "week";
+                openLimitManager(data);
+            });
+            inv.setItem(22, limitButton("month", "Monthly", Material.AMETHYST_SHARD, draft));
+            actions.put(22, () -> {
+                draft.period = "month";
+                openLimitManager(data);
+            });
+            inv.setItem(28, button(Material.PAPER, ChatColor.AQUA + "Quantity", ChatColor.GRAY + "Current: " + formatLimit(new SaleLimit(draft.quantity, draft.period)),
+                    ChatColor.YELLOW + "Click to enter amount"));
+            actions.put(28, () -> promptLimitQuantity(data));
+            inv.setItem(30, button(Material.BARRIER, ChatColor.RED + "Disable Limit",
+                    ChatColor.GRAY + "Set to unlimited"));
+            actions.put(30, () -> {
+                draft.quantity = 0;
+                openLimitManager(data);
+            });
+            inv.setItem(34, button(Material.EMERALD_BLOCK, ChatColor.GREEN + "Save Limit",
+                    ChatColor.GRAY + "Apply to this shop"));
+            actions.put(34, () -> submitLimit(data));
+            inv.setItem(36, button(Material.ARROW, ChatColor.YELLOW + "Back"));
+            actions.put(36, () -> showShopDetails(data));
+            inv.setItem(44, button(Material.CLOCK, ChatColor.GREEN + "Refresh"));
+            actions.put(44, () -> openShop(data.shopId));
+            this.inventory = inv;
+            this.reopenAction = () -> openLimitManager(data);
+            player.openInventory(inv);
+        }
+
+        private ItemStack limitButton(String period, String label, Material material, SaleLimitDraft draft) {
+            boolean selected = period.equalsIgnoreCase(draft.period);
+            List<String> lore = new ArrayList<>();
+            lore.add(ChatColor.GRAY + "Select limit window");
+            lore.add(selected ? ChatColor.GREEN + "Selected" : ChatColor.YELLOW + "Click to select");
+            return button(material,
+                    (selected ? ChatColor.GREEN : ChatColor.AQUA) + label,
+                    lore.toArray(new String[0]));
+        }
+
+        private void promptLimitQuantity(ShopData data) {
+            Player player = player();
+            if (player == null) return;
+            if (!startPrompt()) {
+                return;
+            }
+            beginPrompt(this, player,
+                    "Enter per-player quantity (0 = unlimited) / 個数を入力 (0で無制限)",
+                    input -> {
+                        Player p = player();
+                        if (p == null) return;
+                        int value;
+                        try {
+                            value = Integer.parseInt(input.trim());
+                        } catch (NumberFormatException ex) {
+                            p.sendMessage(ChatColor.RED + "Invalid number" + ChatColor.RESET);
+                            openLimitManager(data);
+                            return;
+                        }
+                        if (value < 0) {
+                            p.sendMessage(ChatColor.RED + "Enter 0 or greater" + ChatColor.RESET);
+                            openLimitManager(data);
+                            return;
+                        }
+                        currentLimitDraft(data).quantity = value;
+                        openLimitManager(data);
+                    },
+                    () -> openLimitManager(data));
+        }
+
+        private void submitLimit(ShopData data) {
+            Player player = player();
+            if (player == null) return;
+            SaleLimitDraft draft = currentLimitDraft(data);
+            JsonObject payload = new JsonObject();
+            payload.addProperty("owner_uuid", player.getUniqueId().toString());
+            payload.addProperty("shop_id", data.shopId);
+            payload.addProperty("quantity", Math.max(0, draft.quantity));
+            payload.addProperty("period", draft.period == null ? "day" : draft.period.toLowerCase());
+            postJson(player, "/api/shop/limit", payload, json -> {
+                String status = json.has("status") ? json.get("status").getAsString() : "error";
+                if ("success".equalsIgnoreCase(status)) {
+                    player.sendMessage(ChatColor.GREEN + "Buyer limit updated / 上限を更新しました" + ChatColor.RESET);
+                    openShop(data.shopId);
+                } else {
+                    notifyFailure(player, json.has("reason") ? json.get("reason").getAsString() : "error");
+                    openLimitManager(data);
+                }
+            }, msg -> {
+                player.sendMessage(msg);
+                openLimitManager(data);
             });
         }
 
