@@ -2,6 +2,15 @@ package com.grapelemon.lumineeconomybridge.shop.market;
 
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.shop.ShopListener;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.HttpUrl;
+import okhttp3.Request;
+import okhttp3.Response;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
@@ -18,6 +27,7 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Consumer;
 
 public class MarketManager {
 
@@ -28,12 +38,19 @@ public class MarketManager {
     private final File dataFile;
     private final YamlConfiguration config;
     private final Set<String> marketShops = new LinkedHashSet<>();
+    private final MarketFees fees;
 
     public MarketManager(LumineEconomyBridge plugin, ShopListener shopListener) {
         this.plugin = plugin;
         this.shopListener = shopListener;
         this.dataFile = new File(plugin.getDataFolder(), "market.yml");
         this.config = YamlConfiguration.loadConfiguration(dataFile);
+        this.fees = new MarketFees(
+                plugin.getConfig().getDouble("market.fee_percent", 0.0D),
+                plugin.getConfig().getInt("market.listing_fee", 0),
+                plugin.getConfig().getInt("market.upkeep.amount", 0),
+                plugin.getConfig().getString("market.upkeep.interval", "daily")
+        );
         reload();
     }
 
@@ -52,6 +69,10 @@ public class MarketManager {
 
     public List<String> getMarketShops() {
         return Collections.unmodifiableList(new ArrayList<>(marketShops));
+    }
+
+    public MarketFees getFees() {
+        return fees;
     }
 
     public boolean addShop(String shopId) {
@@ -74,6 +95,131 @@ public class MarketManager {
             save();
         }
         return removed;
+    }
+
+    public boolean isListed(String shopId) {
+        return marketShops.contains(shopId);
+    }
+
+    public void requestPlayerListing(Player player, String shopId, Runnable success) {
+        if (shopId == null || shopId.isBlank()) {
+            player.sendMessage(ChatColor.YELLOW + "ショップIDを指定してください。" + ChatColor.RESET);
+            return;
+        }
+        if (isListed(shopId)) {
+            player.sendMessage(ChatColor.YELLOW + "既にマーケットに掲載されています。" + ChatColor.RESET);
+            if (success != null) {
+                success.run();
+            }
+            return;
+        }
+        validateOwnership(player, shopId, owns -> {
+            if (!owns) {
+                player.sendMessage(ChatColor.RED + "このショップをマーケットに掲載する権限がありません。" + ChatColor.RESET);
+                return;
+            }
+            boolean added = addShop(shopId);
+            if (added) {
+                player.sendMessage(ChatColor.GREEN + "ショップ " + ChatColor.YELLOW + shopId + ChatColor.GREEN
+                        + " をマーケットに掲載しました。" + ChatColor.RESET);
+                player.sendMessage(ChatColor.GRAY + "出店料: " + ChatColor.YELLOW + formatAmount(fees.listingFee())
+                        + ChatColor.GRAY + " / 維持費: " + ChatColor.YELLOW + formatAmount(fees.upkeepAmount())
+                        + ChatColor.GRAY + " (" + fees.upkeepInterval() + ") / 取引手数料: "
+                        + ChatColor.YELLOW + fees.feePercent() + "%" + ChatColor.RESET);
+                if (success != null) {
+                    success.run();
+                }
+            } else {
+                player.sendMessage(ChatColor.YELLOW + "マーケットへの登録に失敗しました。" + ChatColor.RESET);
+            }
+        }, error -> player.sendMessage(ChatColor.RED + error + ChatColor.RESET));
+    }
+
+    public void removeListing(Player player, String shopId, Runnable success) {
+        if (!isListed(shopId)) {
+            player.sendMessage(ChatColor.YELLOW + "このショップはマーケットに掲載されていません。" + ChatColor.RESET);
+            return;
+        }
+        validateOwnership(player, shopId, owns -> {
+            if (!owns) {
+                player.sendMessage(ChatColor.RED + "このショップの掲載を管理する権限がありません。" + ChatColor.RESET);
+                return;
+            }
+            boolean removed = removeShop(shopId);
+            if (removed) {
+                player.sendMessage(ChatColor.GREEN + "マーケットから削除しました。" + ChatColor.RESET);
+                if (success != null) {
+                    success.run();
+                }
+            } else {
+                player.sendMessage(ChatColor.YELLOW + "マーケットから削除できませんでした。" + ChatColor.RESET);
+            }
+        }, error -> player.sendMessage(ChatColor.RED + error + ChatColor.RESET));
+    }
+
+    private void validateOwnership(Player player, String shopId, Consumer<Boolean> result, Consumer<String> errorHandler) {
+        if (player == null) {
+            errorHandler.accept("プレイヤーのみが実行できます。");
+            return;
+        }
+        if (plugin.getHttpClient() == null || !plugin.isActive()) {
+            errorHandler.accept("バックエンドに接続できません。後で再試行してください。");
+            return;
+        }
+        HttpUrl base = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/items");
+        if (base == null) {
+            errorHandler.accept("APIエンドポイントが無効です。");
+            return;
+        }
+        HttpUrl url = base.newBuilder()
+                .addQueryParameter("shop_id", shopId)
+                .build();
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                .build();
+        plugin.getHttpClient().newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Bukkit.getScheduler().runTask(plugin,
+                        () -> errorHandler.accept("ショップ情報の取得に失敗しました。"));
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    if (!response.isSuccessful()) {
+                        Bukkit.getScheduler().runTask(plugin,
+                                () -> errorHandler.accept("ショップ情報の取得に失敗しました。"));
+                        return;
+                    }
+                    String body = response.body() != null ? response.body().string() : "{}";
+                    JsonObject json = JsonParser.parseString(body).getAsJsonObject();
+                    if (json.has("reason") && "shop_not_found".equalsIgnoreCase(json.get("reason").getAsString())) {
+                        Bukkit.getScheduler().runTask(plugin,
+                                () -> errorHandler.accept("ショップが見つかりませんでした。"));
+                        return;
+                    }
+                    if (json.has("owners") && json.get("owners").isJsonArray()) {
+                        JsonArray owners = json.getAsJsonArray("owners");
+                        String uuid = player.getUniqueId().toString();
+                        for (JsonElement owner : owners) {
+                            if (owner != null && owner.isJsonPrimitive() && uuid.equalsIgnoreCase(owner.getAsString())) {
+                                Bukkit.getScheduler().runTask(plugin, () -> result.accept(true));
+                                return;
+                            }
+                        }
+                        Bukkit.getScheduler().runTask(plugin, () -> result.accept(false));
+                        return;
+                    }
+                    Bukkit.getScheduler().runTask(plugin, () -> result.accept(false));
+                }
+            }
+        });
+    }
+
+    private String formatAmount(int amount) {
+        return plugin.formatAmountPlain(amount);
     }
 
     private void save() {
@@ -152,4 +298,6 @@ public class MarketManager {
     public void openShopFromMarket(Player player, String shopId) {
         shopListener.openShop(player, shopId, true);
     }
+
+    public record MarketFees(double feePercent, int listingFee, int upkeepAmount, String upkeepInterval) { }
 }

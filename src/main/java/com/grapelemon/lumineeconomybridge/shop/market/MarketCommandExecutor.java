@@ -33,11 +33,6 @@ public class MarketCommandExecutor implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        if (!hasAdminPermission(sender)) {
-            sender.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
-            return true;
-        }
-
         String sub = args[0].toLowerCase();
         if (sub.equals("add")) {
             if (args.length < 2) {
@@ -45,11 +40,19 @@ public class MarketCommandExecutor implements CommandExecutor, TabCompleter {
                 return true;
             }
             String shopId = args[1];
-            if (marketManager.addShop(shopId)) {
-                sender.sendMessage(ChatColor.GREEN + "Added " + ChatColor.YELLOW + shopId + ChatColor.GREEN + " to the market." + ChatColor.RESET);
-            } else {
-                sender.sendMessage(ChatColor.YELLOW + "That shop is already listed or invalid." + ChatColor.RESET);
+            if (hasAdminPermission(sender)) {
+                if (marketManager.addShop(shopId)) {
+                    sender.sendMessage(ChatColor.GREEN + "Added " + ChatColor.YELLOW + shopId + ChatColor.GREEN + " to the market." + ChatColor.RESET);
+                } else {
+                    sender.sendMessage(ChatColor.YELLOW + "That shop is already listed or invalid." + ChatColor.RESET);
+                }
+                return true;
             }
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage(ChatColor.RED + "プレイヤーのみがこのコマンドを実行できます。" + ChatColor.RESET);
+                return true;
+            }
+            marketManager.requestPlayerListing(player, shopId, null);
             return true;
         }
 
@@ -59,11 +62,19 @@ public class MarketCommandExecutor implements CommandExecutor, TabCompleter {
                 return true;
             }
             String shopId = args[1];
-            if (marketManager.removeShop(shopId)) {
-                sender.sendMessage(ChatColor.GREEN + "Removed " + ChatColor.YELLOW + shopId + ChatColor.GREEN + " from the market." + ChatColor.RESET);
-            } else {
-                sender.sendMessage(ChatColor.YELLOW + "That shop is not in the market." + ChatColor.RESET);
+            if (hasAdminPermission(sender)) {
+                if (marketManager.removeShop(shopId)) {
+                    sender.sendMessage(ChatColor.GREEN + "Removed " + ChatColor.YELLOW + shopId + ChatColor.GREEN + " from the market." + ChatColor.RESET);
+                } else {
+                    sender.sendMessage(ChatColor.YELLOW + "That shop is not in the market." + ChatColor.RESET);
+                }
+                return true;
             }
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage(ChatColor.RED + "プレイヤーのみがこのコマンドを実行できます。" + ChatColor.RESET);
+                return true;
+            }
+            marketManager.removeListing(player, shopId, null);
             return true;
         }
 
