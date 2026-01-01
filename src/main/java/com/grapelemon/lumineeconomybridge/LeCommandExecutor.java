@@ -302,7 +302,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop hopper " + ChatColor.YELLOW + "<id> <slot> " + ChatColor.GRAY + "- Issue hopper (slot is 1-based) / ホッパー付与 (スロット番号は1始まり)");
                         p.sendMessage(ChatColor.GREEN + "/le shop publish " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- List shop / 掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
-                        p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops / 検索");
+                        p.sendMessage(ChatColor.GREEN + "/le shop search " + ChatColor.YELLOW + "<item-id|name> [currency] [min] [max]" + ChatColor.GRAY + "- Search shops with location, stock, and price / 座標・在庫・価格検索");
                     } else if (args.length >= 3 && args[1].equalsIgnoreCase("create")) {
                         if (args.length != 3) {
                             p.sendMessage(ChatColor.YELLOW + "Usage: /le shop create <id>" + ChatColor.RESET);
@@ -755,8 +755,25 @@ public class LeCommandExecutor implements CommandExecutor {
                                             for (int i = 0; i < limit; i++) {
                                                 JsonObject r = arr.get(i).getAsJsonObject();
                                                 int price = r.get("price").getAsInt();
-                                                String msg = ChatColor.GREEN + r.get("item").getAsString() + ChatColor.WHITE + " @ " + ChatColor.YELLOW + formatAmount(price) + " " + r.get("currency").getAsString() + ChatColor.WHITE + " - " + ChatColor.AQUA + r.get("shop_id").getAsString() + ChatColor.WHITE + " (" + r.get("world").getAsString() + " " + r.get("x").getAsInt() + "," + r.get("y").getAsInt() + "," + r.get("z").getAsInt() + ")";
-                                                p.sendMessage(msg);
+                                                int stock = r.has("stock") ? r.get("stock").getAsInt() : -1;
+                                                StringBuilder msg = new StringBuilder();
+                                                msg.append(ChatColor.GREEN).append(r.get("item").getAsString())
+                                                        .append(ChatColor.WHITE).append(" @ ")
+                                                        .append(ChatColor.YELLOW).append(formatAmount(price)).append(" ")
+                                                        .append(r.get("currency").getAsString())
+                                                        .append(ChatColor.WHITE).append(" - ");
+                                                if (stock >= 0) {
+                                                    msg.append(ChatColor.GREEN).append("Stock: ")
+                                                            .append(ChatColor.YELLOW).append(stock)
+                                                            .append(ChatColor.WHITE).append(" - ");
+                                                }
+                                                msg.append(ChatColor.AQUA).append(r.get("shop_id").getAsString())
+                                                        .append(ChatColor.WHITE).append(" (")
+                                                        .append(r.get("world").getAsString()).append(" ")
+                                                        .append(r.get("x").getAsInt()).append(",")
+                                                        .append(r.get("y").getAsInt()).append(",")
+                                                        .append(r.get("z").getAsInt()).append(")");
+                                                p.sendMessage(msg.toString());
                                             }
                                         }
                                     });
