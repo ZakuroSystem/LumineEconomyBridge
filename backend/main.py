@@ -1064,6 +1064,7 @@ class ShopTakeStockPayload(BaseModel):
     item_key: Optional[str] = None
     item_keys: Optional[List[str]] = None
     qty: int
+    delete_if_empty: bool = False
 
 
 class ShopSetPricePayload(BaseModel):
@@ -3586,6 +3587,9 @@ async def shop_buy(payload: ShopBuyPayload):
                 "SELECT world, x, y, z FROM shop_locations WHERE shop_id=?",
                 (payload.shop_id,),
             ).fetchone()
+            total_price = 0
+            tax_amount = 0
+            tax_account = None
             if not shop:
                 reason = "shop_not_found"
             elif shop["status"] != "active":
@@ -3599,11 +3603,7 @@ async def shop_buy(payload: ShopBuyPayload):
                     "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
                     (payload.shop_id, payload.item_key),
                 ).fetchone()
-                if (
-                    not stock_row
-                    or stock_row["stock"] < payload.qty
-                    or stock_row["stock"] - payload.qty < 1
-                ):
+                if not stock_row or stock_row["stock"] < payload.qty:
                     reason = "insufficient_stock"
                 else:
                     price_row = cur.execute(
@@ -3811,7 +3811,7 @@ async def shop_buy(payload: ShopBuyPayload):
                                     )
             if not success:
                 cur.execute(
-                    "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,tax_amount,tax_account,timestamp,result,reason,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO shop_tx(client_tx_id,shop_id,buyer_uuid,item_key,qty,currency,total_price,tax_amount,tax_account,timestamp,result,reason,world,x,y,z,tx_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         payload.client_tx_id,
                         payload.shop_id,
@@ -4367,7 +4367,11 @@ async def shop_take_stock(
                         "SELECT stock FROM shop_stock WHERE shop_id=? AND item_key=?",
                         (payload.shop_id, candidate),
                     ).fetchone()
-                    if remaining_row and remaining_row["stock"] <= 0:
+                    if (
+                        payload.delete_if_empty
+                        and remaining_row
+                        and remaining_row["stock"] <= 0
+                    ):
                         cur.execute(
                             "DELETE FROM shop_stock WHERE shop_id=? AND item_key=?",
                             (payload.shop_id, candidate),
