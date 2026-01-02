@@ -539,6 +539,7 @@ with conn:
         """
         CREATE TABLE IF NOT EXISTS sale_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shop_id TEXT,
             start_ts INTEGER NOT NULL,
             end_ts INTEGER NOT NULL,
             pct REAL NOT NULL,
@@ -547,6 +548,10 @@ with conn:
         )
         """
     )
+    try:
+        conn.execute("ALTER TABLE sale_events ADD COLUMN shop_id TEXT")
+    except sqlite3.OperationalError:
+        pass
     try:
         conn.execute("ALTER TABLE shop_tx ADD COLUMN client_tx_id TEXT")
     except sqlite3.OperationalError:
@@ -1087,6 +1092,13 @@ class ShopAutoPricePayload(BaseModel):
     high_price: int
     upper_threshold: int
     low_price: int
+
+
+class ShopSalePayload(BaseModel):
+    owner_uuid: str
+    shop_id: str
+    duration_seconds: int
+    pct: float
 
 
 class ShopAutoPriceDisablePayload(BaseModel):
@@ -3363,9 +3375,16 @@ async def shop_items(shop_id: str):
                 (shop_id,),
             ).fetchall()
             items = []
+            now_ts = int(time.time())
             sale = cur.execute(
-                "SELECT pct,end_ts FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
-                (int(time.time()), int(time.time())),
+                """
+                SELECT pct,end_ts
+                FROM sale_events
+                WHERE active=1 AND start_ts<=? AND end_ts>=? AND (shop_id IS NULL OR shop_id=?)
+                ORDER BY CASE WHEN shop_id IS NULL THEN 1 ELSE 0 END
+                LIMIT 1
+                """,
+                (now_ts, now_ts, shop_id),
             ).fetchone()
             for r in rows:
                 autoprice_rows = cur.execute(
@@ -3633,8 +3652,14 @@ async def shop_buy(payload: ShopBuyPayload):
                         else:
                             base_price = price_row["price"] * payload.qty
                         sale = cur.execute(
-                            "SELECT id,pct,account FROM sale_events WHERE active=1 AND start_ts<=? AND end_ts>=?",
-                            (payload.timestamp, payload.timestamp),
+                            """
+                            SELECT id,pct,account
+                            FROM sale_events
+                            WHERE active=1 AND start_ts<=? AND end_ts>=? AND (shop_id IS NULL OR shop_id=?)
+                            ORDER BY CASE WHEN shop_id IS NULL THEN 1 ELSE 0 END
+                            LIMIT 1
+                            """,
+                            (payload.timestamp, payload.timestamp, payload.shop_id),
                         ).fetchone()
                         discount = 0
                         if sale:
@@ -4653,6 +4678,71 @@ async def shop_set_autoprice(
             body["buy_price"] = response_buy
         if response_currency is not None:
             body["currency"] = response_currency
+        return body
+    return {"status": "error", "reason": reason}
+
+
+@app.post("/api/shop/sale")
+async def shop_sale(
+    payload: ShopSalePayload, _auth: None = Depends(ensure_plugin_request)
+):
+    start = time.time()
+    result = "success"
+    reason: Optional[str] = None
+    end_ts: Optional[int] = None
+    with transaction() as cur:
+        shop = cur.execute(
+            "SELECT status, account_uuid, owner_uuid FROM shops WHERE shop_id=?",
+            (payload.shop_id,),
+        ).fetchone()
+        if (
+            not shop
+            or shop["status"] != "active"
+            or not is_shop_owner(cur, payload.shop_id, payload.owner_uuid)
+        ):
+            result = "error"
+            reason = "not_owner"
+        elif payload.duration_seconds <= 0:
+            result = "error"
+            reason = "invalid_duration"
+        elif payload.pct <= 0:
+            result = "error"
+            reason = "invalid_pct"
+        else:
+            now_ts = int(time.time())
+            end_ts = now_ts + int(payload.duration_seconds)
+            cur.execute(
+                "UPDATE sale_events SET active=0 WHERE shop_id=? AND active=1",
+                (payload.shop_id,),
+            )
+            account = shop["account_uuid"] or shop["owner_uuid"]
+            cur.execute(
+                """
+                INSERT INTO sale_events(shop_id, start_ts, end_ts, pct, account, active)
+                VALUES(?,?,?,?,?,1)
+                """,
+                (payload.shop_id, now_ts, end_ts, payload.pct, account),
+            )
+            cur.execute(
+                "UPDATE shops SET last_activity_at=? WHERE shop_id=?",
+                (now_ts, payload.shop_id),
+            )
+    latency_ms = int((time.time() - start) * 1000)
+    log_entry: Dict[str, Any] = {
+        "type": "shop_sale",
+        "shop_id": payload.shop_id,
+        "owner": payload.owner_uuid,
+        "duration_seconds": payload.duration_seconds,
+        "pct": payload.pct,
+        "result": result,
+        "reason": reason,
+        "latency_ms": latency_ms,
+    }
+    append_log(log_entry)
+    if result == "success":
+        body: Dict[str, Any] = {"status": "success"}
+        if end_ts is not None:
+            body["end_ts"] = end_ts
         return body
     return {"status": "error", "reason": reason}
 

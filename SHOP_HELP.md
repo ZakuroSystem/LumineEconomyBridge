@@ -19,6 +19,7 @@
 §a/le shop account §e<id> <company> §7- Set payout account / 取引口座設定
 §a/le shop hopper §e<id> <slot> §7- Issue linked hopper / ホッパー付与
 §a/le shop limit §e<id> <qty> <once|day|week|month> §7- Cap per-player purchases / 個人ごとの購入上限
+§a/le shop sale §e<id> <duration> <discount_%> §7- Schedule a timed discount / 時間指定の割引を設定
 §a/le shop search §e<item-id|name> [currency] [min] [max] §7- Search shops with location, stock, and price / 座標・在庫・価格検索
 §a/le search §e<item> [currency] [min] [max] §7- Search shops / 検索
 §a/le admin add §e<player> §7- Add dashboard admin / 管理者追加
