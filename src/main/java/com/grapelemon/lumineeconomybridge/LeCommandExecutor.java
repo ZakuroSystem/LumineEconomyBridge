@@ -33,6 +33,7 @@ import net.md_5.bungee.api.chat.TextComponent;
 import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.ArrayList;
@@ -42,6 +43,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 public class LeCommandExecutor implements CommandExecutor {
@@ -301,6 +304,7 @@ public class LeCommandExecutor implements CommandExecutor {
                         p.sendMessage(ChatColor.GREEN + "/le shop account " + ChatColor.YELLOW + "<id> <company> " + ChatColor.GRAY + "- Set payout account / 取引口座設定");
                         p.sendMessage(ChatColor.GREEN + "/le shop mode " + ChatColor.YELLOW + "<id> <buy|sell|both> " + ChatColor.GRAY + "- Set shop mode / ショップ種別設定");
                         p.sendMessage(ChatColor.GREEN + "/le shop limit " + ChatColor.YELLOW + "<id> <qty> <once|day|week|month> " + ChatColor.GRAY + "- Limit sales per player / 個別販売上限");
+                        p.sendMessage(ChatColor.GREEN + "/le shop sale " + ChatColor.YELLOW + "<id> <duration> <discount_%> " + ChatColor.GRAY + "- Schedule a timed sale / 割引セールを開始");
                         p.sendMessage(ChatColor.GREEN + "/le shop hopper " + ChatColor.YELLOW + "<id> <slot> " + ChatColor.GRAY + "- Issue hopper (slot is 1-based) / ホッパー付与 (スロット番号は1始まり)");
                         p.sendMessage(ChatColor.GREEN + "/le shop publish " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- List shop / 掲載");
                         p.sendMessage(ChatColor.GREEN + "/le shop hide " + ChatColor.YELLOW + "<id> " + ChatColor.GRAY + "- Unlist shop / 非掲載");
@@ -412,6 +416,64 @@ public class LeCommandExecutor implements CommandExecutor {
                                         } else {
                                             String reason = json.has("reason") ? json.get("reason").getAsString() : "error";
                                             p.sendMessage(ChatColor.RED + "Failed to update limit: " + reason + ChatColor.RESET);
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                        return true;
+                    } else if (args.length >= 5 && args[1].equalsIgnoreCase("sale")) {
+                        String shopId = args[2];
+                        if (!hasShopPermission(p, shopId)) {
+                            p.sendMessage(ChatColor.RED + "Not your shop / 自分のショップではありません" + ChatColor.RESET);
+                            return true;
+                        }
+                        Long duration = parseDurationSeconds(args[3]);
+                        if (duration == null || duration <= 0) {
+                            p.sendMessage(ChatColor.RED + "Invalid duration / 期間の指定が不正です" + ChatColor.RESET);
+                            return true;
+                        }
+                        int discount;
+                        try {
+                            discount = Integer.parseInt(args[4]);
+                        } catch (NumberFormatException ex) {
+                            p.sendMessage(ChatColor.RED + "Invalid discount / 割引率が不正です" + ChatColor.RESET);
+                            return true;
+                        }
+                        if (discount <= 0 || discount >= 100) {
+                            p.sendMessage(ChatColor.RED + "Discount must be between 1-99 / 1〜99の範囲で指定してください" + ChatColor.RESET);
+                            return true;
+                        }
+                        JsonObject payload = new JsonObject();
+                        payload.addProperty("owner_uuid", p.getUniqueId().toString());
+                        payload.addProperty("shop_id", shopId);
+                        payload.addProperty("duration_seconds", duration);
+                        payload.addProperty("pct", discount);
+                        Request req = new Request.Builder()
+                                .url(plugin.getBaseUrl() + "/api/shop/sale")
+                                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
+                                .post(RequestBody.create(gson.toJson(payload), JSON))
+                                .build();
+                        long endAt = System.currentTimeMillis() / 1000L + duration;
+                        plugin.getHttpClient().newCall(req).enqueue(new Callback() {
+                            @Override public void onFailure(Call call, IOException ex) {
+                                plugin.getLogger().warning("Sale scheduling failed: " + ex.getMessage());
+                                Bukkit.getScheduler().runTask(plugin, () -> p.sendMessage(Lang.get("error-unavailable")));
+                            }
+
+                            @Override public void onResponse(Call call, Response response) throws IOException {
+                                try (response) {
+                                    String body = response.body() != null ? response.body().string() : "{}";
+                                    JsonObject json = JsonParser.parseString(body).getAsJsonObject();
+                                    String status = json.has("status") ? json.get("status").getAsString() : "error";
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if ("success".equalsIgnoreCase(status)) {
+                                            long ends = json.has("end_ts") ? json.get("end_ts").getAsLong() : endAt;
+                                            p.sendMessage(ChatColor.GREEN + "Sale started: " + discount + "% off until "
+                                                    + ChatColor.YELLOW + Instant.ofEpochSecond(ends) + ChatColor.RESET);
+                                        } else {
+                                            String reason = json.has("reason") ? json.get("reason").getAsString() : "error";
+                                            p.sendMessage(ChatColor.RED + "Failed to start sale: " + reason + ChatColor.RESET);
                                         }
                                     });
                                 }
@@ -1646,6 +1708,41 @@ public class LeCommandExecutor implements CommandExecutor {
         } catch (IOException ex) {
             plugin.getLogger().warning("Failed to purge shop " + shopId + ": " + ex.getMessage());
         }
+    }
+
+    private Long parseDurationSeconds(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        Pattern pattern = Pattern.compile("(\\d+)([smhd]?)", Pattern.CASE_INSENSITIVE);
+        Matcher matcher = pattern.matcher(trimmed);
+        long total = 0L;
+        int lastEnd = 0;
+        int matches = 0;
+        while (matcher.find()) {
+            if (matcher.start() != lastEnd) {
+                return null;
+            }
+            matches++;
+            long value = Long.parseLong(matcher.group(1));
+            String unit = matcher.group(2) != null ? matcher.group(2).toLowerCase() : "";
+            long multiplier = switch (unit) {
+                case "m" -> 60L;
+                case "h" -> 3600L;
+                case "d" -> 86400L;
+                default -> 1L;
+            };
+            total += value * multiplier;
+            lastEnd = matcher.end();
+        }
+        if (matches == 0 || lastEnd != trimmed.length() || total <= 0) {
+            return null;
+        }
+        return total;
     }
 
     private int parseAmount(String s) throws NumberFormatException {

@@ -33,6 +33,7 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -44,6 +45,8 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Provides the inventory based navigation shell that lets players jump from the
@@ -114,6 +117,7 @@ public class ShopGuiManager {
         private String accountUuid;
         private String sortMode = "created";
         private SaleLimit saleLimit;
+        private ShopSale sale;
         private final List<String> owners = new ArrayList<>();
         private final List<ShopEntry> entries = new ArrayList<>();
 
@@ -147,6 +151,16 @@ public class ShopGuiManager {
         private SaleLimit(int quantity, String period) {
             this.quantity = quantity;
             this.period = period;
+        }
+    }
+
+    private static final class ShopSale {
+        private final int pct;
+        private final long endTs;
+
+        private ShopSale(int pct, long endTs) {
+            this.pct = pct;
+            this.endTs = endTs;
         }
     }
 
@@ -700,6 +714,12 @@ public class ShopGuiManager {
                                 ? limit.get("period").getAsString() : null;
                         data.saleLimit = new SaleLimit(qty, period);
                     }
+                    if (json.has("sale_pct") && !json.get("sale_pct").isJsonNull()) {
+                        int pct = json.get("sale_pct").getAsInt();
+                        long ends = json.has("sale_ends") && !json.get("sale_ends").isJsonNull()
+                                ? json.get("sale_ends").getAsLong() : 0L;
+                        data.sale = new ShopSale(pct, ends);
+                    }
                     if (json.has("listed")) {
                         data.listed = json.get("listed").getAsBoolean();
                     }
@@ -1170,6 +1190,10 @@ public class ShopGuiManager {
             inv.setItem(16, button(Material.PLAYER_HEAD, ChatColor.AQUA + "Partners",
                     ChatColor.GRAY + "Manage co-owners"));
             actions.put(16, () -> openPartnerManager(data));
+            inv.setItem(29, button(Material.CLOCK, ChatColor.LIGHT_PURPLE + "Sale",
+                    ChatColor.GRAY + "Current: " + formatSale(data.sale),
+                    ChatColor.YELLOW + "Click to schedule a discount"));
+            actions.put(29, () -> promptSale(data));
             inv.setItem(28, button(Material.BOOK, ChatColor.YELLOW + "Payout Account",
                     ChatColor.GRAY + formatAccount(data)));
             actions.put(28, () -> promptAccount(data));
@@ -1190,6 +1214,7 @@ public class ShopGuiManager {
             lore.add(ChatColor.GRAY + "Status: " + ChatColor.YELLOW + data.status.toUpperCase());
             lore.add(ChatColor.GRAY + "Mode: " + ChatColor.YELLOW + data.tradeMode.toUpperCase());
             lore.add(ChatColor.GRAY + "Limit: " + formatLimit(data.saleLimit));
+            lore.add(ChatColor.GRAY + "Sale: " + formatSale(data.sale));
             lore.add(ChatColor.GRAY + "Listed: " + (data.listed ? ChatColor.GREEN + "Yes" : ChatColor.RED + "No"));
             lore.add(ChatColor.GRAY + "Sort: " + ChatColor.YELLOW + formatSortMode(data.sortMode));
             lore.add(ChatColor.GRAY + "Items: " + ChatColor.YELLOW + data.entries.size());
@@ -1239,6 +1264,51 @@ public class ShopGuiManager {
                 default -> limit.period;
             };
             return ChatColor.YELLOW + Integer.toString(limit.quantity) + ChatColor.GRAY + " / " + ChatColor.YELLOW + periodLabel;
+        }
+
+        private String formatSale(ShopSale sale) {
+            if (sale == null || sale.pct <= 0) {
+                return ChatColor.YELLOW + "None";
+            }
+            String until = sale.endTs > 0
+                    ? ChatColor.GRAY + "until " + ChatColor.YELLOW + Instant.ofEpochSecond(sale.endTs)
+                    : ChatColor.GRAY + "active";
+            return ChatColor.YELLOW + Integer.toString(sale.pct) + "% " + until;
+        }
+
+        private Long parseDuration(String raw) {
+            if (raw == null) {
+                return null;
+            }
+            String trimmed = raw.trim();
+            if (trimmed.isEmpty()) {
+                return null;
+            }
+            Pattern pattern = Pattern.compile("(\\d+)([smhd]?)", Pattern.CASE_INSENSITIVE);
+            Matcher matcher = pattern.matcher(trimmed);
+            long total = 0L;
+            int matches = 0;
+            int lastEnd = 0;
+            while (matcher.find()) {
+                if (matcher.start() != lastEnd) {
+                    return null;
+                }
+                matches++;
+                long value = Long.parseLong(matcher.group(1));
+                String unit = matcher.group(2) != null ? matcher.group(2).toLowerCase() : "";
+                long multiplier = switch (unit) {
+                    case "m" -> 60L;
+                    case "h" -> 3600L;
+                    case "d" -> 86400L;
+                    default -> 1L;
+                };
+                total += value * multiplier;
+                lastEnd = matcher.end();
+            }
+            if (matches == 0 || lastEnd != trimmed.length() || total <= 0) {
+                return null;
+            }
+            return total;
         }
 
         private String displayName(String raw) {
@@ -1413,6 +1483,64 @@ public class ShopGuiManager {
                         });
                     },
                     null);
+        }
+
+        private void promptSale(ShopData data) {
+            Player player = player();
+            if (player == null) return;
+            if (!startPrompt()) {
+                return;
+            }
+            beginPrompt(this, player,
+                    "Enter duration and discount (e.g. 30m 15) / 期間と割引率を入力してください (例: 2h30m 25)",
+                    input -> {
+                        Player p = player();
+                        if (p == null) return;
+                        String[] parts = input.trim().split("\\s+");
+                        if (parts.length < 2) {
+                            p.sendMessage(ChatColor.RED + "Please provide duration and discount / 期間と割引率を入力してください" + ChatColor.RESET);
+                            showShopDetails(data);
+                            return;
+                        }
+                        Long duration = parseDuration(parts[0]);
+                        if (duration == null || duration <= 0) {
+                            p.sendMessage(ChatColor.RED + "Invalid duration / 期間の指定が不正です" + ChatColor.RESET);
+                            showShopDetails(data);
+                            return;
+                        }
+                        int discount;
+                        try {
+                            discount = Integer.parseInt(parts[1]);
+                        } catch (NumberFormatException ex) {
+                            p.sendMessage(ChatColor.RED + "Invalid discount / 割引率が不正です" + ChatColor.RESET);
+                            showShopDetails(data);
+                            return;
+                        }
+                        if (discount <= 0 || discount >= 100) {
+                            p.sendMessage(ChatColor.RED + "Discount must be between 1-99 / 1〜99の範囲で指定してください" + ChatColor.RESET);
+                            showShopDetails(data);
+                            return;
+                        }
+                        JsonObject payload = new JsonObject();
+                        payload.addProperty("owner_uuid", p.getUniqueId().toString());
+                        payload.addProperty("shop_id", data.shopId);
+                        payload.addProperty("duration_seconds", duration);
+                        payload.addProperty("pct", discount);
+                        postJson(p, "/api/shop/sale", payload, json -> {
+                            String status = json.has("status") ? json.get("status").getAsString() : "error";
+                            if ("success".equalsIgnoreCase(status)) {
+                                p.sendMessage(ChatColor.GREEN + "Sale started: " + discount + "%" + ChatColor.RESET);
+                                openShop(data.shopId);
+                            } else {
+                                notifyFailure(p, json.has("reason") ? json.get("reason").getAsString() : "error");
+                                showShopDetails(data);
+                            }
+                        }, msg -> {
+                            p.sendMessage(msg);
+                            showShopDetails(data);
+                        });
+                    },
+                    () -> showShopDetails(data));
         }
 
         private void openPartnerManager(ShopData data) {
