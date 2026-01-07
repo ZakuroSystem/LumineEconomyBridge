@@ -20,6 +20,8 @@ import com.grapelemon.lumineeconomybridge.shop.market.MarketManager;
 import com.grapelemon.lumineeconomybridge.cash.PaperCurrencyService;
 import com.grapelemon.lumineeconomybridge.cash.PaperNoteListener;
 import com.grapelemon.lumineeconomybridge.guide.GuideBookListener;
+import com.grapelemon.lumineeconomybridge.quest.QuestCommandExecutor;
+import com.grapelemon.lumineeconomybridge.quest.QuestManager;
 import com.grapelemon.lumineeconomybridge.vault.VaultEconomyBridge;
 import com.grapelemon.lumineeconomybridge.protect.ProtectManager;
 import com.grapelemon.lumineeconomybridge.protect.ProtectListener;
@@ -71,6 +73,7 @@ public class LumineEconomyBridge extends JavaPlugin {
     private MarketManager marketManager;
     private ShopListener shopListener;
     private ProtectManager protectManager;
+    private QuestManager questManager;
 
     private String baseUrl;
     private int timeout = 2000;
@@ -125,6 +128,11 @@ public class LumineEconomyBridge extends JavaPlugin {
         MarketCommandExecutor marketExecutor = new MarketCommandExecutor(this, marketManager);
         getCommand("market").setExecutor(marketExecutor);
         getCommand("market").setTabCompleter(marketExecutor);
+
+        questManager = new QuestManager(this);
+        QuestCommandExecutor questExecutor = new QuestCommandExecutor(questManager);
+        getCommand("quest").setExecutor(questExecutor);
+        getCommand("quest").setTabCompleter(questExecutor);
 
         startBridge();
         startTileUpdates();
@@ -264,6 +272,9 @@ public class LumineEconomyBridge extends JavaPlugin {
         if (shopGuiManager != null) {
             shopGuiManager.shutdown();
         }
+        if (questManager != null) {
+            questManager.shutdown();
+        }
         saveWalletAcknowledged();
         snapshotService = null;
         tileDebounceManager = null;
@@ -274,6 +285,9 @@ public class LumineEconomyBridge extends JavaPlugin {
         loadDecimalConfig();
         if (protectManager != null) {
             protectManager.reload();
+        }
+        if (questManager != null) {
+            questManager.reload();
         }
         baseUrl = normalizeBaseUrl(getConfig().getString("api.base_url", baseUrl));
         timeout = getConfig().getInt("api.timeout", timeout);

@@ -32,3 +32,43 @@ market:
     amount: 400
     # day または week が指定可能
     interval: "week"
+
+quest:
+  seed: "server-seed"
+  timezone: "Asia/Tokyo"
+  groups:
+    quest_daily_materials:
+      name: "素材納品A"
+      schedule:
+        start: "2026-01-07T00:00:00+09:00"
+        period_hours: 24
+      rules:
+        accept_limit_per_player: 1
+        expire_on_cycle_change: true
+        consume_items_on_complete: true
+      offers:
+        - id: "gunpowder_x64"
+          conditions:
+            op: "AND"
+            items:
+              - type: "minecraft:gunpowder"
+                amount: 64
+          rewards:
+            money: 100
+            items:
+              - type: "minecraft:emerald"
+                amount: 3
+        - id: "stone_x128_multi"
+          conditions:
+            op: "AND"
+            items:
+              - type: "minecraft:stone"
+                amount: 128
+              - type: "minecraft:coal"
+                amount: 16
+          rewards:
+            money: 80
+            items:
+              - type: "minecraft:diamond_sword"
+                amount: 1
+                nbt: "{Enchantments:[{id:\"minecraft:sharpness\",lvl:2s}],Damage:0}"
