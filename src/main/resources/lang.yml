@@ -6,6 +6,28 @@ bridge-starting: "§7Bridge starting…§r"
 bridge-stopped: "§7Bridge stopped§r"
 bridge-reloaded: "§7Bridge reloaded§r"
 send-pending: "§7送信中…§r"
+quest:
+  no_config: "&cクエスト設定がありません。/ No quest configuration."
+  list:
+    header: "&6=== Quest List / クエスト一覧 ==="
+    group_title: "&b{name} &7({id})"
+    accepted: "&e  {quest} &7[accepted x{count}] / 受注済み ({count})"
+    available: "&a  {quest} &7[available] / 受注可能"
+    progress: "&7  Progress: {progress}"
+    remaining: "&7  Remaining: {remaining}"
+    none_available: "&7現在のサイクルで受注可能なクエストはありません。/ No quests available for this cycle."
+  accept:
+    not_available: "&c指定されたクエストは現在受注できません。/ Quest not available."
+    already: "&e既に受注済みです。/ Already accepted."
+    limit: "&cこのグループではこれ以上受注できません。/ Acceptance limit reached."
+    disabled: "&cこのクエストは受注できません。/ Quest acceptance disabled."
+    success: "&aクエストを受注しました: {quest}"
+    remaining: "&7残り時間: {remaining}"
+  progress:
+    no_conditions: "条件なし / No conditions"
+    or_suffix: " (OR)"
+  complete: "&aクエスト達成: {quest}"
+  economy_unavailable: "&e報酬の通貨付与に失敗しました。/ Economy unavailable."
 guide:
   book_name: "&a経済ガイドブック / Economy Guide"
   book_lore_1: "&7右クリックでメニューを開きます / Right-click to open the menu"

@@ -6,6 +6,10 @@ import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public class QuestStateStore {
@@ -56,10 +60,24 @@ public class QuestStateStore {
         for (String groupId : groups.getKeys(false)) {
             ConfigurationSection groupSection = groups.getConfigurationSection(groupId);
             if (groupSection == null) continue;
-            String questId = groupSection.getString("quest_id", "");
-            long cycleIndex = groupSection.getLong("cycle_index", -1);
-            if (!questId.isBlank() && cycleIndex >= 0) {
-                state.getAssignments().put(groupId, new QuestManager.QuestAssignment(questId, cycleIndex));
+            List<QuestManager.QuestAssignment> assignments = new ArrayList<>();
+            List<Map<?, ?>> storedAssignments = groupSection.getMapList("assignments");
+            for (Map<?, ?> entry : storedAssignments) {
+                String questId = entry.get("quest_id") != null ? entry.get("quest_id").toString() : "";
+                long cycleIndex = parseCycleIndex(entry.get("cycle_index"));
+                if (!questId.isBlank() && cycleIndex >= 0) {
+                    assignments.add(new QuestManager.QuestAssignment(questId, cycleIndex));
+                }
+            }
+            if (assignments.isEmpty()) {
+                String questId = groupSection.getString("quest_id", "");
+                long cycleIndex = groupSection.getLong("cycle_index", -1);
+                if (!questId.isBlank() && cycleIndex >= 0) {
+                    assignments.add(new QuestManager.QuestAssignment(questId, cycleIndex));
+                }
+            }
+            if (!assignments.isEmpty()) {
+                state.getAssignments().put(groupId, assignments);
             }
         }
         return state;
@@ -73,10 +91,29 @@ public class QuestStateStore {
         config.set(base + ".groups", null);
         for (var entry : state.getAssignments().entrySet()) {
             String groupId = entry.getKey();
-            QuestManager.QuestAssignment assignment = entry.getValue();
             String prefix = base + ".groups." + groupId;
-            config.set(prefix + ".quest_id", assignment.getQuestId());
-            config.set(prefix + ".cycle_index", assignment.getCycleIndex());
+            List<Map<String, Object>> storedAssignments = new ArrayList<>();
+            for (QuestManager.QuestAssignment assignment : entry.getValue()) {
+                Map<String, Object> record = new HashMap<>();
+                record.put("quest_id", assignment.getQuestId());
+                record.put("cycle_index", assignment.getCycleIndex());
+                storedAssignments.add(record);
+            }
+            config.set(prefix + ".assignments", storedAssignments);
+        }
+    }
+
+    private long parseCycleIndex(Object raw) {
+        if (raw == null) {
+            return -1;
+        }
+        if (raw instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(raw.toString());
+        } catch (NumberFormatException ex) {
+            return -1;
         }
     }
 }

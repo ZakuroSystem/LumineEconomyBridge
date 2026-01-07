@@ -21,6 +21,7 @@ import com.grapelemon.lumineeconomybridge.cash.PaperCurrencyService;
 import com.grapelemon.lumineeconomybridge.cash.PaperNoteListener;
 import com.grapelemon.lumineeconomybridge.guide.GuideBookListener;
 import com.grapelemon.lumineeconomybridge.quest.QuestCommandExecutor;
+import com.grapelemon.lumineeconomybridge.quest.QuestListener;
 import com.grapelemon.lumineeconomybridge.quest.QuestManager;
 import com.grapelemon.lumineeconomybridge.vault.VaultEconomyBridge;
 import com.grapelemon.lumineeconomybridge.protect.ProtectManager;
@@ -133,6 +134,7 @@ public class LumineEconomyBridge extends JavaPlugin {
         QuestCommandExecutor questExecutor = new QuestCommandExecutor(questManager);
         getCommand("quest").setExecutor(questExecutor);
         getCommand("quest").setTabCompleter(questExecutor);
+        getServer().getPluginManager().registerEvents(new QuestListener(this, questManager), this);
 
         startBridge();
         startTileUpdates();
