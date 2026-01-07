@@ -19,6 +19,10 @@ commands:
     description: Open the shared market
     usage: /market [add|remove <shop>]
     permission: lumineeconomy.market
+  quest:
+    description: Show and accept quests
+    usage: /quest [questId]
+    permission: lumineeconomy.quest
 permissions:
   lumineeconomy.le:
     default: true
@@ -30,3 +34,5 @@ permissions:
     default: true
   lumineeconomy.market.admin:
     default: op
+  lumineeconomy.quest:
+    default: true
