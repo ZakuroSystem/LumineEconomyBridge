@@ -21,3 +21,14 @@ protect:
 
 currency:
   decimal_places: 2
+
+market:
+  # 手数料: 取引額(税後)に対する%課金
+  trade_fee_percent: 5
+  # 出店料: 掲載する際に支払う固定額
+  listing_fee: 400
+  # 維持費: 期間ごとにかかる固定額
+  upkeep:
+    amount: 400
+    # day または week が指定可能
+    interval: "week"

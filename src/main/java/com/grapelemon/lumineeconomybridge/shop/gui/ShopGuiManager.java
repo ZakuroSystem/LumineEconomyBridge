@@ -7,6 +7,7 @@ import com.google.gson.JsonParser;
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.shop.ShopItem;
 import com.grapelemon.lumineeconomybridge.shop.ShopMenuHolder;
+import com.grapelemon.lumineeconomybridge.shop.market.MarketManager;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.HttpUrl;
@@ -1197,6 +1198,11 @@ public class ShopGuiManager {
             inv.setItem(28, button(Material.BOOK, ChatColor.YELLOW + "Payout Account",
                     ChatColor.GRAY + formatAccount(data)));
             actions.put(28, () -> promptAccount(data));
+            MarketManager marketManager = plugin.getMarketManager();
+            if (marketManager != null) {
+                inv.setItem(30, marketListingButton(data));
+                actions.put(30, () -> toggleMarketListing(data));
+            }
             inv.setItem(34, button(Material.TNT, ChatColor.DARK_RED + "Remove Shop",
                     ChatColor.GRAY + "Delete the shop barrel"));
             actions.put(34, () -> openRemoveConfirm(data));
@@ -1219,6 +1225,43 @@ public class ShopGuiManager {
             lore.add(ChatColor.GRAY + "Sort: " + ChatColor.YELLOW + formatSortMode(data.sortMode));
             lore.add(ChatColor.GRAY + "Items: " + ChatColor.YELLOW + data.entries.size());
             return button(Material.PAPER, ChatColor.AQUA + "Overview", lore.toArray(new String[0]));
+        }
+
+        private ItemStack marketListingButton(ShopData data) {
+            MarketManager manager = plugin.getMarketManager();
+            if (manager == null) {
+                return button(Material.BARRIER, ChatColor.RED + "Market unavailable");
+            }
+            MarketManager.MarketFees fees = manager.getFees();
+            boolean listed = manager.isListed(data.shopId);
+            List<String> lore = new ArrayList<>();
+            lore.add(listed
+                    ? ChatColor.GRAY + "マーケットから取り下げます"
+                    : ChatColor.GRAY + "マーケットに掲載します");
+            if (fees != null) {
+                lore.add(ChatColor.GRAY + "出店料: " + ChatColor.YELLOW + plugin.formatAmountPlain(fees.listingFee()));
+                lore.add(ChatColor.GRAY + "維持費: " + ChatColor.YELLOW + plugin.formatAmountPlain(fees.upkeepAmount())
+                        + ChatColor.GRAY + " (" + fees.upkeepInterval() + ")");
+                lore.add(ChatColor.GRAY + "取引手数料: " + ChatColor.YELLOW + fees.feePercent() + "%");
+            }
+            return button(listed ? Material.EMERALD_BLOCK : Material.EMERALD,
+                    listed ? ChatColor.GREEN + "Listed on Market" : ChatColor.GOLD + "List on Market",
+                    lore.toArray(new String[0]));
+        }
+
+        private void toggleMarketListing(ShopData data) {
+            Player player = player();
+            if (player == null) return;
+            MarketManager manager = plugin.getMarketManager();
+            if (manager == null) {
+                player.sendMessage(ChatColor.RED + "マーケットが利用できません。" + ChatColor.RESET);
+                return;
+            }
+            if (manager.isListed(data.shopId)) {
+                manager.removeListing(player, data.shopId, () -> openShop(data.shopId));
+            } else {
+                manager.requestPlayerListing(player, data.shopId, () -> openShop(data.shopId));
+            }
         }
 
         private ItemStack ownerSummary(ShopData data) {
