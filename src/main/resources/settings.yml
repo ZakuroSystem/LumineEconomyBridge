@@ -1,0 +1,5 @@
+quest_reminder:
+  enabled: true
+  interval_minutes: 30
+  chat_count_threshold: 0
+  condition: "OR"

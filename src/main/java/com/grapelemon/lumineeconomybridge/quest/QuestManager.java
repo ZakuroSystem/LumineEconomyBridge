@@ -1,6 +1,8 @@
 package com.grapelemon.lumineeconomybridge.quest;
 
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
+import com.grapelemon.lumineeconomybridge.Lang;
+import com.grapelemon.lumineeconomybridge.Settings;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -12,6 +14,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -29,11 +32,19 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class QuestManager {
+    private static final long REMINDER_CHECK_INTERVAL_TICKS = 20L * 5L;
     private final LumineEconomyBridge plugin;
     private QuestConfig config;
     private QuestStateStore stateStore;
+    private BukkitTask reminderTask;
+    private boolean reminderEnabled;
+    private int reminderIntervalMinutes;
+    private int reminderChatThreshold;
+    private ReminderCondition reminderCondition;
+    private final Map<UUID, ReminderState> reminderStates = new ConcurrentHashMap<>();
 
     public QuestManager(LumineEconomyBridge plugin) {
         this.plugin = plugin;
@@ -46,24 +57,33 @@ public class QuestManager {
             stateStore = new QuestStateStore(plugin);
         }
         stateStore.load();
+        reloadReminderSettings();
+    }
+
+    public LumineEconomyBridge getPlugin() {
+        return plugin;
     }
 
     public void shutdown() {
         if (stateStore != null) {
             stateStore.save();
         }
+        if (reminderTask != null) {
+            reminderTask.cancel();
+            reminderTask = null;
+        }
     }
 
     public void showQuestList(Player player) {
         if (config == null || config.groups.isEmpty()) {
-            player.sendMessage(ChatColor.RED + "クエスト設定がありません。/ No quest configuration." + ChatColor.RESET);
+            player.sendMessage(Lang.get("quest.no_config"));
             return;
         }
         PlayerQuestState playerState = stateStore.get(player.getUniqueId());
         ZonedDateTime now = ZonedDateTime.now(config.zoneId);
         clearExpiredStates(playerState, now);
 
-        player.sendMessage(ChatColor.GOLD + "=== Quest List / クエスト一覧 ===" + ChatColor.RESET);
+        player.sendMessage(Lang.get("quest.list.header"));
         boolean anyActive = false;
         for (QuestGroup group : config.groups.values()) {
             ActiveOffer active = getActiveOffer(group, now);
@@ -71,31 +91,28 @@ public class QuestManager {
                 continue;
             }
             anyActive = true;
-            String title = ChatColor.AQUA + group.name + ChatColor.GRAY + " (" + group.id + ")" + ChatColor.RESET;
+            String title = colorize(Lang.get("quest.list.group_title")
+                    .replace("{name}", group.name)
+                    .replace("{id}", group.id));
             player.sendMessage(title);
-            QuestAssignment assignment = playerState.assignments.get(group.id);
-            if (assignment != null && assignment.questId.equals(active.offer.id)) {
+            List<QuestAssignment> assignments = playerState.assignments.get(group.id);
+            int acceptedCount = countAssignments(assignments, active.offer.id);
+            if (acceptedCount > 0) {
                 QuestProgress progress = evaluateProgress(player, active.offer);
-                if (progress.complete) {
-                    completeQuest(player, group, active.offer, progress);
-                    playerState.assignments.remove(group.id);
-                    stateStore.save();
-                    assignment = null;
-                }
-            }
-            QuestAssignment refreshed = playerState.assignments.get(group.id);
-            if (refreshed != null && refreshed.questId.equals(active.offer.id)) {
-                QuestProgress progress = evaluateProgress(player, active.offer);
-                player.sendMessage(ChatColor.YELLOW + "  " + active.offer.id + ChatColor.GRAY + " [accepted] / 受注済み" + ChatColor.RESET);
-                player.sendMessage(ChatColor.GRAY + "  Progress: " + progress.label + ChatColor.RESET);
-                player.sendMessage(ChatColor.GRAY + "  Remaining: " + formatRemaining(active.endsAt, now) + ChatColor.RESET);
+                player.sendMessage(colorize(Lang.get("quest.list.accepted")
+                        .replace("{quest}", active.offer.id)
+                        .replace("{count}", String.valueOf(acceptedCount))));
+                player.sendMessage(colorize(Lang.get("quest.list.progress").replace("{progress}", progress.label)));
+                player.sendMessage(colorize(Lang.get("quest.list.remaining")
+                        .replace("{remaining}", formatRemaining(active.endsAt, now))));
             } else {
-                player.sendMessage(ChatColor.GREEN + "  " + active.offer.id + ChatColor.GRAY + " [available] / 受注可能" + ChatColor.RESET);
-                player.sendMessage(ChatColor.GRAY + "  Remaining: " + formatRemaining(active.endsAt, now) + ChatColor.RESET);
+                player.sendMessage(colorize(Lang.get("quest.list.available").replace("{quest}", active.offer.id)));
+                player.sendMessage(colorize(Lang.get("quest.list.remaining")
+                        .replace("{remaining}", formatRemaining(active.endsAt, now))));
             }
         }
         if (!anyActive) {
-            player.sendMessage(ChatColor.GRAY + "現在のサイクルで受注可能なクエストはありません。/ No quests available for this cycle." + ChatColor.RESET);
+            player.sendMessage(Lang.get("quest.list.none_available"));
         }
         stateStore.saveState(playerState);
         stateStore.save();
@@ -103,7 +120,7 @@ public class QuestManager {
 
     public void acceptQuest(Player player, String questId) {
         if (config == null || config.groups.isEmpty()) {
-            player.sendMessage(ChatColor.RED + "クエスト設定がありません。/ No quest configuration." + ChatColor.RESET);
+            player.sendMessage(Lang.get("quest.no_config"));
             return;
         }
         ZonedDateTime now = ZonedDateTime.now(config.zoneId);
@@ -123,27 +140,30 @@ public class QuestManager {
             }
         }
         if (target == null || targetGroup == null) {
-            player.sendMessage(ChatColor.RED + "指定されたクエストは現在受注できません。/ Quest not available." + ChatColor.RESET);
+            player.sendMessage(Lang.get("quest.accept.not_available"));
             return;
         }
-        QuestAssignment existing = playerState.assignments.get(targetGroup.id);
-        if (existing != null && existing.questId.equals(target.offer.id)) {
-            player.sendMessage(ChatColor.YELLOW + "既に受注済みです。/ Already accepted." + ChatColor.RESET);
+        List<QuestAssignment> assignments = playerState.assignments.computeIfAbsent(targetGroup.id, key -> new ArrayList<>());
+        int limit = targetGroup.rules.acceptLimitPerPlayer;
+        if (limit <= 0) {
+            player.sendMessage(Lang.get("quest.accept.disabled"));
             return;
         }
-        if (existing != null && targetGroup.rules.acceptLimitPerPlayer <= 1) {
-            player.sendMessage(ChatColor.RED + "このグループではこれ以上受注できません。/ Acceptance limit reached." + ChatColor.RESET);
+        if (assignments.size() >= limit) {
+            if (limit <= 1) {
+                player.sendMessage(Lang.get("quest.accept.already"));
+            } else {
+                player.sendMessage(Lang.get("quest.accept.limit"));
+            }
             return;
         }
-        if (existing == null && targetGroup.rules.acceptLimitPerPlayer <= 0) {
-            player.sendMessage(ChatColor.RED + "このクエストは受注できません。/ Quest acceptance disabled." + ChatColor.RESET);
-            return;
-        }
-        playerState.assignments.put(targetGroup.id, new QuestAssignment(target.offer.id, target.cycleIndex));
+        assignments.add(new QuestAssignment(target.offer.id, target.cycleIndex));
         stateStore.saveState(playerState);
         stateStore.save();
-        player.sendMessage(ChatColor.GREEN + "クエストを受注しました: " + target.offer.id + ChatColor.RESET);
-        player.sendMessage(ChatColor.GRAY + "残り時間: " + formatRemaining(target.endsAt, now) + ChatColor.RESET);
+        player.sendMessage(colorize(Lang.get("quest.accept.success").replace("{quest}", target.offer.id)));
+        player.sendMessage(colorize(Lang.get("quest.accept.remaining")
+                .replace("{remaining}", formatRemaining(target.endsAt, now))));
+        checkQuestCompletion(player);
     }
 
     public List<String> getActiveOfferIds() {
@@ -161,19 +181,32 @@ public class QuestManager {
         return ids;
     }
 
-    private void clearExpiredStates(PlayerQuestState state, ZonedDateTime now) {
-        Map<String, QuestAssignment> updated = new HashMap<>(state.assignments);
+    private boolean clearExpiredStates(PlayerQuestState state, ZonedDateTime now) {
+        Map<String, List<QuestAssignment>> updated = new HashMap<>();
         for (QuestGroup group : config.groups.values()) {
-            QuestAssignment assignment = updated.get(group.id);
-            if (assignment == null) continue;
-            if (!group.rules.expireOnCycleChange) continue;
             long currentCycle = computeCycleIndex(group.schedule, now);
-            if (currentCycle < 0 || assignment.cycleIndex != currentCycle) {
-                updated.remove(group.id);
+            List<QuestAssignment> assignments = state.assignments.get(group.id);
+            if (assignments == null || assignments.isEmpty()) {
+                continue;
+            }
+            if (!group.rules.expireOnCycleChange) {
+                updated.put(group.id, assignments);
+                continue;
+            }
+            List<QuestAssignment> filtered = new ArrayList<>();
+            for (QuestAssignment assignment : assignments) {
+                if (currentCycle >= 0 && assignment.cycleIndex == currentCycle) {
+                    filtered.add(assignment);
+                }
+            }
+            if (!filtered.isEmpty()) {
+                updated.put(group.id, filtered);
             }
         }
+        boolean changed = !updated.equals(state.assignments);
         state.assignments.clear();
         state.assignments.putAll(updated);
+        return changed;
     }
 
     private ActiveOffer getActiveOffer(QuestGroup group, ZonedDateTime now) {
@@ -205,7 +238,7 @@ public class QuestManager {
 
     private QuestProgress evaluateProgress(Player player, QuestOffer offer) {
         if (offer.conditions.items.isEmpty()) {
-            return new QuestProgress(true, "No conditions");
+            return new QuestProgress(true, Lang.get("quest.progress.no_conditions"));
         }
         PlayerInventory inventory = player.getInventory();
         List<String> parts = new ArrayList<>();
@@ -224,18 +257,19 @@ public class QuestManager {
                 }
             }
         }
-        String suffix = offer.conditions.op == ConditionOp.OR ? " (OR)" : "";
+        String suffix = offer.conditions.op == ConditionOp.OR ? Lang.get("quest.progress.or_suffix") : "";
         return new QuestProgress(complete, String.join(", ", parts) + suffix);
     }
 
-    private void completeQuest(Player player, QuestGroup group, QuestOffer offer, QuestProgress progress) {
+    private boolean completeQuest(Player player, QuestGroup group, QuestOffer offer, QuestProgress progress) {
         if (group.rules.consumeItemsOnComplete) {
             if (!consumeItems(player.getInventory(), offer)) {
-                return;
+                return false;
             }
         }
         grantRewards(player, offer.rewards);
-        player.sendMessage(ChatColor.GREEN + "クエスト達成: " + offer.id + ChatColor.RESET);
+        player.sendMessage(colorize(Lang.get("quest.complete").replace("{quest}", offer.id)));
+        return true;
     }
 
     private boolean consumeItems(PlayerInventory inventory, QuestOffer offer) {
@@ -268,7 +302,7 @@ public class QuestManager {
             if (provider != null) {
                 provider.getProvider().depositPlayer(player, rewards.money);
             } else {
-                player.sendMessage(ChatColor.YELLOW + "報酬の通貨付与に失敗しました。/ Economy unavailable." + ChatColor.RESET);
+                player.sendMessage(Lang.get("quest.economy_unavailable"));
             }
         }
         if (!rewards.items.isEmpty()) {
@@ -658,9 +692,9 @@ public class QuestManager {
 
     static class PlayerQuestState {
         private final UUID playerId;
-        private final Map<String, QuestAssignment> assignments = new HashMap<>();
+        private final Map<String, List<QuestAssignment>> assignments = new HashMap<>();
 
-        private PlayerQuestState(UUID playerId) {
+        PlayerQuestState(UUID playerId) {
             this.playerId = playerId;
         }
 
@@ -668,7 +702,7 @@ public class QuestManager {
             return playerId;
         }
 
-        Map<String, QuestAssignment> getAssignments() {
+        Map<String, List<QuestAssignment>> getAssignments() {
             return assignments;
         }
     }
@@ -677,7 +711,7 @@ public class QuestManager {
         private final String questId;
         private final long cycleIndex;
 
-        private QuestAssignment(String questId, long cycleIndex) {
+        QuestAssignment(String questId, long cycleIndex) {
             this.questId = questId;
             this.cycleIndex = cycleIndex;
         }
@@ -688,6 +722,175 @@ public class QuestManager {
 
         long getCycleIndex() {
             return cycleIndex;
+        }
+    }
+
+    public void checkQuestCompletion(Player player) {
+        if (config == null || config.groups.isEmpty()) {
+            return;
+        }
+        PlayerQuestState playerState = stateStore.get(player.getUniqueId());
+        ZonedDateTime now = ZonedDateTime.now(config.zoneId);
+        boolean updated = clearExpiredStates(playerState, now);
+        for (QuestGroup group : config.groups.values()) {
+            ActiveOffer active = getActiveOffer(group, now);
+            if (active == null) {
+                continue;
+            }
+            List<QuestAssignment> assignments = playerState.assignments.get(group.id);
+            if (assignments == null || assignments.isEmpty()) {
+                continue;
+            }
+            boolean removedAny = false;
+            while (true) {
+                QuestAssignment matching = findAssignment(assignments, active.offer.id);
+                if (matching == null) {
+                    break;
+                }
+                QuestProgress progress = evaluateProgress(player, active.offer);
+                if (!progress.complete) {
+                    break;
+                }
+                if (!completeQuest(player, group, active.offer, progress)) {
+                    break;
+                }
+                assignments.remove(matching);
+                removedAny = true;
+                updated = true;
+            }
+            if (removedAny && assignments.isEmpty()) {
+                playerState.assignments.remove(group.id);
+            }
+        }
+        if (updated) {
+            stateStore.saveState(playerState);
+            stateStore.save();
+        }
+    }
+
+    private int countAssignments(List<QuestAssignment> assignments, String questId) {
+        if (assignments == null) {
+            return 0;
+        }
+        int count = 0;
+        for (QuestAssignment assignment : assignments) {
+            if (assignment.questId.equals(questId)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private QuestAssignment findAssignment(List<QuestAssignment> assignments, String questId) {
+        if (assignments == null) {
+            return null;
+        }
+        for (QuestAssignment assignment : assignments) {
+            if (assignment.questId.equals(questId)) {
+                return assignment;
+            }
+        }
+        return null;
+    }
+
+    private void startReminderTask() {
+        if (reminderTask != null) {
+            reminderTask.cancel();
+            reminderTask = null;
+        }
+        if (!reminderEnabled) {
+            return;
+        }
+        if (reminderIntervalMinutes <= 0 && reminderChatThreshold <= 0) {
+            return;
+        }
+        reminderTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            long now = System.currentTimeMillis();
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                maybeSendReminder(player, now);
+            }
+        }, REMINDER_CHECK_INTERVAL_TICKS, REMINDER_CHECK_INTERVAL_TICKS);
+    }
+
+    public void recordChat(Player player) {
+        if (!reminderEnabled || reminderChatThreshold <= 0) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        ReminderState state = getOrCreateReminderState(player.getUniqueId(), now);
+        state.chatCount++;
+        maybeSendReminder(player, now);
+    }
+
+    private String colorize(String message) {
+        return ChatColor.translateAlternateColorCodes('&', message);
+    }
+
+    private void reloadReminderSettings() {
+        reminderEnabled = Settings.getBoolean("quest_reminder.enabled", true);
+        reminderIntervalMinutes = Math.max(0, Settings.getInt("quest_reminder.interval_minutes", 30));
+        reminderChatThreshold = Math.max(0, Settings.getInt("quest_reminder.chat_count_threshold", 0));
+        String conditionRaw = Settings.getString("quest_reminder.condition", "OR");
+        reminderCondition = ReminderCondition.fromString(conditionRaw);
+        startReminderTask();
+    }
+
+    private void maybeSendReminder(Player player, long now) {
+        if (!reminderEnabled) {
+            return;
+        }
+        String message = Lang.get("quest.reminder");
+        if (message == null || message.isBlank()) {
+            return;
+        }
+        boolean timeEnabled = reminderIntervalMinutes > 0;
+        boolean chatEnabled = reminderChatThreshold > 0;
+        if (!timeEnabled && !chatEnabled) {
+            return;
+        }
+        ReminderState state = getOrCreateReminderState(player.getUniqueId(), now);
+        boolean timeMet = timeEnabled && now - state.lastReminderMillis >= reminderIntervalMinutes * 60_000L;
+        boolean chatMet = chatEnabled && state.chatCount >= reminderChatThreshold;
+        boolean shouldSend;
+        if (reminderCondition == ReminderCondition.AND) {
+            shouldSend = (!timeEnabled || timeMet) && (!chatEnabled || chatMet);
+        } else {
+            shouldSend = (timeEnabled && timeMet) || (chatEnabled && chatMet);
+        }
+        if (!shouldSend) {
+            return;
+        }
+        player.sendMessage(message);
+        state.lastReminderMillis = now;
+        state.chatCount = 0;
+    }
+
+    private ReminderState getOrCreateReminderState(UUID playerId, long now) {
+        return reminderStates.computeIfAbsent(playerId, id -> new ReminderState(now));
+    }
+
+    public void removeReminderState(UUID playerId) {
+        reminderStates.remove(playerId);
+    }
+
+    private enum ReminderCondition {
+        AND,
+        OR;
+
+        private static ReminderCondition fromString(String raw) {
+            if (raw == null) {
+                return OR;
+            }
+            return raw.equalsIgnoreCase("AND") ? AND : OR;
+        }
+    }
+
+    private static class ReminderState {
+        private long lastReminderMillis;
+        private int chatCount;
+
+        private ReminderState(long now) {
+            this.lastReminderMillis = now;
         }
     }
 }
