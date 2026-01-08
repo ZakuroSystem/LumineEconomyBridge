@@ -2,6 +2,7 @@ package com.grapelemon.lumineeconomybridge.quest;
 
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.Lang;
+import com.grapelemon.lumineeconomybridge.Settings;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -31,18 +32,23 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class QuestManager {
-    private static final long REMINDER_INTERVAL_TICKS = 20L * 60L * 30L;
+    private static final long REMINDER_CHECK_INTERVAL_TICKS = 20L * 5L;
     private final LumineEconomyBridge plugin;
     private QuestConfig config;
     private QuestStateStore stateStore;
     private BukkitTask reminderTask;
+    private boolean reminderEnabled;
+    private int reminderIntervalMinutes;
+    private int reminderChatThreshold;
+    private ReminderCondition reminderCondition;
+    private final Map<UUID, ReminderState> reminderStates = new ConcurrentHashMap<>();
 
     public QuestManager(LumineEconomyBridge plugin) {
         this.plugin = plugin;
         reload();
-        startReminderTask();
     }
 
     public void reload() {
@@ -51,6 +57,11 @@ public class QuestManager {
             stateStore = new QuestStateStore(plugin);
         }
         stateStore.load();
+        reloadReminderSettings();
+    }
+
+    public LumineEconomyBridge getPlugin() {
+        return plugin;
     }
 
     public void shutdown() {
@@ -784,20 +795,102 @@ public class QuestManager {
 
     private void startReminderTask() {
         if (reminderTask != null) {
+            reminderTask.cancel();
+            reminderTask = null;
+        }
+        if (!reminderEnabled) {
+            return;
+        }
+        if (reminderIntervalMinutes <= 0 && reminderChatThreshold <= 0) {
             return;
         }
         reminderTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
-            String message = Lang.get("quest.reminder");
-            if (message == null || message.isBlank()) {
-                return;
-            }
+            long now = System.currentTimeMillis();
             for (Player player : Bukkit.getOnlinePlayers()) {
-                player.sendMessage(message);
+                maybeSendReminder(player, now);
             }
-        }, REMINDER_INTERVAL_TICKS, REMINDER_INTERVAL_TICKS);
+        }, REMINDER_CHECK_INTERVAL_TICKS, REMINDER_CHECK_INTERVAL_TICKS);
+    }
+
+    public void recordChat(Player player) {
+        if (!reminderEnabled || reminderChatThreshold <= 0) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        ReminderState state = getOrCreateReminderState(player.getUniqueId(), now);
+        state.chatCount++;
+        maybeSendReminder(player, now);
     }
 
     private String colorize(String message) {
         return ChatColor.translateAlternateColorCodes('&', message);
+    }
+
+    private void reloadReminderSettings() {
+        reminderEnabled = Settings.getBoolean("quest_reminder.enabled", true);
+        reminderIntervalMinutes = Math.max(0, Settings.getInt("quest_reminder.interval_minutes", 30));
+        reminderChatThreshold = Math.max(0, Settings.getInt("quest_reminder.chat_count_threshold", 0));
+        String conditionRaw = Settings.getString("quest_reminder.condition", "OR");
+        reminderCondition = ReminderCondition.fromString(conditionRaw);
+        startReminderTask();
+    }
+
+    private void maybeSendReminder(Player player, long now) {
+        if (!reminderEnabled) {
+            return;
+        }
+        String message = Lang.get("quest.reminder");
+        if (message == null || message.isBlank()) {
+            return;
+        }
+        boolean timeEnabled = reminderIntervalMinutes > 0;
+        boolean chatEnabled = reminderChatThreshold > 0;
+        if (!timeEnabled && !chatEnabled) {
+            return;
+        }
+        ReminderState state = getOrCreateReminderState(player.getUniqueId(), now);
+        boolean timeMet = timeEnabled && now - state.lastReminderMillis >= reminderIntervalMinutes * 60_000L;
+        boolean chatMet = chatEnabled && state.chatCount >= reminderChatThreshold;
+        boolean shouldSend;
+        if (reminderCondition == ReminderCondition.AND) {
+            shouldSend = (!timeEnabled || timeMet) && (!chatEnabled || chatMet);
+        } else {
+            shouldSend = (timeEnabled && timeMet) || (chatEnabled && chatMet);
+        }
+        if (!shouldSend) {
+            return;
+        }
+        player.sendMessage(message);
+        state.lastReminderMillis = now;
+        state.chatCount = 0;
+    }
+
+    private ReminderState getOrCreateReminderState(UUID playerId, long now) {
+        return reminderStates.computeIfAbsent(playerId, id -> new ReminderState(now));
+    }
+
+    public void removeReminderState(UUID playerId) {
+        reminderStates.remove(playerId);
+    }
+
+    private enum ReminderCondition {
+        AND,
+        OR;
+
+        private static ReminderCondition fromString(String raw) {
+            if (raw == null) {
+                return OR;
+            }
+            return raw.equalsIgnoreCase("AND") ? AND : OR;
+        }
+    }
+
+    private static class ReminderState {
+        private long lastReminderMillis;
+        private int chatCount;
+
+        private ReminderState(long now) {
+            this.lastReminderMillis = now;
+        }
     }
 }

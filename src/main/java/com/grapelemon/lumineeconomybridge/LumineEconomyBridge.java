@@ -23,6 +23,7 @@ import com.grapelemon.lumineeconomybridge.guide.GuideBookListener;
 import com.grapelemon.lumineeconomybridge.quest.QuestCommandExecutor;
 import com.grapelemon.lumineeconomybridge.quest.QuestListener;
 import com.grapelemon.lumineeconomybridge.quest.QuestManager;
+import com.grapelemon.lumineeconomybridge.quest.QuestReminderListener;
 import com.grapelemon.lumineeconomybridge.vault.VaultEconomyBridge;
 import com.grapelemon.lumineeconomybridge.protect.ProtectManager;
 import com.grapelemon.lumineeconomybridge.protect.ProtectListener;
@@ -102,6 +103,7 @@ public class LumineEconomyBridge extends JavaPlugin {
         saveDefaultConfig();
         loadDecimalConfig();
         Lang.load(this);
+        Settings.load(this);
         saveResource("permission_confg.txt", false);
         loadPermissions();
         loadWalletAcknowledged();
@@ -135,6 +137,7 @@ public class LumineEconomyBridge extends JavaPlugin {
         getCommand("quest").setExecutor(questExecutor);
         getCommand("quest").setTabCompleter(questExecutor);
         getServer().getPluginManager().registerEvents(new QuestListener(this, questManager), this);
+        getServer().getPluginManager().registerEvents(new QuestReminderListener(questManager), this);
 
         startBridge();
         startTileUpdates();
@@ -288,12 +291,13 @@ public class LumineEconomyBridge extends JavaPlugin {
         if (protectManager != null) {
             protectManager.reload();
         }
+        Lang.load(this);
+        Settings.load(this);
         if (questManager != null) {
             questManager.reload();
         }
         baseUrl = normalizeBaseUrl(getConfig().getString("api.base_url", baseUrl));
         timeout = getConfig().getInt("api.timeout", timeout);
-        Lang.load(this);
         loadPermissions();
         loadWalletAcknowledged();
         stopBridge();
