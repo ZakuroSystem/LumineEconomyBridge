@@ -28,6 +28,7 @@ quest:
     or_suffix: " (OR)"
   complete: "&aクエスト達成: {quest}"
   economy_unavailable: "&e報酬の通貨付与に失敗しました。/ Economy unavailable."
+  reminder: "&7クエスト案内: /quest で確認できます。/ Check quests with /quest."
 guide:
   book_name: "&a経済ガイドブック / Economy Guide"
   book_lore_1: "&7右クリックでメニューを開きます / Right-click to open the menu"

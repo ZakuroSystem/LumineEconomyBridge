@@ -4,6 +4,7 @@ import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.Lang;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.ConfigurationSection;
@@ -12,6 +13,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -31,13 +33,16 @@ import java.util.Objects;
 import java.util.UUID;
 
 public class QuestManager {
+    private static final long REMINDER_INTERVAL_TICKS = 20L * 60L * 30L;
     private final LumineEconomyBridge plugin;
     private QuestConfig config;
     private QuestStateStore stateStore;
+    private BukkitTask reminderTask;
 
     public QuestManager(LumineEconomyBridge plugin) {
         this.plugin = plugin;
         reload();
+        startReminderTask();
     }
 
     public void reload() {
@@ -51,6 +56,10 @@ public class QuestManager {
     public void shutdown() {
         if (stateStore != null) {
             stateStore.save();
+        }
+        if (reminderTask != null) {
+            reminderTask.cancel();
+            reminderTask = null;
         }
     }
 
@@ -71,24 +80,24 @@ public class QuestManager {
                 continue;
             }
             anyActive = true;
-            String title = Lang.get("quest.list.group_title")
+            String title = colorize(Lang.get("quest.list.group_title")
                     .replace("{name}", group.name)
-                    .replace("{id}", group.id);
+                    .replace("{id}", group.id));
             player.sendMessage(title);
             List<QuestAssignment> assignments = playerState.assignments.get(group.id);
             int acceptedCount = countAssignments(assignments, active.offer.id);
             if (acceptedCount > 0) {
                 QuestProgress progress = evaluateProgress(player, active.offer);
-                player.sendMessage(Lang.get("quest.list.accepted")
+                player.sendMessage(colorize(Lang.get("quest.list.accepted")
                         .replace("{quest}", active.offer.id)
-                        .replace("{count}", String.valueOf(acceptedCount)));
-                player.sendMessage(Lang.get("quest.list.progress").replace("{progress}", progress.label));
-                player.sendMessage(Lang.get("quest.list.remaining")
-                        .replace("{remaining}", formatRemaining(active.endsAt, now)));
+                        .replace("{count}", String.valueOf(acceptedCount))));
+                player.sendMessage(colorize(Lang.get("quest.list.progress").replace("{progress}", progress.label)));
+                player.sendMessage(colorize(Lang.get("quest.list.remaining")
+                        .replace("{remaining}", formatRemaining(active.endsAt, now))));
             } else {
-                player.sendMessage(Lang.get("quest.list.available").replace("{quest}", active.offer.id));
-                player.sendMessage(Lang.get("quest.list.remaining")
-                        .replace("{remaining}", formatRemaining(active.endsAt, now)));
+                player.sendMessage(colorize(Lang.get("quest.list.available").replace("{quest}", active.offer.id)));
+                player.sendMessage(colorize(Lang.get("quest.list.remaining")
+                        .replace("{remaining}", formatRemaining(active.endsAt, now))));
             }
         }
         if (!anyActive) {
@@ -140,9 +149,9 @@ public class QuestManager {
         assignments.add(new QuestAssignment(target.offer.id, target.cycleIndex));
         stateStore.saveState(playerState);
         stateStore.save();
-        player.sendMessage(Lang.get("quest.accept.success").replace("{quest}", target.offer.id));
-        player.sendMessage(Lang.get("quest.accept.remaining")
-                .replace("{remaining}", formatRemaining(target.endsAt, now)));
+        player.sendMessage(colorize(Lang.get("quest.accept.success").replace("{quest}", target.offer.id)));
+        player.sendMessage(colorize(Lang.get("quest.accept.remaining")
+                .replace("{remaining}", formatRemaining(target.endsAt, now))));
         checkQuestCompletion(player);
     }
 
@@ -248,7 +257,7 @@ public class QuestManager {
             }
         }
         grantRewards(player, offer.rewards);
-        player.sendMessage(Lang.get("quest.complete").replace("{quest}", offer.id));
+        player.sendMessage(colorize(Lang.get("quest.complete").replace("{quest}", offer.id)));
         return true;
     }
 
@@ -771,5 +780,24 @@ public class QuestManager {
             }
         }
         return null;
+    }
+
+    private void startReminderTask() {
+        if (reminderTask != null) {
+            return;
+        }
+        reminderTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            String message = Lang.get("quest.reminder");
+            if (message == null || message.isBlank()) {
+                return;
+            }
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                player.sendMessage(message);
+            }
+        }, REMINDER_INTERVAL_TICKS, REMINDER_INTERVAL_TICKS);
+    }
+
+    private String colorize(String message) {
+        return ChatColor.translateAlternateColorCodes('&', message);
     }
 }
