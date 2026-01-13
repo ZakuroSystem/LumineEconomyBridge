@@ -3,3 +3,4 @@ quest_reminder:
   interval_minutes: 30
   chat_count_threshold: 0
   condition: "OR"
+  message: "&7クエスト案内: /quest で確認できます。/ Check quests with /quest."

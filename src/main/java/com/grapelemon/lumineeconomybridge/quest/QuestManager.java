@@ -44,6 +44,7 @@ public class QuestManager {
     private int reminderIntervalMinutes;
     private int reminderChatThreshold;
     private ReminderCondition reminderCondition;
+    private String reminderMessage;
     private final Map<UUID, ReminderState> reminderStates = new ConcurrentHashMap<>();
 
     public QuestManager(LumineEconomyBridge plugin) {
@@ -100,13 +101,14 @@ public class QuestManager {
             if (acceptedCount > 0) {
                 QuestProgress progress = evaluateProgress(player, active.offer);
                 player.sendMessage(colorize(Lang.get("quest.list.accepted")
-                        .replace("{quest}", active.offer.id)
+                        .replace("{quest}", formatQuestName(active.offer.id))
                         .replace("{count}", String.valueOf(acceptedCount))));
                 player.sendMessage(colorize(Lang.get("quest.list.progress").replace("{progress}", progress.label)));
                 player.sendMessage(colorize(Lang.get("quest.list.remaining")
                         .replace("{remaining}", formatRemaining(active.endsAt, now))));
             } else {
-                player.sendMessage(colorize(Lang.get("quest.list.available").replace("{quest}", active.offer.id)));
+                player.sendMessage(colorize(Lang.get("quest.list.available")
+                        .replace("{quest}", formatQuestName(active.offer.id))));
                 player.sendMessage(colorize(Lang.get("quest.list.remaining")
                         .replace("{remaining}", formatRemaining(active.endsAt, now))));
             }
@@ -160,7 +162,8 @@ public class QuestManager {
         assignments.add(new QuestAssignment(target.offer.id, target.cycleIndex));
         stateStore.saveState(playerState);
         stateStore.save();
-        player.sendMessage(colorize(Lang.get("quest.accept.success").replace("{quest}", target.offer.id)));
+        player.sendMessage(colorize(Lang.get("quest.accept.success")
+                .replace("{quest}", formatQuestName(target.offer.id))));
         player.sendMessage(colorize(Lang.get("quest.accept.remaining")
                 .replace("{remaining}", formatRemaining(target.endsAt, now))));
         checkQuestCompletion(player);
@@ -268,7 +271,7 @@ public class QuestManager {
             }
         }
         grantRewards(player, offer.rewards);
-        player.sendMessage(colorize(Lang.get("quest.complete").replace("{quest}", offer.id)));
+        player.sendMessage(colorize(Lang.get("quest.complete").replace("{quest}", formatQuestName(offer.id))));
         return true;
     }
 
@@ -832,6 +835,7 @@ public class QuestManager {
         reminderChatThreshold = Math.max(0, Settings.getInt("quest_reminder.chat_count_threshold", 0));
         String conditionRaw = Settings.getString("quest_reminder.condition", "OR");
         reminderCondition = ReminderCondition.fromString(conditionRaw);
+        reminderMessage = Settings.getString("quest_reminder.message", Lang.get("quest.reminder"));
         startReminderTask();
     }
 
@@ -839,8 +843,8 @@ public class QuestManager {
         if (!reminderEnabled) {
             return;
         }
-        String message = Lang.get("quest.reminder");
-        if (message == null || message.isBlank()) {
+        String message = reminderMessage != null ? reminderMessage : "";
+        if (message.isBlank()) {
             return;
         }
         boolean timeEnabled = reminderIntervalMinutes > 0;
@@ -860,9 +864,13 @@ public class QuestManager {
         if (!shouldSend) {
             return;
         }
-        player.sendMessage(message);
+        player.sendMessage(colorize(message));
         state.lastReminderMillis = now;
         state.chatCount = 0;
+    }
+
+    private String formatQuestName(String questId) {
+        return colorize(questId);
     }
 
     private ReminderState getOrCreateReminderState(UUID playerId, long now) {
