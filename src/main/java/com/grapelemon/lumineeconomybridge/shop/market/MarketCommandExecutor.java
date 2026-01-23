@@ -24,6 +24,19 @@ public class MarketCommandExecutor implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (!(sender instanceof Player) && args.length >= 1) {
+            String sub = args[0].toLowerCase();
+            if (!sub.equals("add") && !sub.equals("remove")) {
+                Player target = plugin.getServer().getPlayerExact(args[0]);
+                if (target == null) {
+                    sender.sendMessage(ChatColor.RED + "Player " + args[0] + " is not online" + ChatColor.RESET);
+                    return true;
+                }
+                marketManager.openMarket(target);
+                sender.sendMessage(ChatColor.GREEN + "Opened market for " + target.getName() + ChatColor.RESET);
+                return true;
+            }
+        }
         if (args.length == 0) {
             if (sender instanceof Player player) {
                 marketManager.openMarket(player);

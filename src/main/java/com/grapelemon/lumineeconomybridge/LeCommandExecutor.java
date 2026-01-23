@@ -27,6 +27,7 @@ import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.TileState;
 import org.bukkit.ChatColor;
+import org.bukkit.command.ConsoleCommandSender;
 import net.md_5.bungee.api.ChatMessageType;
 import net.md_5.bungee.api.chat.TextComponent;
 
@@ -116,10 +117,67 @@ public class LeCommandExecutor implements CommandExecutor {
         }
 
         if (!(sender instanceof Player p)) {
-            sender.sendMessage(Lang.get("player-only"));
+            if (args.length == 0) {
+                sender.sendMessage(ChatColor.YELLOW + "Usage: /le <player> <command...>" + ChatColor.RESET);
+                sender.sendMessage(ChatColor.GRAY + "Console commands: /le start|stop|reload|rewrite|help|api|giveaway" + ChatColor.RESET);
+                return true;
+            }
+            if (sub.equals("start")) {
+                plugin.startBridge();
+                sender.sendMessage(Lang.get("bridge-starting"));
+                return true;
+            }
+            if (sub.equals("giveaway")) {
+                return handleGiveaway(sender, args);
+            }
+            if (sub.equals("stop")) {
+                plugin.stopBridge();
+                sender.sendMessage(Lang.get("bridge-stopped"));
+                return true;
+            }
+            if (sub.equals("reload")) {
+                plugin.reloadBridge();
+                sender.sendMessage(Lang.get("bridge-reloaded"));
+                return true;
+            }
+            if (sub.equals("rewrite")) {
+                if (!plugin.isActive()) {
+                    sender.sendMessage(Lang.get("error-unavailable"));
+                    return true;
+                }
+                plugin.getSyncService().rewriteAll();
+                sender.sendMessage(Lang.get("sync-requested"));
+                return true;
+            }
+            if (sub.equals("help")) {
+                sender.sendMessage(ChatColor.GOLD + "" + ChatColor.BOLD + "LumineEconomy Bridge Help" + ChatColor.RESET);
+                sender.sendMessage(ChatColor.GRAY + "Run player commands via: /le <player> <command...>" + ChatColor.RESET);
+                sender.sendMessage(ChatColor.GRAY + "Example: /le Steve wallet" + ChatColor.RESET);
+                return true;
+            }
+            Player runner = Bukkit.getPlayerExact(args[0]);
+            if (runner == null) {
+                sender.sendMessage(ChatColor.RED + "Player " + args[0] + " is not online" + ChatColor.RESET);
+                return true;
+            }
+            String[] delegated = Arrays.copyOfRange(args, 1, args.length);
+            if (delegated.length == 0) {
+                sendHelp(runner);
+                sender.sendMessage(ChatColor.GREEN + "Sent help to " + runner.getName() + ChatColor.RESET);
+                return true;
+            }
+            boolean executed = handlePlayerCommand(runner, delegated);
+            if (executed) {
+                sender.sendMessage(ChatColor.GREEN + "Executed as " + runner.getName() + ChatColor.RESET);
+            }
             return true;
         }
 
+        return handlePlayerCommand(p, args);
+    }
+
+    private boolean handlePlayerCommand(Player p, String[] args) {
+        String sub = args.length > 0 ? args[0].toLowerCase() : "";
         boolean hasBypass = plugin.hasBypass(p);
         if (plugin.requiresAdmin(sub) && !hasBypass && !p.isOp() && !p.hasPermission("lumineeconomy.admin")
                 && !sub.equalsIgnoreCase("money") && !sub.equalsIgnoreCase("currency")) {
@@ -163,6 +221,9 @@ public class LeCommandExecutor implements CommandExecutor {
                 case "help" -> {
                     sendHelp(p);
                     return true;
+                }
+                case "giveaway" -> {
+                    return handleGiveaway(p, args);
                 }
                 case "admin" -> {
                     if (!plugin.isActive() || plugin.getHttpClient() == null) {
@@ -1473,6 +1534,159 @@ public class LeCommandExecutor implements CommandExecutor {
         return true;
     }
 
+    private int runGiveaway(String amountToken, String currencyToken) {
+        int count = 0;
+        for (Player target : Bukkit.getOnlinePlayers()) {
+            sendGiveawayMessage(target, amountToken, currencyToken);
+            count++;
+        }
+        return count;
+    }
+
+    private void scheduleGiveaway(CommandSender sender, String amountToken, String currencyToken, long periodSeconds, Long endSeconds) {
+        long ticks = Math.max(1L, periodSeconds) * 20L;
+        long startAt = System.currentTimeMillis();
+        Long endAt = endSeconds != null ? startAt + (endSeconds * 1000L) : null;
+        java.util.concurrent.atomic.AtomicReference<org.bukkit.scheduler.BukkitTask> taskRef = new java.util.concurrent.atomic.AtomicReference<>();
+        org.bukkit.scheduler.BukkitTask task = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            if (endAt != null && System.currentTimeMillis() >= endAt) {
+                org.bukkit.scheduler.BukkitTask running = taskRef.get();
+                if (running != null) {
+                    running.cancel();
+                }
+                return;
+            }
+            int count = runGiveaway(amountToken, currencyToken);
+            plugin.getLogger().info("Giveaway sent to " + count + " players.");
+        }, 0L, ticks);
+        taskRef.set(task);
+        if (endAt == null) {
+            sender.sendMessage(ChatColor.GREEN + "Scheduled giveaway every " + periodSeconds + "s" + ChatColor.RESET);
+        } else {
+            sender.sendMessage(ChatColor.GREEN + "Scheduled giveaway every " + periodSeconds + "s for " + endSeconds + "s" + ChatColor.RESET);
+        }
+    }
+
+    private boolean handleGiveaway(CommandSender sender, String[] args) {
+        boolean isConsole = sender instanceof ConsoleCommandSender;
+        boolean isAdminUser = sender instanceof Player && hasAdminPermission(sender);
+        if (!isConsole && !isAdminUser) {
+            sender.sendMessage(ChatColor.RED + "Admin only / 管理者専用" + ChatColor.RESET);
+            return true;
+        }
+        if (args.length < 2 || args.length > 5) {
+            sender.sendMessage(ChatColor.YELLOW + "Usage: /le giveaway <amount> [period_seconds] [end_seconds] [currency]" + ChatColor.RESET);
+            sender.sendMessage(ChatColor.GRAY + "Example: /le giveaway 1000 3600 86400 thy" + ChatColor.RESET);
+            return true;
+        }
+        String amountToken = args[1];
+        try {
+            parseAmount(amountToken);
+        } catch (NumberFormatException ex) {
+            sender.sendMessage(ChatColor.RED + "Invalid amount / 金額が不正です" + ChatColor.RESET);
+            return true;
+        }
+        Long periodSeconds = null;
+        Long endSeconds = null;
+        String currencyToken = null;
+        if (args.length >= 3) {
+            periodSeconds = parseLongOrNull(args[2]);
+            if (periodSeconds == null) {
+                sender.sendMessage(ChatColor.RED + "Invalid period / 周期が不正です" + ChatColor.RESET);
+                return true;
+            }
+            if (periodSeconds <= 0) {
+                sender.sendMessage(ChatColor.RED + "Period must be positive / 1以上の秒数を指定してください" + ChatColor.RESET);
+                return true;
+            }
+        }
+        if (args.length >= 4) {
+            endSeconds = parseLongOrNull(args[3]);
+            if (endSeconds == null) {
+                sender.sendMessage(ChatColor.RED + "Invalid end time / 終了時間が不正です" + ChatColor.RESET);
+                return true;
+            }
+            if (endSeconds <= 0) {
+                sender.sendMessage(ChatColor.RED + "End seconds must be positive / 終了時間は1以上の秒数で指定してください" + ChatColor.RESET);
+                return true;
+            }
+        }
+        if (args.length >= 5) {
+            currencyToken = args[4];
+        }
+        if (endSeconds != null && periodSeconds == null) {
+            sender.sendMessage(ChatColor.RED + "End time requires period / 終了時間を指定するには周期を指定してください" + ChatColor.RESET);
+            return true;
+        }
+        if (!plugin.isActive() || plugin.getHttpClient() == null) {
+            sender.sendMessage(Lang.get("error-unavailable"));
+            return true;
+        }
+        if (periodSeconds == null) {
+            int count = runGiveaway(amountToken, currencyToken);
+            sender.sendMessage(ChatColor.GREEN + "Giveaway sent to " + count + " players" + ChatColor.RESET);
+        } else {
+            scheduleGiveaway(sender, amountToken, currencyToken, periodSeconds, endSeconds);
+        }
+        return true;
+    }
+
+    private void sendGiveawayMessage(Player target, String amountToken, String currencyToken) {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) {
+            return;
+        }
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("player", target.getUniqueId().toString());
+        payload.put("executor", "console");
+        StringBuilder command = new StringBuilder("/le money give ").append(target.getName());
+        if (currencyToken != null && !currencyToken.isBlank()) {
+            command.append(" ").append(currencyToken);
+        }
+        command.append(" ").append(amountToken);
+        payload.put("command", command.toString());
+        payload.put("timestamp", System.currentTimeMillis() / 1000);
+        Location loc = target.getLocation();
+        Map<String, Object> locMap = new HashMap<>();
+        locMap.put("world", loc.getWorld().getName());
+        locMap.put("x", loc.getX());
+        locMap.put("y", loc.getY());
+        locMap.put("z", loc.getZ());
+        payload.put("location", locMap);
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/message")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        http.newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException e) {
+                plugin.getLogger().warning("Giveaway failed: " + e.getMessage());
+            }
+
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    if (!response.isSuccessful()) {
+                        plugin.getLogger().warning("Giveaway failed: status " + response.code());
+                    }
+                }
+            }
+        });
+    }
+
+    private Long parseLongOrNull(String value) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private boolean hasAdminPermission(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            return true;
+        }
+        return plugin.hasBypass(player) || player.isOp() || player.hasPermission("lumineeconomy.admin");
+    }
+
     private boolean requiresWalletAcknowledgement(String sub) {
         if (sub.isBlank()) return false;
         return switch (sub.toLowerCase()) {
@@ -1503,6 +1717,7 @@ public class LeCommandExecutor implements CommandExecutor {
                 {"reload", "/le reload", "", "Reload configuration / 設定を再読み込み"},
                 {"admin", "/le admin add", "<player>", "Grant web admin access / ダッシュボード管理者を追加"},
                 {"cash", "/le cash issue", "<amount> [currency]", "Issue paper cash / 紙幣を発行"},
+                {"giveaway", "/le giveaway", "<amount> [period_seconds] [end_seconds] [currency]", "Give money to all online players / オンライン全員に配布"},
                 {"money", "/le money", "<give|take|pay|top> ...", "Manage balances / 残高を管理"},
                 {"currency", "/le currency", "<create|supply|default|manager|tax|treasury> ...", "Manage currencies / 通貨を管理"},
                 {"setbalance", "/le setbalance", "<player> <currency> <amount>", "Set a player's balance / 残高を直接設定"},

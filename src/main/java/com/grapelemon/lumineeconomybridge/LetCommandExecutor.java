@@ -6,6 +6,9 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.Bukkit;
+
+import java.util.Arrays;
 
 public class LetCommandExecutor implements CommandExecutor {
     private final ProtectManager protectManager;
@@ -17,20 +20,41 @@ public class LetCommandExecutor implements CommandExecutor {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(ChatColor.RED + "このコマンドはプレイヤー専用です。/ Players only." + ChatColor.RESET);
+            if (args.length == 0) {
+                sender.sendMessage(ChatColor.YELLOW + "Usage: /let <player> protect <add|remove> ..." + ChatColor.RESET);
+                return true;
+            }
+            Player target = Bukkit.getPlayerExact(args[0]);
+            if (target == null) {
+                sender.sendMessage(ChatColor.RED + "Player " + args[0] + " is not online" + ChatColor.RESET);
+                return true;
+            }
+            String[] delegated = Arrays.copyOfRange(args, 1, args.length);
+            if (delegated.length == 0) {
+                sendHelp(target);
+                sender.sendMessage(ChatColor.GREEN + "Sent help to " + target.getName() + ChatColor.RESET);
+                return true;
+            }
+            handlePlayerCommand(target, delegated);
+            sender.sendMessage(ChatColor.GREEN + "Executed as " + target.getName() + ChatColor.RESET);
             return true;
         }
+
+        handlePlayerCommand(player, args);
+        return true;
+    }
+
+    private void handlePlayerCommand(Player player, String[] args) {
         if (args.length == 0) {
             sendHelp(player);
-            return true;
+            return;
         }
         String sub = args[0].toLowerCase();
         if (sub.equals("protect")) {
             handleProtect(player, args);
-            return true;
+            return;
         }
         sendHelp(player);
-        return true;
     }
 
     private void handleProtect(Player player, String[] args) {
