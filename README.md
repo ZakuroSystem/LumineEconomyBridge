@@ -43,6 +43,14 @@ LumineEconomyBridge は Minecraft のスコアボード経済を Python バッ�
 - `/map` でワールドマップ表示（マップタイル API を利用）。
 
 ## 4. コマンド一覧（使い方）
+### コンソール/コマンドブロックからの実行
+プレイヤー専用の操作は、先頭に対象プレイヤー名を付けて実行できます。
+
+- `/le <player> <command...>` – 例: `/le Steve wallet`
+- `/let <player> protect add [id]`
+- `/quest <player> [questId]`
+- `/market <player>`（マーケットGUIを開く） / `/market add|remove <shop>`（管理者操作）
+
 ### `/le` 経済コマンド
 - `/le balance [currency] [player]` – 自分/他者の残高表示。
 - `/le wallet` – 自分の全通貨残高表示（口座が無ければ自動作成）。

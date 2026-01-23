@@ -116,10 +116,64 @@ public class LeCommandExecutor implements CommandExecutor {
         }
 
         if (!(sender instanceof Player p)) {
-            sender.sendMessage(Lang.get("player-only"));
+            if (args.length == 0) {
+                sender.sendMessage(ChatColor.YELLOW + "Usage: /le <player> <command...>" + ChatColor.RESET);
+                sender.sendMessage(ChatColor.GRAY + "Console commands: /le start|stop|reload|rewrite|help|api" + ChatColor.RESET);
+                return true;
+            }
+            if (sub.equals("start")) {
+                plugin.startBridge();
+                sender.sendMessage(Lang.get("bridge-starting"));
+                return true;
+            }
+            if (sub.equals("stop")) {
+                plugin.stopBridge();
+                sender.sendMessage(Lang.get("bridge-stopped"));
+                return true;
+            }
+            if (sub.equals("reload")) {
+                plugin.reloadBridge();
+                sender.sendMessage(Lang.get("bridge-reloaded"));
+                return true;
+            }
+            if (sub.equals("rewrite")) {
+                if (!plugin.isActive()) {
+                    sender.sendMessage(Lang.get("error-unavailable"));
+                    return true;
+                }
+                plugin.getSyncService().rewriteAll();
+                sender.sendMessage(Lang.get("sync-requested"));
+                return true;
+            }
+            if (sub.equals("help")) {
+                sender.sendMessage(ChatColor.GOLD + "" + ChatColor.BOLD + "LumineEconomy Bridge Help" + ChatColor.RESET);
+                sender.sendMessage(ChatColor.GRAY + "Run player commands via: /le <player> <command...>" + ChatColor.RESET);
+                sender.sendMessage(ChatColor.GRAY + "Example: /le Steve wallet" + ChatColor.RESET);
+                return true;
+            }
+            Player runner = Bukkit.getPlayerExact(args[0]);
+            if (runner == null) {
+                sender.sendMessage(ChatColor.RED + "Player " + args[0] + " is not online" + ChatColor.RESET);
+                return true;
+            }
+            String[] delegated = Arrays.copyOfRange(args, 1, args.length);
+            if (delegated.length == 0) {
+                sendHelp(runner);
+                sender.sendMessage(ChatColor.GREEN + "Sent help to " + runner.getName() + ChatColor.RESET);
+                return true;
+            }
+            boolean executed = handlePlayerCommand(runner, delegated);
+            if (executed) {
+                sender.sendMessage(ChatColor.GREEN + "Executed as " + runner.getName() + ChatColor.RESET);
+            }
             return true;
         }
 
+        return handlePlayerCommand(p, args);
+    }
+
+    private boolean handlePlayerCommand(Player p, String[] args) {
+        String sub = args.length > 0 ? args[0].toLowerCase() : "";
         boolean hasBypass = plugin.hasBypass(p);
         if (plugin.requiresAdmin(sub) && !hasBypass && !p.isOp() && !p.hasPermission("lumineeconomy.admin")
                 && !sub.equalsIgnoreCase("money") && !sub.equalsIgnoreCase("currency")) {
