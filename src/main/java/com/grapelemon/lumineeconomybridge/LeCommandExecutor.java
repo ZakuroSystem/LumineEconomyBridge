@@ -1575,8 +1575,8 @@ public class LeCommandExecutor implements CommandExecutor {
             return true;
         }
         if (args.length < 2 || args.length > 5) {
-            sender.sendMessage(ChatColor.YELLOW + "Usage: /le giveaway <amount> [period_seconds] [currency] [end_seconds]" + ChatColor.RESET);
-            sender.sendMessage(ChatColor.GRAY + "Example: /le giveaway 1000 3600 thy 86400" + ChatColor.RESET);
+            sender.sendMessage(ChatColor.YELLOW + "Usage: /le giveaway <amount> [period_seconds] [end_seconds] [currency]" + ChatColor.RESET);
+            sender.sendMessage(ChatColor.GRAY + "Example: /le giveaway 1000 3600 86400 thy" + ChatColor.RESET);
             return true;
         }
         String amountToken = args[1];
@@ -1587,37 +1587,32 @@ public class LeCommandExecutor implements CommandExecutor {
             return true;
         }
         Long periodSeconds = null;
-        String currencyToken = null;
         Long endSeconds = null;
+        String currencyToken = null;
         if (args.length >= 3) {
-            Long maybePeriod = parseLongOrNull(args[2]);
-            if (maybePeriod != null) {
-                periodSeconds = maybePeriod;
-                if (periodSeconds <= 0) {
-                    sender.sendMessage(ChatColor.RED + "Period must be positive / 1以上の秒数を指定してください" + ChatColor.RESET);
-                    return true;
-                }
-                if (args.length == 4) {
-                    Long maybeEnd = parseLongOrNull(args[3]);
-                    if (maybeEnd != null) {
-                        endSeconds = maybeEnd;
-                    } else {
-                        currencyToken = args[3];
-                    }
-                } else if (args.length >= 5) {
-                    currencyToken = args[3];
-                    endSeconds = parseLongOrNull(args[4]);
-                }
-            } else {
-                currencyToken = args[2];
-                if (args.length == 4) {
-                    endSeconds = parseLongOrNull(args[3]);
-                }
+            periodSeconds = parseLongOrNull(args[2]);
+            if (periodSeconds == null) {
+                sender.sendMessage(ChatColor.RED + "Invalid period / 周期が不正です" + ChatColor.RESET);
+                return true;
+            }
+            if (periodSeconds <= 0) {
+                sender.sendMessage(ChatColor.RED + "Period must be positive / 1以上の秒数を指定してください" + ChatColor.RESET);
+                return true;
             }
         }
-        if (endSeconds != null && endSeconds <= 0) {
-            sender.sendMessage(ChatColor.RED + "End seconds must be positive / 終了時間は1以上の秒数で指定してください" + ChatColor.RESET);
-            return true;
+        if (args.length >= 4) {
+            endSeconds = parseLongOrNull(args[3]);
+            if (endSeconds == null) {
+                sender.sendMessage(ChatColor.RED + "Invalid end time / 終了時間が不正です" + ChatColor.RESET);
+                return true;
+            }
+            if (endSeconds <= 0) {
+                sender.sendMessage(ChatColor.RED + "End seconds must be positive / 終了時間は1以上の秒数で指定してください" + ChatColor.RESET);
+                return true;
+            }
+        }
+        if (args.length >= 5) {
+            currencyToken = args[4];
         }
         if (endSeconds != null && periodSeconds == null) {
             sender.sendMessage(ChatColor.RED + "End time requires period / 終了時間を指定するには周期を指定してください" + ChatColor.RESET);
@@ -1722,7 +1717,7 @@ public class LeCommandExecutor implements CommandExecutor {
                 {"reload", "/le reload", "", "Reload configuration / 設定を再読み込み"},
                 {"admin", "/le admin add", "<player>", "Grant web admin access / ダッシュボード管理者を追加"},
                 {"cash", "/le cash issue", "<amount> [currency]", "Issue paper cash / 紙幣を発行"},
-                {"giveaway", "/le giveaway", "<amount> [period_seconds] [currency] [end_seconds]", "Give money to all online players / オンライン全員に配布"},
+                {"giveaway", "/le giveaway", "<amount> [period_seconds] [end_seconds] [currency]", "Give money to all online players / オンライン全員に配布"},
                 {"money", "/le money", "<give|take|pay|top> ...", "Manage balances / 残高を管理"},
                 {"currency", "/le currency", "<create|supply|default|manager|tax|treasury> ...", "Manage currencies / 通貨を管理"},
                 {"setbalance", "/le setbalance", "<player> <currency> <amount>", "Set a player's balance / 残高を直接設定"},
