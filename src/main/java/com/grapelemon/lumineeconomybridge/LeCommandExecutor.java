@@ -27,6 +27,7 @@ import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.TileState;
 import org.bukkit.ChatColor;
+import org.bukkit.command.ConsoleCommandSender;
 import net.md_5.bungee.api.ChatMessageType;
 import net.md_5.bungee.api.chat.TextComponent;
 
@@ -118,12 +119,60 @@ public class LeCommandExecutor implements CommandExecutor {
         if (!(sender instanceof Player p)) {
             if (args.length == 0) {
                 sender.sendMessage(ChatColor.YELLOW + "Usage: /le <player> <command...>" + ChatColor.RESET);
-                sender.sendMessage(ChatColor.GRAY + "Console commands: /le start|stop|reload|rewrite|help|api" + ChatColor.RESET);
+                sender.sendMessage(ChatColor.GRAY + "Console commands: /le start|stop|reload|rewrite|help|api|giveaway" + ChatColor.RESET);
                 return true;
             }
             if (sub.equals("start")) {
                 plugin.startBridge();
                 sender.sendMessage(Lang.get("bridge-starting"));
+                return true;
+            }
+            if (sub.equals("giveaway")) {
+                if (!(sender instanceof ConsoleCommandSender)) {
+                    sender.sendMessage(ChatColor.RED + "Console only / コンソール専用" + ChatColor.RESET);
+                    return true;
+                }
+                if (args.length < 2 || args.length > 4) {
+                    sender.sendMessage(ChatColor.YELLOW + "Usage: /le giveaway <amount> [period_seconds] [currency]" + ChatColor.RESET);
+                    sender.sendMessage(ChatColor.GRAY + "Example: /le giveaway 1000 3600 thy" + ChatColor.RESET);
+                    return true;
+                }
+                String amountToken = args[1];
+                try {
+                    parseAmount(amountToken);
+                } catch (NumberFormatException ex) {
+                    sender.sendMessage(ChatColor.RED + "Invalid amount / 金額が不正です" + ChatColor.RESET);
+                    return true;
+                }
+                Long periodSeconds = null;
+                if (args.length >= 3) {
+                    try {
+                        periodSeconds = Long.parseLong(args[2]);
+                    } catch (NumberFormatException ex) {
+                        sender.sendMessage(ChatColor.RED + "Invalid period / 周期が不正です" + ChatColor.RESET);
+                        return true;
+                    }
+                    if (periodSeconds <= 0) {
+                        sender.sendMessage(ChatColor.RED + "Period must be positive / 1以上の秒数を指定してください" + ChatColor.RESET);
+                        return true;
+                    }
+                }
+                String currencyToken = args.length >= 4 ? args[3] : null;
+                if (!plugin.isActive() || plugin.getHttpClient() == null) {
+                    sender.sendMessage(Lang.get("error-unavailable"));
+                    return true;
+                }
+                if (periodSeconds == null) {
+                    int count = runGiveaway(amountToken, currencyToken);
+                    sender.sendMessage(ChatColor.GREEN + "Giveaway sent to " + count + " players" + ChatColor.RESET);
+                } else {
+                    long ticks = Math.max(1L, periodSeconds) * 20L;
+                    Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+                        int count = runGiveaway(amountToken, currencyToken);
+                        plugin.getLogger().info("Giveaway sent to " + count + " players.");
+                    }, 0L, ticks);
+                    sender.sendMessage(ChatColor.GREEN + "Scheduled giveaway every " + periodSeconds + "s" + ChatColor.RESET);
+                }
                 return true;
             }
             if (sub.equals("stop")) {
@@ -216,6 +265,10 @@ public class LeCommandExecutor implements CommandExecutor {
                 }
                 case "help" -> {
                     sendHelp(p);
+                    return true;
+                }
+                case "giveaway" -> {
+                    p.sendMessage(ChatColor.RED + "Console only / コンソール専用" + ChatColor.RESET);
                     return true;
                 }
                 case "admin" -> {
@@ -1525,6 +1578,56 @@ public class LeCommandExecutor implements CommandExecutor {
 
         p.sendActionBar(Lang.get("send-pending"));
         return true;
+    }
+
+    private int runGiveaway(String amountToken, String currencyToken) {
+        int count = 0;
+        for (Player target : Bukkit.getOnlinePlayers()) {
+            sendGiveawayMessage(target, amountToken, currencyToken);
+            count++;
+        }
+        return count;
+    }
+
+    private void sendGiveawayMessage(Player target, String amountToken, String currencyToken) {
+        OkHttpClient http = plugin.getHttpClient();
+        if (http == null) {
+            return;
+        }
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("player", target.getUniqueId().toString());
+        payload.put("executor", "console");
+        StringBuilder command = new StringBuilder("/le money give ").append(target.getName());
+        if (currencyToken != null && !currencyToken.isBlank()) {
+            command.append(" ").append(currencyToken);
+        }
+        command.append(" ").append(amountToken);
+        payload.put("command", command.toString());
+        payload.put("timestamp", System.currentTimeMillis() / 1000);
+        Location loc = target.getLocation();
+        Map<String, Object> locMap = new HashMap<>();
+        locMap.put("world", loc.getWorld().getName());
+        locMap.put("x", loc.getX());
+        locMap.put("y", loc.getY());
+        locMap.put("z", loc.getZ());
+        payload.put("location", locMap);
+        Request req = new Request.Builder()
+                .url(plugin.getBaseUrl() + "/api/message")
+                .post(RequestBody.create(gson.toJson(payload), JSON))
+                .build();
+        http.newCall(req).enqueue(new Callback() {
+            @Override public void onFailure(Call call, IOException e) {
+                plugin.getLogger().warning("Giveaway failed: " + e.getMessage());
+            }
+
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                try (response) {
+                    if (!response.isSuccessful()) {
+                        plugin.getLogger().warning("Giveaway failed: status " + response.code());
+                    }
+                }
+            }
+        });
     }
 
     private boolean requiresWalletAcknowledgement(String sub) {
