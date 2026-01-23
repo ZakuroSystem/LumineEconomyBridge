@@ -50,7 +50,7 @@ LumineEconomyBridge は Minecraft のスコアボード経済を Python バッ�
 - `/let <player> protect add [id]`
 - `/quest <player> [questId]`
 - `/market <player>`（マーケットGUIを開く） / `/market add|remove <shop>`（管理者操作）
-- `/le giveaway <amount> [period_seconds] [currency]`（コンソール専用。オンライン全員に配布）
+- `/le giveaway <amount> [period_seconds] [currency] [end_seconds]`（管理者/コンソール専用。オンライン全員に配布）
 
 ### `/le` 経済コマンド
 - `/le balance [currency] [player]` – 自分/他者の残高表示。
