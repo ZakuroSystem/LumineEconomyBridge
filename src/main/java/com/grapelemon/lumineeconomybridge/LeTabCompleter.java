@@ -21,8 +21,12 @@ public class LeTabCompleter implements TabCompleter {
 
     private final LumineEconomyBridge plugin;
 
-    private List<String> shopIds = new ArrayList<>();
-    private long shopIdsFetched = 0L;
+    private static class ShopIdCache {
+        List<String> ids = new ArrayList<>();
+        long fetched = 0L;
+    }
+
+    private final Map<UUID, ShopIdCache> shopIdCache = new ConcurrentHashMap<>();
 
     private static class ItemCache {
         List<String> itemKeys = new ArrayList<>();
@@ -36,12 +40,14 @@ public class LeTabCompleter implements TabCompleter {
         this.plugin = plugin;
     }
 
-    private void refreshShopIds() {
+    private void refreshShopIds(Player p) {
         OkHttpClient http = plugin.getHttpClient();
         if (http == null) return;
-        Request req = new Request.Builder()
-                .url(plugin.getBaseUrl() + "/api/shop/ids")
-                .build();
+        HttpUrl.Builder url = HttpUrl.parse(plugin.getBaseUrl() + "/api/shop/ids").newBuilder();
+        if (!p.isOp()) {
+            url.addQueryParameter("owner_uuid", p.getUniqueId().toString());
+        }
+        Request req = new Request.Builder().url(url.build()).build();
         http.newCall(req).enqueue(new Callback() {
             @Override public void onFailure(Call call, IOException e) {}
             @Override public void onResponse(Call call, Response response) throws IOException {
@@ -51,8 +57,10 @@ public class LeTabCompleter implements TabCompleter {
                     JsonArray arr = obj.has("ids") ? obj.getAsJsonArray("ids") : new JsonArray();
                     List<String> ids = new ArrayList<>();
                     for (JsonElement el : arr) ids.add(el.getAsString());
-                    shopIds = ids;
-                    shopIdsFetched = System.currentTimeMillis();
+                    ShopIdCache cache = new ShopIdCache();
+                    cache.ids = ids;
+                    cache.fetched = System.currentTimeMillis();
+                    shopIdCache.put(p.getUniqueId(), cache);
                 }
             }
         });
@@ -190,13 +198,19 @@ public class LeTabCompleter implements TabCompleter {
                         .collect(Collectors.toList());
             }
             if (first.equals("shop")) {
-                long now = System.currentTimeMillis();
-                if (now - shopIdsFetched > 5000) {
-                    refreshShopIds();
+                if (sender instanceof Player player) {
+                    ShopIdCache cache = shopIdCache.get(player.getUniqueId());
+                    long now = System.currentTimeMillis();
+                    if (cache == null || now - cache.fetched > 5000) {
+                        refreshShopIds(player);
+                        cache = shopIdCache.get(player.getUniqueId());
+                    }
+                    List<String> ids = cache != null ? cache.ids : Collections.emptyList();
+                    return ids.stream()
+                            .filter(s -> s.toLowerCase().startsWith(args[2].toLowerCase()))
+                            .collect(Collectors.toList());
                 }
-                return shopIds.stream()
-                        .filter(s -> s.toLowerCase().startsWith(args[2].toLowerCase()))
-                        .collect(Collectors.toList());
+                return Collections.emptyList();
             }
         }
         if (args.length == 4) {
@@ -225,13 +239,19 @@ public class LeTabCompleter implements TabCompleter {
                 }
             }
             if (args[0].equalsIgnoreCase("shop") && args[1].equalsIgnoreCase("partner")) {
-                long now = System.currentTimeMillis();
-                if (now - shopIdsFetched > 5000) {
-                    refreshShopIds();
+                if (sender instanceof Player player) {
+                    ShopIdCache cache = shopIdCache.get(player.getUniqueId());
+                    long now = System.currentTimeMillis();
+                    if (cache == null || now - cache.fetched > 5000) {
+                        refreshShopIds(player);
+                        cache = shopIdCache.get(player.getUniqueId());
+                    }
+                    List<String> ids = cache != null ? cache.ids : Collections.emptyList();
+                    return ids.stream()
+                            .filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase()))
+                            .collect(Collectors.toList());
                 }
-                return shopIds.stream()
-                        .filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase()))
-                        .collect(Collectors.toList());
+                return Collections.emptyList();
             }
             if (args[0].equalsIgnoreCase("shop") && (args[1].equalsIgnoreCase("price") || args[1].equalsIgnoreCase("remove"))) {
                 String shopId = args[2];
