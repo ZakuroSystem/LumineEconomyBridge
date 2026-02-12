@@ -33,6 +33,7 @@ quest:
     not_complete: "&e達成条件を満たしていません: &f{progress}"
     consume_failed: "&c必要アイテムの回収に失敗しました。/ Failed to collect required items."
   economy_unavailable: "&e報酬の通貨付与に失敗しました。/ Economy unavailable."
+  money_rewarded: "&aクエスト報酬として &e{amount} &aを受け取りました。/ Received {amount} as quest reward."
   reminder: "&7クエスト案内: /quest で確認できます。/ Check quests with /quest."
 guide:
   book_name: "&a経済ガイドブック / Economy Guide"

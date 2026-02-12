@@ -32,6 +32,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.text.DecimalFormat;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class QuestManager {
@@ -415,7 +416,16 @@ public class QuestManager {
         if (rewards.money > 0) {
             RegisteredServiceProvider<Economy> provider = Bukkit.getServicesManager().getRegistration(Economy.class);
             if (provider != null) {
-                provider.getProvider().depositPlayer(player, rewards.money);
+                Economy economy = provider.getProvider();
+                var response = economy.depositPlayer(player, rewards.money);
+                if (response.transactionSuccess()) {
+                    player.sendMessage(colorize(Lang.get("quest.money_rewarded")
+                            .replace("{amount}", formatMoney(rewards.money))));
+                } else {
+                    player.sendMessage(Lang.get("quest.economy_unavailable"));
+                    String reason = response.errorMessage == null ? "unknown" : response.errorMessage;
+                    plugin.getLogger().warning("Failed to deposit quest reward money for " + player.getName() + ": " + reason);
+                }
             } else {
                 player.sendMessage(Lang.get("quest.economy_unavailable"));
             }
@@ -436,6 +446,15 @@ public class QuestManager {
                 }
             }
         }
+    }
+
+
+    private String formatMoney(double amount) {
+        if (Math.floor(amount) == amount) {
+            return String.format(Locale.US, "%.0f", amount);
+        }
+        DecimalFormat format = new DecimalFormat("#,##0.##");
+        return format.format(amount);
     }
 
     private int countMaterial(PlayerInventory inventory, Material material) {
@@ -594,11 +613,13 @@ public class QuestManager {
         if (!(raw instanceof Map<?, ?> map)) {
             return new QuestRewards(0, Collections.emptyList());
         }
-        int money = 0;
+        double money = 0;
         Object moneyRaw = map.get("money");
-        if (moneyRaw != null) {
+        if (moneyRaw instanceof Number number) {
+            money = Math.max(0, number.doubleValue());
+        } else if (moneyRaw != null) {
             try {
-                money = Integer.parseInt(moneyRaw.toString());
+                money = Math.max(0, Double.parseDouble(moneyRaw.toString()));
             } catch (NumberFormatException ignored) {
             }
         }
@@ -772,10 +793,10 @@ public class QuestManager {
     }
 
     private static class QuestRewards {
-        private final int money;
+        private final double money;
         private final List<QuestRewardItem> items;
 
-        private QuestRewards(int money, List<QuestRewardItem> items) {
+        private QuestRewards(double money, List<QuestRewardItem> items) {
             this.money = money;
             this.items = items;
         }
