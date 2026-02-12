@@ -101,14 +101,14 @@ public class QuestManager {
             if (acceptedCount > 0) {
                 QuestProgress progress = evaluateProgress(player, active.offer);
                 player.sendMessage(colorize(Lang.get("quest.list.accepted")
-                        .replace("{quest}", formatQuestName(active.offer.id))
+                        .replace("{quest}", formatQuestName(active.offer))
                         .replace("{count}", String.valueOf(acceptedCount))));
                 player.sendMessage(colorize(Lang.get("quest.list.progress").replace("{progress}", progress.label)));
                 player.sendMessage(colorize(Lang.get("quest.list.remaining")
                         .replace("{remaining}", formatRemaining(active.endsAt, now))));
             } else {
                 player.sendMessage(colorize(Lang.get("quest.list.available")
-                        .replace("{quest}", formatQuestName(active.offer.id))));
+                        .replace("{quest}", formatQuestName(active.offer))));
                 player.sendMessage(colorize(Lang.get("quest.list.remaining")
                         .replace("{remaining}", formatRemaining(active.endsAt, now))));
             }
@@ -118,6 +118,41 @@ public class QuestManager {
         }
         stateStore.saveState(playerState);
         stateStore.save();
+    }
+
+    public List<QuestDisplayEntry> getActiveQuestEntries(Player player) {
+        if (config == null || config.groups.isEmpty()) {
+            return Collections.emptyList();
+        }
+        PlayerQuestState playerState = stateStore.get(player.getUniqueId());
+        ZonedDateTime now = ZonedDateTime.now(config.zoneId);
+        boolean updated = clearExpiredStates(playerState, now);
+        List<QuestDisplayEntry> entries = new ArrayList<>();
+        for (QuestGroup group : config.groups.values()) {
+            ActiveOffer active = getActiveOffer(group, now);
+            if (active == null) {
+                continue;
+            }
+            List<QuestAssignment> assignments = playerState.assignments.get(group.id);
+            int acceptedCount = countAssignments(assignments, active.offer.id);
+            String progress = null;
+            if (acceptedCount > 0) {
+                progress = evaluateProgress(player, active.offer).label;
+            }
+            entries.add(new QuestDisplayEntry(
+                    active.offer.id,
+                    colorize(active.offer.displayName),
+                    group.name,
+                    formatRemaining(active.endsAt, now),
+                    acceptedCount,
+                    progress
+            ));
+        }
+        if (updated) {
+            stateStore.saveState(playerState);
+            stateStore.save();
+        }
+        return entries;
     }
 
     public void acceptQuest(Player player, String questId) {
@@ -163,7 +198,7 @@ public class QuestManager {
         stateStore.saveState(playerState);
         stateStore.save();
         player.sendMessage(colorize(Lang.get("quest.accept.success")
-                .replace("{quest}", formatQuestName(target.offer.id))));
+                .replace("{quest}", formatQuestName(target.offer))));
         player.sendMessage(colorize(Lang.get("quest.accept.remaining")
                 .replace("{remaining}", formatRemaining(target.endsAt, now))));
         checkQuestCompletion(player);
@@ -271,7 +306,7 @@ public class QuestManager {
             }
         }
         grantRewards(player, offer.rewards);
-        player.sendMessage(colorize(Lang.get("quest.complete").replace("{quest}", formatQuestName(offer.id))));
+        player.sendMessage(colorize(Lang.get("quest.complete").replace("{quest}", formatQuestName(offer))));
         return true;
     }
 
@@ -442,9 +477,16 @@ public class QuestManager {
             return null;
         }
         String id = idRaw.toString();
+        String displayName = Objects.toString(map.get("name"), "");
+        if (displayName.isBlank()) {
+            displayName = Objects.toString(map.get("display_name"), "");
+        }
+        if (displayName.isBlank()) {
+            displayName = id;
+        }
         QuestConditions conditions = parseConditions(map.get("conditions"));
         QuestRewards rewards = parseRewards(map.get("rewards"));
-        return new QuestOffer(id, conditions, rewards);
+        return new QuestOffer(id, displayName, conditions, rewards);
     }
 
     private QuestConditions parseConditions(Object raw) {
@@ -612,11 +654,13 @@ public class QuestManager {
 
     private static class QuestOffer {
         private final String id;
+        private final String displayName;
         private final QuestConditions conditions;
         private final QuestRewards rewards;
 
-        private QuestOffer(String id, QuestConditions conditions, QuestRewards rewards) {
+        private QuestOffer(String id, String displayName, QuestConditions conditions, QuestRewards rewards) {
             this.id = id;
+            this.displayName = displayName;
             this.conditions = conditions;
             this.rewards = rewards;
         }
@@ -869,8 +913,40 @@ public class QuestManager {
         state.chatCount = 0;
     }
 
-    private String formatQuestName(String questId) {
+    private String formatQuestName(QuestOffer offer) {
+        return colorize(offer.displayName);
+    }
+
+    public String resolveQuestDisplayName(String questId) {
+        if (config == null || config.groups.isEmpty()) {
+            return colorize(questId);
+        }
+        for (QuestGroup group : config.groups.values()) {
+            for (QuestOffer offer : group.offers) {
+                if (offer.id.equalsIgnoreCase(questId)) {
+                    return colorize(offer.displayName);
+                }
+            }
+        }
         return colorize(questId);
+    }
+
+    public static class QuestDisplayEntry {
+        public final String id;
+        public final String displayName;
+        public final String groupName;
+        public final String remaining;
+        public final int acceptedCount;
+        public final String progress;
+
+        public QuestDisplayEntry(String id, String displayName, String groupName, String remaining, int acceptedCount, String progress) {
+            this.id = id;
+            this.displayName = displayName;
+            this.groupName = groupName;
+            this.remaining = remaining;
+            this.acceptedCount = acceptedCount;
+            this.progress = progress;
+        }
     }
 
     private ReminderState getOrCreateReminderState(UUID playerId, long now) {

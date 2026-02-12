@@ -7,6 +7,7 @@ import com.google.gson.JsonObject;
 import com.grapelemon.lumineeconomybridge.Lang;
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.guide.GuideBookMenuHolder.GuideAction;
+import com.grapelemon.lumineeconomybridge.quest.QuestManager;
 import com.grapelemon.lumineeconomybridge.guide.GuideBookMenuHolder.MenuType;
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 
@@ -62,12 +63,14 @@ public class GuideBookListener implements Listener {
 
     private final LumineEconomyBridge plugin;
     private final NamespacedKey guideKey;
+    private final NamespacedKey questIdKey;
     private final Gson gson = new Gson();
     private final ConversationFactory shopIdFactory;
 
     public GuideBookListener(LumineEconomyBridge plugin) {
         this.plugin = plugin;
         this.guideKey = new NamespacedKey(plugin, "guide_book");
+        this.questIdKey = new NamespacedKey(plugin, "guide_quest_id");
         this.shopIdFactory = new ConversationFactory(plugin)
                 .withModality(false)
                 .withLocalEcho(false)
@@ -250,6 +253,19 @@ public class GuideBookListener implements Listener {
         if (rawSlot < 0 || rawSlot >= event.getView().getTopInventory().getSize()) {
             return;
         }
+        if (holder.getMenuType() == MenuType.QUESTS) {
+            ItemStack clicked = event.getCurrentItem();
+            if (clicked != null && clicked.hasItemMeta()) {
+                ItemMeta meta = clicked.getItemMeta();
+                String questId = meta.getPersistentDataContainer().get(questIdKey, PersistentDataType.STRING);
+                if (questId != null && !questId.isBlank()) {
+                    player.closeInventory();
+                    player.performCommand("quest " + questId);
+                    Bukkit.getScheduler().runTask(plugin, () -> openQuestMenu(player));
+                    return;
+                }
+            }
+        }
         GuideAction action = holder.getAction(rawSlot);
         if (action == null) {
             return;
@@ -364,80 +380,26 @@ public class GuideBookListener implements Listener {
         Inventory inv = Bukkit.createInventory(holder, 27, Lang.get("guide.quests.menu_title"));
         holder.setInventory(inv);
         addBackButton(holder, inv);
-
-        inv.setItem(13, buildMenuItem(Material.PAPER, Lang.get("guide.quests.loading")));
+        renderQuestList(player, holder);
         player.openInventory(inv);
-        fetchRecommendedQuests(player, holder);
     }
 
-    private void fetchRecommendedQuests(Player player, GuideBookMenuHolder holder) {
-        if (!plugin.isActive() || plugin.getHttpClient() == null) {
-            renderQuestError(player, holder, Lang.get("guide.quests.error"));
-            return;
-        }
-        OkHttpClient client = plugin.getHttpClient();
-        HttpUrl url = HttpUrl.parse(plugin.getBaseUrl() + "/api/quests/recommended").newBuilder()
-                .addQueryParameter("player_uuid", player.getUniqueId().toString())
-                .build();
-        Request request = new Request.Builder()
-                .url(url)
-                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
-                .get()
-                .build();
-        client.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(Call call, IOException ex) {
-                plugin.getLogger().warning("Failed to fetch quests: " + ex.getMessage());
-                Bukkit.getScheduler().runTask(plugin, () -> renderQuestError(player, holder, Lang.get("guide.quests.error")));
-            }
-
-            @Override
-            public void onResponse(Call call, Response response) throws IOException {
-                try (response) {
-                    if (!response.isSuccessful()) {
-                        plugin.getLogger().warning("Quest API failed with status " + response.code());
-                        Bukkit.getScheduler().runTask(plugin, () -> renderQuestError(player, holder, Lang.get("guide.quests.error")));
-                        return;
-                    }
-                    String body = response.body() != null ? response.body().string() : "{}";
-                    JsonObject obj = gson.fromJson(body, JsonObject.class);
-                    List<String> quests = new ArrayList<>();
-                    if (obj != null && obj.has("quests")) {
-                        JsonArray arr = obj.getAsJsonArray("quests");
-                        for (JsonElement el : arr) {
-                            if (el.isJsonPrimitive()) {
-                                quests.add(el.getAsString());
-                            }
-                        }
-                    }
-                    Bukkit.getScheduler().runTask(plugin, () -> renderQuestList(player, holder, quests));
-                }
-            }
-        });
-    }
-
-    private void renderQuestError(Player player, GuideBookMenuHolder holder, String message) {
+    private void renderQuestList(Player player, GuideBookMenuHolder holder) {
         Inventory inv = holder.getInventory();
-        if (!isHolderOpen(player, inv)) {
+        clearContentSlots(holder, inv);
+        QuestManager questManager = plugin.getQuestManager();
+        if (questManager == null) {
+            inv.setItem(13, buildMenuItem(Material.BARRIER, Lang.get("guide.quests.error")));
             return;
         }
-        clearContentSlots(holder, inv);
-        inv.setItem(13, buildMenuItem(Material.BARRIER, message));
-    }
-
-    private void renderQuestList(Player player, GuideBookMenuHolder holder, List<String> questIds) {
-        Inventory inv = holder.getInventory();
-        if (!isHolderOpen(player, inv)) {
-            return;
-        }
-        clearContentSlots(holder, inv);
-        if (questIds == null || questIds.isEmpty()) {
+        List<QuestManager.QuestDisplayEntry> quests = questManager.getActiveQuestEntries(player);
+        if (quests.isEmpty()) {
             inv.setItem(13, buildMenuItem(Material.PAPER, Lang.get("guide.quests.none")));
             return;
         }
         int[] slots = {10, 12, 14, 16, 19, 21, 23};
         int index = 0;
-        for (String questId : questIds) {
+        for (QuestManager.QuestDisplayEntry quest : quests) {
             if (index >= slots.length) {
                 break;
             }
@@ -445,7 +407,7 @@ public class GuideBookListener implements Listener {
             if (slot >= inv.getSize()) {
                 continue;
             }
-            inv.setItem(slot, createQuestItem(questId));
+            inv.setItem(slot, createQuestItem(quest));
         }
     }
 
@@ -729,11 +691,27 @@ public class GuideBookListener implements Listener {
         }
     }
 
-    private ItemStack createQuestItem(String questId) {
-        String name = Lang.get("guide.quests." + questId + ".name");
-        String desc = Lang.get("guide.quests." + questId + ".description");
-        String reward = Lang.get("guide.quests.reward_line");
-        return buildMenuItem(Material.ENCHANTED_BOOK, name, desc, reward);
+    private ItemStack createQuestItem(QuestManager.QuestDisplayEntry quest) {
+        ItemStack item = new ItemStack(Material.ENCHANTED_BOOK);
+        ItemMeta meta = item.getItemMeta();
+        meta.setDisplayName(quest.displayName);
+        List<String> lore = new ArrayList<>();
+        lore.add(Lang.get("guide.quests.group").replace("{group}", quest.groupName));
+        lore.add(Lang.get("guide.quests.remaining").replace("{remaining}", quest.remaining));
+        if (quest.acceptedCount > 0) {
+            lore.add(Lang.get("guide.quests.accepted").replace("{count}", String.valueOf(quest.acceptedCount)));
+            if (quest.progress != null && !quest.progress.isBlank()) {
+                lore.add(Lang.get("guide.quests.progress").replace("{progress}", quest.progress));
+            }
+        } else {
+            lore.add(Lang.get("guide.quests.available"));
+        }
+        lore.add(Lang.get("guide.quests.click_to_accept"));
+        meta.setLore(lore);
+        meta.getPersistentDataContainer().set(questIdKey, PersistentDataType.STRING, quest.id);
+        meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+        item.setItemMeta(meta);
+        return item;
     }
 
     private String safeString(JsonObject obj, String member) {
