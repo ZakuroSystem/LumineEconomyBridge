@@ -19,6 +19,11 @@ public class ProtectionRegion {
     private final int maxZ;
     private final long createdAt;
 
+    private UUID renter;
+    private String renterName;
+    private long rentUntilEpochMillis;
+    private int rentPriceUnits;
+
     public ProtectionRegion(String id, UUID owner, String worldName,
                             int minX, int minY, int minZ,
                             int maxX, int maxY, int maxZ,
@@ -88,6 +93,59 @@ public class ProtectionRegion {
         double y = (minY + maxY) / 2.0D;
         double z = (minZ + maxZ) / 2.0D;
         return world != null ? new Location(world, x, y, z) : null;
+    }
+
+    public boolean contains(Location location) {
+        if (location == null || location.getWorld() == null) {
+            return false;
+        }
+        if (!worldName.equals(location.getWorld().getName())) {
+            return false;
+        }
+        int x = location.getBlockX();
+        int y = location.getBlockY();
+        int z = location.getBlockZ();
+        return x >= minX && x <= maxX
+                && y >= minY && y <= maxY
+                && z >= minZ && z <= maxZ;
+    }
+
+    public UUID getRenter() {
+        return renter;
+    }
+
+    public String getRenterName() {
+        return renterName;
+    }
+
+    public long getRentUntilEpochMillis() {
+        return rentUntilEpochMillis;
+    }
+
+    public int getRentPriceUnits() {
+        return rentPriceUnits;
+    }
+
+    public void setRental(UUID renter, String renterName, long rentUntilEpochMillis, int rentPriceUnits) {
+        this.renter = renter;
+        this.renterName = renterName;
+        this.rentUntilEpochMillis = rentUntilEpochMillis;
+        this.rentPriceUnits = rentPriceUnits;
+    }
+
+    public void clearRental() {
+        this.renter = null;
+        this.renterName = null;
+        this.rentUntilEpochMillis = 0L;
+        this.rentPriceUnits = 0;
+    }
+
+    public boolean hasActiveRental() {
+        return renter != null && rentUntilEpochMillis > System.currentTimeMillis();
+    }
+
+    public boolean isRenter(UUID playerId) {
+        return playerId != null && hasActiveRental() && playerId.equals(renter);
     }
 
     @Override

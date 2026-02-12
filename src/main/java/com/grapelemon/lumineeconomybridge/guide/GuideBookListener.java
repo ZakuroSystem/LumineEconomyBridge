@@ -209,6 +209,12 @@ public class GuideBookListener implements Listener {
                 Lang.get("guide.option.manage_shops.lore_2")));
         holder.bind(5, GuideAction.MANAGE_SHOPS);
 
+        inv.setItem(4, buildMenuItem(Material.NAME_TAG,
+                Lang.get("guide.option.protect_rent.name"),
+                Lang.get("guide.option.protect_rent.lore_1"),
+                Lang.get("guide.option.protect_rent.lore_2")));
+        holder.bind(4, GuideAction.RENT_OUT_PROTECTION);
+
         inv.setItem(6, buildMenuItem(Material.BREEZE_ROD,
                 Lang.get("guide.option.protect.name"),
                 Lang.get("guide.option.protect.lore_1"),
@@ -304,6 +310,14 @@ public class GuideBookListener implements Listener {
                     player.sendMessage(Lang.get("error-unavailable"));
                 } else {
                     plugin.getProtectManager().startSelectionFromGui(player);
+                }
+            }
+            case RENT_OUT_PROTECTION -> {
+                player.closeInventory();
+                if (plugin.getProtectManager() == null) {
+                    player.sendMessage(Lang.get("error-unavailable"));
+                } else {
+                    plugin.getProtectManager().startLeasePrompt(player);
                 }
             }
             case BACK_TO_MAIN -> openMainMenu(player);

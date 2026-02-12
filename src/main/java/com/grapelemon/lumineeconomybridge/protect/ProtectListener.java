@@ -10,6 +10,8 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -27,6 +29,13 @@ public class ProtectListener implements Listener {
     public void onInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
         if (!manager.isWand(event.getItem())) {
+            Block clicked = event.getClickedBlock();
+            if (clicked != null && (event.getAction() == Action.RIGHT_CLICK_BLOCK || event.getAction() == Action.LEFT_CLICK_BLOCK)) {
+                if (!manager.canAccess(player, clicked.getLocation())) {
+                    event.setCancelled(true);
+                    player.sendMessage(ChatColor.RED + "この保護エリアは利用できません。/ Protected area." + ChatColor.RESET);
+                }
+            }
             return;
         }
         if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) {
@@ -46,13 +55,30 @@ public class ProtectListener implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onBlockBreak(BlockBreakEvent event) {
+        if (!manager.canAccess(event.getPlayer(), event.getBlock().getLocation())) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage(ChatColor.RED + "この保護エリアではブロック破壊できません。" + ChatColor.RESET);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onBlockPlace(BlockPlaceEvent event) {
+        if (!manager.canAccess(event.getPlayer(), event.getBlock().getLocation())) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage(ChatColor.RED + "この保護エリアではブロック設置できません。" + ChatColor.RESET);
+        }
+    }
+
     @EventHandler
     public void onChat(AsyncPlayerChatEvent event) {
         Player player = event.getPlayer();
         boolean awaitingName = manager.isAwaitingName(player.getUniqueId());
         boolean awaitingApproval = manager.isAwaitingApproval(player.getUniqueId());
         boolean awaitingRemoval = manager.isAwaitingRemoval(player.getUniqueId());
-        if (!awaitingName && !awaitingApproval && !awaitingRemoval) {
+        boolean awaitingLease = manager.isAwaitingLease(player.getUniqueId());
+        if (!awaitingName && !awaitingApproval && !awaitingRemoval && !awaitingLease) {
             return;
         }
         event.setCancelled(true);
@@ -63,6 +89,8 @@ public class ProtectListener implements Listener {
                 manager.handleNameResponse(player, message);
             } else if (awaitingApproval) {
                 manager.handleApprovalResponse(player, message);
+            } else if (awaitingLease) {
+                manager.handleLeaseResponse(player, message);
             } else if (awaitingRemoval) {
                 manager.handleRemovalResponse(player, message);
             }

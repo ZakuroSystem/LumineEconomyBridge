@@ -15,7 +15,9 @@ vault:
   currency: "thy"
 
 protect:
-  price_per_block: "1"
+  initial_price_per_block: "1"
+  upkeep_price_per_block: "0"
+  upkeep_interval_minutes: 1440
   collect_account: "treasury"
   currency: ""
 

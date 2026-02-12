@@ -22,6 +22,7 @@ public class GuideBookMenuHolder implements InventoryHolder {
         RECOMMENDED_QUESTS,
         RECOMMENDED_SHOPS,
         PROTECT_LAND,
+        RENT_OUT_PROTECTION,
         BACK_TO_MAIN
     }
 
