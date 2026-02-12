@@ -352,7 +352,7 @@ public class QuestManager {
 
     private QuestProgress evaluateProgress(Player player, QuestOffer offer) {
         if (offer.conditions.items.isEmpty()) {
-            return new QuestProgress(true, Lang.get("quest.progress.no_conditions"));
+            return new QuestProgress(false, Lang.get("quest.progress.no_conditions"));
         }
         PlayerInventory inventory = player.getInventory();
         List<String> parts = new ArrayList<>();

@@ -24,7 +24,7 @@ quest:
     success: "&aクエストを受注しました: {quest}"
     remaining: "&7残り時間: {remaining}"
   progress:
-    no_conditions: "条件なし / No conditions"
+    no_conditions: "&c条件が未設定です。管理者に連絡してください。/ Quest conditions are missing."
     or_suffix: " (OR)"
   complete: "&aクエスト達成: {quest}"
   report:
