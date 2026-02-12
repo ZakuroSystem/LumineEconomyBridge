@@ -60,6 +60,7 @@ public class ProtectManager {
     private FileConfiguration dataConfig;
 
     private int initialPricePerBlockUnits;
+    private List<PricingBracket> initialPricingBrackets = Collections.emptyList();
     private int upkeepPricePerBlockUnits;
     private long upkeepIntervalMinutes;
     private BukkitTask upkeepTask;
@@ -80,6 +81,7 @@ public class ProtectManager {
 
     public synchronized void reload() {
         initialPricePerBlockUnits = 0;
+        initialPricingBrackets = Collections.emptyList();
         upkeepPricePerBlockUnits = 0;
         upkeepIntervalMinutes = DEFAULT_UPKEEP_INTERVAL_MINUTES;
         collectorAccount = null;
@@ -94,6 +96,8 @@ public class ProtectManager {
                 plugin.getLogger().warning("Invalid protect.initial_price_per_block value: " + priceToken + "; falling back to 0");
                 initialPricePerBlockUnits = 0;
             }
+            initialPricingBrackets = loadInitialPricingBrackets(config);
+
             String upkeepToken = config.getString("protect.upkeep_price_per_block", "0");
             try {
                 upkeepPricePerBlockUnits = Math.max(0, plugin.parseAmount(upkeepToken));
@@ -144,6 +148,100 @@ public class ProtectManager {
         }
         long period = Math.max(20L, upkeepIntervalMinutes * 60L * 20L);
         upkeepTask = Bukkit.getScheduler().runTaskTimer(plugin, this::chargeUpkeepForOnlineOwners, period, period);
+    }
+
+    private List<PricingBracket> loadInitialPricingBrackets(FileConfiguration config) {
+        List<PricingBracket> brackets = new ArrayList<>();
+        List<Map<?, ?>> raw = config.getMapList("protect.initial_pricing_brackets");
+        if (raw == null || raw.isEmpty()) {
+            return defaultInitialPricingBrackets();
+        }
+        for (Map<?, ?> row : raw) {
+            long min = parseLongSafe(row.get("min"), 0L);
+            Long max = parseNullableLongSafe(row.get("max"));
+            int rate = parseRateUnits(row.get("rate_per_block"));
+            brackets.add(new PricingBracket(min, max, rate));
+        }
+        if (brackets.isEmpty()) {
+            return defaultInitialPricingBrackets();
+        }
+        brackets.sort(Comparator.comparingLong(PricingBracket::minInclusive));
+        return brackets;
+    }
+
+    private List<PricingBracket> defaultInitialPricingBrackets() {
+        List<PricingBracket> defaults = new ArrayList<>();
+        defaults.add(new PricingBracket(0L, 1000L, parseRateUnits("0.2")));
+        defaults.add(new PricingBracket(1000L, 10000L, parseRateUnits("0.6")));
+        defaults.add(new PricingBracket(10000L, 25000L, parseRateUnits("2.0")));
+        defaults.add(new PricingBracket(25000L, 100000L, parseRateUnits("5.0")));
+        defaults.add(new PricingBracket(100000L, null, parseRateUnits("10.0")));
+        return defaults;
+    }
+
+    private long parseLongSafe(Object raw, long fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        if (raw instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(raw.toString());
+        } catch (NumberFormatException ex) {
+            return fallback;
+        }
+    }
+
+    private Long parseNullableLongSafe(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        String text = raw.toString().trim();
+        if (text.isEmpty() || text.equalsIgnoreCase("null") || text.equals("-1")) {
+            return null;
+        }
+        try {
+            return Long.parseLong(text);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private int parseRateUnits(Object raw) {
+        if (raw == null) {
+            return 0;
+        }
+        try {
+            return Math.max(0, plugin.parseAmount(raw.toString()));
+        } catch (NumberFormatException ex) {
+            return 0;
+        }
+    }
+
+    private long computeInitialCostUnits(long volume) {
+        if (volume <= 0) {
+            return 0;
+        }
+        if (initialPricingBrackets == null || initialPricingBrackets.isEmpty()) {
+            return volume * (long) initialPricePerBlockUnits;
+        }
+        long cost = 0L;
+        for (PricingBracket bracket : initialPricingBrackets) {
+            long start = Math.max(0L, bracket.minInclusive());
+            Long maxRaw = bracket.maxExclusive();
+            long end = maxRaw == null ? Long.MAX_VALUE : Math.max(start, maxRaw);
+            if (volume <= start) {
+                continue;
+            }
+            long spanEnd = Math.min(volume, end);
+            long blocks = spanEnd - start;
+            if (blocks <= 0) {
+                continue;
+            }
+            cost += blocks * (long) Math.max(0, bracket.ratePerBlockUnits());
+        }
+        return cost;
     }
 
     private void chargeUpkeepForOnlineOwners() {
@@ -649,7 +747,7 @@ public class ProtectManager {
             player.sendMessage(ChatColor.RED + "範囲の計算に失敗しました。" + ChatColor.RESET);
             return;
         }
-        long totalCost = volume * (long) initialPricePerBlockUnits;
+        long totalCost = computeInitialCostUnits(volume);
         if (totalCost < 0 || totalCost > Integer.MAX_VALUE) {
             player.sendMessage(ChatColor.RED + "保護費用が大きすぎます。範囲を小さくしてください。" + ChatColor.RESET);
             return;
@@ -820,7 +918,7 @@ public class ProtectManager {
         }
         baseId = normalizeProtectionId(baseId);
         final String resolvedId = ensureUniqueId(baseId);
-        long totalCost = volume * (long) initialPricePerBlockUnits;
+        long totalCost = computeInitialCostUnits(volume);
         if (totalCost < 0 || totalCost > Integer.MAX_VALUE) {
             player.sendMessage(ChatColor.RED + "保護費用が大きすぎます。範囲を小さくしてください。/ The protection fee is too large." + ChatColor.RESET);
             return;
@@ -1498,6 +1596,8 @@ public class ProtectManager {
     }
 
     public enum ProtectAction { BREAK, PLACE, INTERACT, INVENTORY, DROP, PVP, ENTER }
+
+    private record PricingBracket(long minInclusive, Long maxExclusive, int ratePerBlockUnits) {}
 
     private record PendingName(BukkitTask timeout) {}
 

@@ -15,7 +15,25 @@ vault:
   currency: "thy"
 
 protect:
+  # 互換用の固定単価（initial_pricing_brackets未設定時に使用）
   initial_price_per_block: "1"
+  # 累進課税デフォルト（min以上 max未満, max=nullで上限なし）
+  initial_pricing_brackets:
+    - min: 0
+      max: 1000
+      rate_per_block: "0.2"
+    - min: 1000
+      max: 10000
+      rate_per_block: "0.6"
+    - min: 10000
+      max: 25000
+      rate_per_block: "2.0"
+    - min: 25000
+      max: 100000
+      rate_per_block: "5.0"
+    - min: 100000
+      max: null
+      rate_per_block: "10.0"
   upkeep_price_per_block: "0"
   upkeep_interval_minutes: 1440
   collect_account: "treasury"
