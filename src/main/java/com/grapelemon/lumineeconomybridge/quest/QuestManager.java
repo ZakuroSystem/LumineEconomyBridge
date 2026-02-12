@@ -3,6 +3,7 @@ package com.grapelemon.lumineeconomybridge.quest;
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.Lang;
 import com.grapelemon.lumineeconomybridge.Settings;
+import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
@@ -16,6 +17,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.scoreboard.Scoreboard;
 
 import java.nio.ByteBuffer;
 import java.math.BigDecimal;
@@ -459,7 +461,7 @@ public class QuestManager {
 
     private void grantRewards(Player player, QuestRewards rewards) {
         if (rewards.money > 0) {
-            boolean rewarded = grantMoneyToScoreboard(player, rewards.money);
+            boolean rewarded = grantMoneyLikeLeGive(player, rewards.money);
             if (!rewarded) {
                 rewarded = grantMoneyViaVault(player, rewards.money);
             }
@@ -485,32 +487,42 @@ public class QuestManager {
         }
     }
 
-    private boolean grantMoneyToScoreboard(Player player, double amount) {
+    private boolean grantMoneyLikeLeGive(Player player, double amount) {
         int rewardUnits;
         try {
             rewardUnits = plugin.parseAmount(BigDecimal.valueOf(amount).stripTrailingZeros().toPlainString());
         } catch (NumberFormatException ex) {
-            plugin.getLogger().warning("Failed to parse quest reward amount for scoreboard credit: " + amount);
+            plugin.getLogger().warning("Failed to parse quest reward amount for money give: " + amount);
             return false;
         }
         if (rewardUnits <= 0) {
             return true;
         }
+        ScoreboardSyncService sync = plugin.getSyncService();
+        if (sync == null) {
+            plugin.getLogger().warning("Quest reward skipped money-give path: sync service unavailable");
+            return false;
+        }
+
         String currencyKey = plugin.getConfig().getString("vault.currency", "");
         if (currencyKey == null || currencyKey.isBlank()) {
             currencyKey = "thy";
         }
-        Map<String, Integer> balances = ScoreboardUtil.readAllSync(player);
-        int current = balances.getOrDefault(currencyKey, 0);
-        int next;
-        long candidate = (long) current + rewardUnits;
-        if (candidate > Integer.MAX_VALUE) {
-            next = Integer.MAX_VALUE;
-        } else {
-            next = (int) candidate;
+
+        String baseObjective = currencyKey.startsWith("currency") ? currencyKey : "currency_" + currencyKey;
+        String cashObjective = baseObjective + "_cash";
+        Scoreboard sb = player.getScoreboard() != null ? player.getScoreboard() : Bukkit.getScoreboardManager().getMainScoreboard();
+        String entry = player.getName();
+
+        int pending = ScoreboardUtil.readCurrency(sb, cashObjective, entry);
+        long nextPending = (long) pending + rewardUnits;
+        if (nextPending > Integer.MAX_VALUE) {
+            nextPending = Integer.MAX_VALUE;
         }
-        balances.put(currencyKey, next);
-        ScoreboardUtil.applyAbsoluteSync(player, balances);
+        ScoreboardUtil.writeCurrency(sb, cashObjective, cashObjective, entry, (int) nextPending);
+
+        sync.flush(player);
+
         String shownAmount = plugin.formatAmountPlain(rewardUnits);
         player.sendMessage(colorize(Lang.get("quest.money_rewarded")
                 .replace("{amount}", shownAmount + " " + currencyKey)));
