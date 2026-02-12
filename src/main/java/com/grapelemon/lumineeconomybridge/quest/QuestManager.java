@@ -3,6 +3,7 @@ package com.grapelemon.lumineeconomybridge.quest;
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.Lang;
 import com.grapelemon.lumineeconomybridge.Settings;
+import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -17,6 +18,7 @@ import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.nio.ByteBuffer;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -457,19 +459,11 @@ public class QuestManager {
 
     private void grantRewards(Player player, QuestRewards rewards) {
         if (rewards.money > 0) {
-            RegisteredServiceProvider<Economy> provider = Bukkit.getServicesManager().getRegistration(Economy.class);
-            if (provider != null) {
-                Economy economy = provider.getProvider();
-                var response = economy.depositPlayer(player, rewards.money);
-                if (response.transactionSuccess()) {
-                    player.sendMessage(colorize(Lang.get("quest.money_rewarded")
-                            .replace("{amount}", formatMoney(rewards.money))));
-                } else {
-                    player.sendMessage(Lang.get("quest.economy_unavailable"));
-                    String reason = response.errorMessage == null ? "unknown" : response.errorMessage;
-                    plugin.getLogger().warning("Failed to deposit quest reward money for " + player.getName() + ": " + reason);
-                }
-            } else {
+            boolean rewarded = grantMoneyToScoreboard(player, rewards.money);
+            if (!rewarded) {
+                rewarded = grantMoneyViaVault(player, rewards.money);
+            }
+            if (!rewarded) {
                 player.sendMessage(Lang.get("quest.economy_unavailable"));
             }
         }
@@ -490,6 +484,56 @@ public class QuestManager {
             }
         }
     }
+
+    private boolean grantMoneyToScoreboard(Player player, double amount) {
+        int rewardUnits;
+        try {
+            rewardUnits = plugin.parseAmount(BigDecimal.valueOf(amount).stripTrailingZeros().toPlainString());
+        } catch (NumberFormatException ex) {
+            plugin.getLogger().warning("Failed to parse quest reward amount for scoreboard credit: " + amount);
+            return false;
+        }
+        if (rewardUnits <= 0) {
+            return true;
+        }
+        String currencyKey = plugin.getConfig().getString("vault.currency", "");
+        if (currencyKey == null || currencyKey.isBlank()) {
+            currencyKey = "thy";
+        }
+        Map<String, Integer> balances = ScoreboardUtil.readAllSync(player);
+        int current = balances.getOrDefault(currencyKey, 0);
+        int next;
+        long candidate = (long) current + rewardUnits;
+        if (candidate > Integer.MAX_VALUE) {
+            next = Integer.MAX_VALUE;
+        } else {
+            next = (int) candidate;
+        }
+        balances.put(currencyKey, next);
+        ScoreboardUtil.applyAbsoluteSync(player, balances);
+        String shownAmount = plugin.formatAmountPlain(rewardUnits);
+        player.sendMessage(colorize(Lang.get("quest.money_rewarded")
+                .replace("{amount}", shownAmount + " " + currencyKey)));
+        return true;
+    }
+
+    private boolean grantMoneyViaVault(Player player, double amount) {
+        RegisteredServiceProvider<Economy> provider = Bukkit.getServicesManager().getRegistration(Economy.class);
+        if (provider == null) {
+            return false;
+        }
+        Economy economy = provider.getProvider();
+        var response = economy.depositPlayer(player, amount);
+        if (!response.transactionSuccess()) {
+            String reason = response.errorMessage == null ? "unknown" : response.errorMessage;
+            plugin.getLogger().warning("Failed to deposit quest reward money for " + player.getName() + ": " + reason);
+            return false;
+        }
+        player.sendMessage(colorize(Lang.get("quest.money_rewarded")
+                .replace("{amount}", formatMoney(amount))));
+        return true;
+    }
+
 
 
     private String formatMoney(double amount) {
