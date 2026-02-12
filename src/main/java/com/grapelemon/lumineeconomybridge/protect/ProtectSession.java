@@ -10,6 +10,8 @@ class ProtectSession {
     private Location first;
     private Location second;
     private boolean awaitingName;
+    private boolean awaitingApproval;
+    private boolean guiFlow;
     private boolean finalizing;
 
     ProtectSession(UUID playerId, String initialId) {
@@ -55,6 +57,22 @@ class ProtectSession {
 
     void setAwaitingName(boolean awaitingName) {
         this.awaitingName = awaitingName;
+    }
+
+    boolean isAwaitingApproval() {
+        return awaitingApproval;
+    }
+
+    void setAwaitingApproval(boolean awaitingApproval) {
+        this.awaitingApproval = awaitingApproval;
+    }
+
+    boolean isGuiFlow() {
+        return guiFlow;
+    }
+
+    void setGuiFlow(boolean guiFlow) {
+        this.guiFlow = guiFlow;
     }
 
     boolean isFinalizing() {

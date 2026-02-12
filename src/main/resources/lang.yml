@@ -68,6 +68,10 @@ guide:
       name: "&6おすすめショップ / Recommended Shops"
       lore_1: "&7注目の販売・買取情報を表示 / View featured shop offers"
       lore_2: "&7座標と取引内容を確認 / Check trade details and locations"
+    protect:
+      name: "&3土地保護 / Land Protection"
+      lore_1: "&7保護範囲選択ロッドを受け取る / Get a selection wand"
+      lore_2: "&7範囲選択後にチャットでOK承認 / Confirm by chat after selection"
   shop:
     prompt: "&bショップIDを入力してください (cancel で中止) / Enter a shop ID (type cancel to abort)"
     invalid: "&cショップIDを入力してください。 / Please enter a shop ID."

@@ -149,6 +149,10 @@ public class LumineEconomyBridge extends JavaPlugin {
         return marketManager;
     }
 
+
+    public ProtectManager getProtectManager() {
+        return protectManager;
+    }
     public QuestManager getQuestManager() {
         return questManager;
     }

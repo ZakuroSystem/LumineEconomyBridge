@@ -209,6 +209,12 @@ public class GuideBookListener implements Listener {
                 Lang.get("guide.option.manage_shops.lore_2")));
         holder.bind(5, GuideAction.MANAGE_SHOPS);
 
+        inv.setItem(6, buildMenuItem(Material.BREEZE_ROD,
+                Lang.get("guide.option.protect.name"),
+                Lang.get("guide.option.protect.lore_1"),
+                Lang.get("guide.option.protect.lore_2")));
+        holder.bind(6, GuideAction.PROTECT_LAND);
+
         inv.setItem(7, buildMenuItem(Material.ENCHANTED_BOOK,
                 Lang.get("guide.option.quests.name"),
                 Lang.get("guide.option.quests.lore_1"),
@@ -292,6 +298,14 @@ public class GuideBookListener implements Listener {
             }
             case RECOMMENDED_QUESTS -> openQuestMenu(player);
             case RECOMMENDED_SHOPS -> openRecommendedShopMenu(player);
+            case PROTECT_LAND -> {
+                player.closeInventory();
+                if (plugin.getProtectManager() == null) {
+                    player.sendMessage(Lang.get("error-unavailable"));
+                } else {
+                    plugin.getProtectManager().startSelectionFromGui(player);
+                }
+            }
             case BACK_TO_MAIN -> openMainMenu(player);
             default -> {
             }

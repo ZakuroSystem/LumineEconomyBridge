@@ -50,8 +50,9 @@ public class ProtectListener implements Listener {
     public void onChat(AsyncPlayerChatEvent event) {
         Player player = event.getPlayer();
         boolean awaitingName = manager.isAwaitingName(player.getUniqueId());
+        boolean awaitingApproval = manager.isAwaitingApproval(player.getUniqueId());
         boolean awaitingRemoval = manager.isAwaitingRemoval(player.getUniqueId());
-        if (!awaitingName && !awaitingRemoval) {
+        if (!awaitingName && !awaitingApproval && !awaitingRemoval) {
             return;
         }
         event.setCancelled(true);
@@ -60,6 +61,8 @@ public class ProtectListener implements Listener {
             if (awaitingName) {
                 player.sendMessage(ChatColor.GRAY + "入力を受け取りました..." + ChatColor.RESET);
                 manager.handleNameResponse(player, message);
+            } else if (awaitingApproval) {
+                manager.handleApprovalResponse(player, message);
             } else if (awaitingRemoval) {
                 manager.handleRemovalResponse(player, message);
             }

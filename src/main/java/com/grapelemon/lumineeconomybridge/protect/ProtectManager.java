@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.grapelemon.lumineeconomybridge.LumineEconomyBridge;
 import com.grapelemon.lumineeconomybridge.sync.ScoreboardSyncService;
+import com.grapelemon.lumineeconomybridge.sync.ScoreboardUtil;
 import okhttp3.*;
 import net.md_5.bungee.api.ChatMessageType;
 import net.md_5.bungee.api.chat.TextComponent;
@@ -32,6 +33,7 @@ import java.util.stream.Collectors;
 public class ProtectManager {
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private static final long NAME_TIMEOUT_TICKS = 20L * 60L;
+    private static final long APPROVAL_TIMEOUT_TICKS = 20L * 60L;
     private static final long REMOVE_TIMEOUT_TICKS = 20L * 30L;
 
     private final LumineEconomyBridge plugin;
@@ -41,9 +43,11 @@ public class ProtectManager {
     private final Map<String, ProtectionRegion> protections = new LinkedHashMap<>();
     private final Map<UUID, ProtectSession> sessions = new ConcurrentHashMap<>();
     private final Map<UUID, PendingName> pendingNames = new ConcurrentHashMap<>();
+    private final Map<UUID, PendingApproval> pendingApprovals = new ConcurrentHashMap<>();
     private final Map<UUID, PendingRemoval> pendingRemoval = new ConcurrentHashMap<>();
 
     private File dataFile;
+    private File jsonDataFile;
     private FileConfiguration dataConfig;
 
     private int pricePerBlockUnits;
@@ -86,6 +90,9 @@ public class ProtectManager {
         }
         if (dataFile == null) {
             dataFile = new File(plugin.getDataFolder(), "protections.yml");
+        }
+        if (jsonDataFile == null) {
+            jsonDataFile = new File(plugin.getDataFolder(), "protections.json");
         }
         if (!dataFile.exists()) {
             try {
@@ -154,6 +161,34 @@ public class ProtectManager {
         } catch (IOException ex) {
             plugin.getLogger().warning("Failed to save protections.yml: " + ex.getMessage());
         }
+        saveProtectionsJson();
+    }
+
+    private synchronized void saveProtectionsJson() {
+        if (jsonDataFile == null) {
+            return;
+        }
+        try {
+            plugin.getDataFolder().mkdirs();
+            List<Map<String, Object>> list = new ArrayList<>();
+            for (ProtectionRegion region : protections.values()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("id", region.getId());
+                row.put("owner", region.getOwner().toString());
+                row.put("world", region.getWorldName());
+                row.put("minX", region.getMinX());
+                row.put("minY", region.getMinY());
+                row.put("minZ", region.getMinZ());
+                row.put("maxX", region.getMaxX());
+                row.put("maxY", region.getMaxY());
+                row.put("maxZ", region.getMaxZ());
+                row.put("created", region.getCreatedAt());
+                list.add(row);
+            }
+            java.nio.file.Files.writeString(jsonDataFile.toPath(), gson.toJson(list), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            plugin.getLogger().warning("Failed to save protections.json: " + ex.getMessage());
+        }
     }
 
     public synchronized List<String> listIdsForPlayer(UUID uuid) {
@@ -175,12 +210,26 @@ public class ProtectManager {
 
     public synchronized void startSelection(Player player, String requestedId) {
         ProtectSession session = new ProtectSession(player.getUniqueId(), requestedId);
+        session.setGuiFlow(false);
         sessions.put(player.getUniqueId(), session);
         cancelNamePrompt(player.getUniqueId());
+        clearApprovalPrompt(player.getUniqueId());
         clearRemovalPrompt(player.getUniqueId());
         giveWand(player);
         player.sendMessage(ChatColor.GREEN + "保護領域の設定を開始しました。Breeze Rodで始点と終点を選択してください。" + ChatColor.RESET);
         player.sendMessage(ChatColor.AQUA + "Protection setup started. Use the Breeze Rod to mark the first and second corners." + ChatColor.RESET);
+    }
+
+    public synchronized void startSelectionFromGui(Player player) {
+        ProtectSession session = new ProtectSession(player.getUniqueId(), null);
+        session.setGuiFlow(true);
+        sessions.put(player.getUniqueId(), session);
+        cancelNamePrompt(player.getUniqueId());
+        clearApprovalPrompt(player.getUniqueId());
+        clearRemovalPrompt(player.getUniqueId());
+        giveWand(player);
+        player.sendMessage(ChatColor.GREEN + "保護設定を開始しました。ロッドで2点を選択してください。" + ChatColor.RESET);
+        player.sendMessage(ChatColor.YELLOW + "2点選択後に概算費用を表示し、チャットで OK 入力で確定します。" + ChatColor.RESET);
     }
 
     private void giveWand(Player player) {
@@ -244,7 +293,94 @@ public class ProtectManager {
         session.setSecond(location.clone());
         player.sendMessage(ChatColor.GREEN + "終点を設定しました: " + formatLocation(location));
         player.sendMessage(ChatColor.AQUA + "Second corner set: " + formatLocation(location));
-        player.sendMessage(ChatColor.YELLOW + "保護を確定するには /let protect add を実行してください。/ Run /let protect add to finish." + ChatColor.RESET);
+        if (session.isGuiFlow()) {
+            promptForApproval(player, session);
+        } else {
+            player.sendMessage(ChatColor.YELLOW + "保護を確定するには /let protect add を実行してください。/ Run /let protect add to finish." + ChatColor.RESET);
+        }
+    }
+
+    private void promptForApproval(Player player, ProtectSession session) {
+        if (!session.hasBoth()) {
+            return;
+        }
+        long volume = computeVolume(session.getFirst(), session.getSecond());
+        if (volume <= 0) {
+            player.sendMessage(ChatColor.RED + "範囲の計算に失敗しました。" + ChatColor.RESET);
+            return;
+        }
+        long totalCost = volume * (long) pricePerBlockUnits;
+        if (totalCost < 0 || totalCost > Integer.MAX_VALUE) {
+            player.sendMessage(ChatColor.RED + "保護費用が大きすぎます。範囲を小さくしてください。" + ChatColor.RESET);
+            return;
+        }
+        int estimatedCost = (int) totalCost;
+        if (currency != null && !currency.isBlank() && estimatedCost > 0) {
+            Map<String, Integer> balances = ScoreboardUtil.readAllSync(player);
+            Integer balance = balances.get(currency);
+            if (balance != null && balance < estimatedCost) {
+                player.sendMessage(ChatColor.RED + "残高不足のため承認できません。必要: "
+                        + plugin.formatAmount(estimatedCost) + " " + currency
+                        + " / 現在: " + plugin.formatAmount(balance) + " " + currency + ChatColor.RESET);
+                return;
+            }
+        }
+        PendingApproval existing = pendingApprovals.get(player.getUniqueId());
+        if (existing != null) {
+            existing.timeout().cancel();
+        }
+        session.setAwaitingApproval(true);
+        BukkitTask timeout = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            ProtectSession current = sessions.get(player.getUniqueId());
+            if (current != null && current.isAwaitingApproval()) {
+                current.setAwaitingApproval(false);
+                pendingApprovals.remove(player.getUniqueId());
+                player.sendMessage(ChatColor.RED + "承認がタイムアウトしました。保護設定をやり直してください。" + ChatColor.RESET);
+            }
+        }, APPROVAL_TIMEOUT_TICKS);
+        pendingApprovals.put(player.getUniqueId(), new PendingApproval(estimatedCost, timeout));
+        String amount = plugin.formatAmount(estimatedCost);
+        String suffix = (currency != null && !currency.isBlank()) ? (" " + currency) : "";
+        player.sendMessage(ChatColor.GOLD + "暫定保護費用: " + amount + suffix + ChatColor.RESET);
+        player.sendMessage(ChatColor.AQUA + "チャットで OK と入力すると確定します。/ Type OK in chat to confirm." + ChatColor.RESET);
+    }
+
+    private long computeVolume(Location first, Location second) {
+        if (first == null || second == null) {
+            return -1;
+        }
+        long dx = Math.abs((long) first.getBlockX() - second.getBlockX()) + 1L;
+        long dy = Math.abs((long) first.getBlockY() - second.getBlockY()) + 1L;
+        long dz = Math.abs((long) first.getBlockZ() - second.getBlockZ()) + 1L;
+        return dx * dy * dz;
+    }
+
+    public void handleApprovalResponse(Player player, String message) {
+        ProtectSession session = sessions.get(player.getUniqueId());
+        PendingApproval pending = pendingApprovals.remove(player.getUniqueId());
+        if (session == null || pending == null || !session.isAwaitingApproval()) {
+            return;
+        }
+        pending.timeout().cancel();
+        session.setAwaitingApproval(false);
+        String normalized = message == null ? "" : message.trim().toLowerCase(Locale.ROOT);
+        if (!(normalized.equals("ok") || normalized.equals("はい") || normalized.equals("yes") || normalized.equals("y"))) {
+            player.sendMessage(ChatColor.RED + "保護確定をキャンセルしました。終点を選び直すか /let protect add を使用してください。" + ChatColor.RESET);
+            return;
+        }
+        String fallbackId = generateFallbackId(session);
+        finalizeProtection(player, fallbackId, true);
+    }
+
+    private void clearApprovalPrompt(UUID playerId) {
+        PendingApproval pending = pendingApprovals.remove(playerId);
+        if (pending != null) {
+            pending.timeout().cancel();
+        }
+        ProtectSession session = sessions.get(playerId);
+        if (session != null) {
+            session.setAwaitingApproval(false);
+        }
     }
 
     private String formatLocation(Location loc) {
@@ -631,6 +767,7 @@ public class ProtectManager {
 
     public void cancelAll(Player player) {
         cancelNamePrompt(player.getUniqueId());
+        clearApprovalPrompt(player.getUniqueId());
         clearRemovalPrompt(player.getUniqueId());
         sessions.remove(player.getUniqueId());
     }
@@ -638,6 +775,11 @@ public class ProtectManager {
     public boolean isAwaitingName(UUID uuid) {
         ProtectSession session = sessions.get(uuid);
         return session != null && session.isAwaitingName();
+    }
+
+    public boolean isAwaitingApproval(UUID uuid) {
+        ProtectSession session = sessions.get(uuid);
+        return session != null && session.isAwaitingApproval();
     }
 
     public boolean isAwaitingRemoval(UUID uuid) {
@@ -661,6 +803,8 @@ public class ProtectManager {
     }
 
     private record PendingName(BukkitTask timeout) {}
+
+    private record PendingApproval(int estimatedCost, BukkitTask timeout) {}
 
     private record PendingRemoval(ProtectionRegion region, BukkitTask timeout) {}
 }
