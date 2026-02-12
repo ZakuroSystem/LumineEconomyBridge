@@ -510,18 +510,17 @@ public class QuestManager {
         }
 
         String baseObjective = currencyKey.startsWith("currency") ? currencyKey : "currency_" + currencyKey;
-        String cashObjective = baseObjective + "_cash";
         Scoreboard sb = player.getScoreboard() != null ? player.getScoreboard() : Bukkit.getScoreboardManager().getMainScoreboard();
         String entry = player.getName();
 
-        int pending = ScoreboardUtil.readCurrency(sb, cashObjective, entry);
-        long nextPending = (long) pending + rewardUnits;
-        if (nextPending > Integer.MAX_VALUE) {
-            nextPending = Integer.MAX_VALUE;
+        int current = ScoreboardUtil.readCurrency(sb, baseObjective, entry);
+        long next = (long) current + rewardUnits;
+        if (next > Integer.MAX_VALUE) {
+            next = Integer.MAX_VALUE;
         }
-        ScoreboardUtil.writeCurrency(sb, cashObjective, cashObjective, entry, (int) nextPending);
+        ScoreboardUtil.writeCurrency(sb, baseObjective, baseObjective, entry, (int) next);
 
-        sync.flush(player);
+        sync.sendAbsolute(player);
 
         String shownAmount = plugin.formatAmountPlain(rewardUnits);
         player.sendMessage(colorize(Lang.get("quest.money_rewarded")
