@@ -49,6 +49,7 @@ quest:
       offers:
         - id: "gunpowder_x64"
           name: "&e火薬64個納品 / Deliver 64 Gunpowder"
+          description: "&7TNT素材の火薬をまとめて納品しましょう。/ Deliver a stack of gunpowder."
           conditions:
             op: "AND"
             items:
@@ -61,6 +62,7 @@ quest:
                 amount: 3
         - id: "stone_x128_multi"
           name: "&e石128個+石炭16個納品 / Deliver 128 Stone + 16 Coal"
+          description: "&b建材と燃料を同時に納品する複合依頼です。/ Combined delivery quest."
           conditions:
             op: "AND"
             items:

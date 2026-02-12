@@ -24,9 +24,14 @@ quest:
     success: "&aクエストを受注しました: {quest}"
     remaining: "&7残り時間: {remaining}"
   progress:
-    no_conditions: "条件なし / No conditions"
+    no_conditions: "&c条件が未設定です。管理者に連絡してください。/ Quest conditions are missing."
     or_suffix: " (OR)"
   complete: "&aクエスト達成: {quest}"
+  report:
+    not_available: "&cこのクエストは現在報告できません。/ Quest is not available."
+    not_accepted: "&eこのクエストはまだ受注していません。/ Quest not accepted."
+    not_complete: "&e達成条件を満たしていません: &f{progress}"
+    consume_failed: "&c必要アイテムの回収に失敗しました。/ Failed to collect required items."
   economy_unavailable: "&e報酬の通貨付与に失敗しました。/ Economy unavailable."
   reminder: "&7クエスト案内: /quest で確認できます。/ Check quests with /quest."
 guide:
@@ -57,7 +62,7 @@ guide:
     quests:
       name: "&dクエスト / Quests"
       lore_1: "&7現在の受注可能クエストを表示 / Show active quests"
-      lore_2: "&7クリックでそのまま受注 / Click to accept directly"
+      lore_2: "&7受注・達成報告をGUIで実行 / Accept and report from GUI"
     recommended_shops:
       name: "&6おすすめショップ / Recommended Shops"
       lore_1: "&7注目の販売・買取情報を表示 / View featured shop offers"
@@ -76,7 +81,10 @@ guide:
     accepted: "&e受注済み: {count}件 / Accepted x{count}"
     progress: "&7進行度: &f{progress}"
     available: "&a受注可能 / Available"
+    ready_to_report: "&a達成条件を満たしています / Ready to report"
+    not_ready: "&eまだ達成条件を満たしていません / Not ready yet"
     click_to_accept: "&bクリックで受注 / Click to accept"
+    click_to_report: "&dクリックで達成報告 / Click to report"
   shops:
     menu_title: "&6おすすめショップ / Recommended Shops"
     loading: "&7ショップ情報を取得中… / Loading shop data..."

@@ -259,9 +259,15 @@ public class GuideBookListener implements Listener {
                 ItemMeta meta = clicked.getItemMeta();
                 String questId = meta.getPersistentDataContainer().get(questIdKey, PersistentDataType.STRING);
                 if (questId != null && !questId.isBlank()) {
-                    player.closeInventory();
-                    player.performCommand("quest " + questId);
-                    Bukkit.getScheduler().runTask(plugin, () -> openQuestMenu(player));
+                    QuestManager questManager = plugin.getQuestManager();
+                    if (questManager != null) {
+                        if (questManager.isAccepted(player, questId)) {
+                            questManager.submitQuestReport(player, questId);
+                        } else {
+                            questManager.acceptQuest(player, questId);
+                        }
+                        Bukkit.getScheduler().runTask(plugin, () -> openQuestMenu(player));
+                    }
                     return;
                 }
             }
@@ -698,15 +704,20 @@ public class GuideBookListener implements Listener {
         List<String> lore = new ArrayList<>();
         lore.add(Lang.get("guide.quests.group").replace("{group}", quest.groupName));
         lore.add(Lang.get("guide.quests.remaining").replace("{remaining}", quest.remaining));
+        if (quest.description != null && !quest.description.isBlank()) {
+            lore.add(quest.description);
+        }
         if (quest.acceptedCount > 0) {
             lore.add(Lang.get("guide.quests.accepted").replace("{count}", String.valueOf(quest.acceptedCount)));
             if (quest.progress != null && !quest.progress.isBlank()) {
                 lore.add(Lang.get("guide.quests.progress").replace("{progress}", quest.progress));
             }
+            lore.add(quest.complete ? Lang.get("guide.quests.ready_to_report") : Lang.get("guide.quests.not_ready"));
+            lore.add(Lang.get("guide.quests.click_to_report"));
         } else {
             lore.add(Lang.get("guide.quests.available"));
+            lore.add(Lang.get("guide.quests.click_to_accept"));
         }
-        lore.add(Lang.get("guide.quests.click_to_accept"));
         meta.setLore(lore);
         meta.getPersistentDataContainer().set(questIdKey, PersistentDataType.STRING, quest.id);
         meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
