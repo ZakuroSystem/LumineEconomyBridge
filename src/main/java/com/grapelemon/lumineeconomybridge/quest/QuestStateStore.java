@@ -80,6 +80,25 @@ public class QuestStateStore {
                 state.getAssignments().put(groupId, assignments);
             }
         }
+        ConfigurationSection counters = root.getConfigurationSection("shop_trade_counts");
+        if (counters != null) {
+            for (String key : counters.getKeys(false)) {
+                int count = counters.getInt(key, 0);
+                if (count > 0) {
+                    state.getShopTradeCounts().put(key, count);
+                }
+            }
+        }
+
+        ConfigurationSection cooldowns = root.getConfigurationSection("quest_cooldowns");
+        if (cooldowns != null) {
+            for (String questId : cooldowns.getKeys(false)) {
+                long until = cooldowns.getLong(questId, 0L);
+                if (until > 0L) {
+                    state.getQuestCooldownUntil().put(questId, until);
+                }
+            }
+        }
         return state;
     }
 
@@ -100,6 +119,16 @@ public class QuestStateStore {
                 storedAssignments.add(record);
             }
             config.set(prefix + ".assignments", storedAssignments);
+        }
+
+        config.set(base + ".shop_trade_counts", null);
+        for (var entry : state.getShopTradeCounts().entrySet()) {
+            config.set(base + ".shop_trade_counts." + entry.getKey(), entry.getValue());
+        }
+
+        config.set(base + ".quest_cooldowns", null);
+        for (var entry : state.getQuestCooldownUntil().entrySet()) {
+            config.set(base + ".quest_cooldowns." + entry.getKey(), entry.getValue());
         }
     }
 

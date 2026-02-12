@@ -13,6 +13,7 @@ quest:
     group_title: "&b{name} &7({id})"
     accepted: "&e  {quest} &7[accepted x{count}] / 受注済み ({count})"
     available: "&a  {quest} &7[available] / 受注可能"
+    cooldown: "&6  {quest} &7[cooldown: {remaining}] / 再受注クールタイム中"
     progress: "&7  Progress: {progress}"
     remaining: "&7  Remaining: {remaining}"
     none_available: "&7現在のサイクルで受注可能なクエストはありません。/ No quests available for this cycle."
@@ -21,6 +22,7 @@ quest:
     already: "&e既に受注済みです。/ Already accepted."
     limit: "&cこのグループではこれ以上受注できません。/ Acceptance limit reached."
     disabled: "&cこのクエストは受注できません。/ Quest acceptance disabled."
+    cooldown: "&eこのクエストは再受注クールタイム中です: &f{remaining}"
     success: "&aクエストを受注しました: {quest}"
     remaining: "&7残り時間: {remaining}"
   progress:

@@ -100,7 +100,7 @@ public class QuestManager {
             List<QuestAssignment> assignments = playerState.assignments.get(group.id);
             int acceptedCount = countAssignments(assignments, active.offer.id);
             if (acceptedCount > 0) {
-                QuestProgress progress = evaluateProgress(player, active.offer);
+                QuestProgress progress = evaluateProgress(player, playerState, active);
                 player.sendMessage(colorize(Lang.get("quest.list.accepted")
                         .replace("{quest}", formatQuestName(active.offer))
                         .replace("{count}", String.valueOf(acceptedCount))));
@@ -108,8 +108,15 @@ public class QuestManager {
                 player.sendMessage(colorize(Lang.get("quest.list.remaining")
                         .replace("{remaining}", formatRemaining(active.endsAt, now))));
             } else {
-                player.sendMessage(colorize(Lang.get("quest.list.available")
-                        .replace("{quest}", formatQuestName(active.offer))));
+                long cooldownRemainingMs = getCooldownRemainingMillis(playerState, active.offer.id, System.currentTimeMillis());
+                if (cooldownRemainingMs > 0) {
+                    player.sendMessage(colorize(Lang.get("quest.list.cooldown")
+                            .replace("{quest}", formatQuestName(active.offer))
+                            .replace("{remaining}", formatDuration(cooldownRemainingMs))));
+                } else {
+                    player.sendMessage(colorize(Lang.get("quest.list.available")
+                            .replace("{quest}", formatQuestName(active.offer))));
+                }
                 player.sendMessage(colorize(Lang.get("quest.list.remaining")
                         .replace("{remaining}", formatRemaining(active.endsAt, now))));
             }
@@ -136,7 +143,7 @@ public class QuestManager {
             }
             List<QuestAssignment> assignments = playerState.assignments.get(group.id);
             int acceptedCount = countAssignments(assignments, active.offer.id);
-            QuestProgress progressState = evaluateProgress(player, active.offer);
+            QuestProgress progressState = evaluateProgress(player, playerState, active);
             String progress = acceptedCount > 0 ? progressState.label : null;
             boolean reportReady = acceptedCount > 0 && progressState.complete;
             entries.add(new QuestDisplayEntry(
@@ -180,6 +187,12 @@ public class QuestManager {
         }
         if (target == null || targetGroup == null) {
             player.sendMessage(Lang.get("quest.accept.not_available"));
+            return;
+        }
+        long cooldownRemainingMs = getCooldownRemainingMillis(playerState, target.offer.id, System.currentTimeMillis());
+        if (cooldownRemainingMs > 0) {
+            player.sendMessage(colorize(Lang.get("quest.accept.cooldown")
+                    .replace("{remaining}", formatDuration(cooldownRemainingMs))));
             return;
         }
         List<QuestAssignment> assignments = playerState.assignments.computeIfAbsent(targetGroup.id, key -> new ArrayList<>());
@@ -241,7 +254,7 @@ public class QuestManager {
             }
             return;
         }
-        QuestProgress progress = evaluateProgress(player, target.offer);
+        QuestProgress progress = evaluateProgress(player, playerState, target);
         if (!progress.complete) {
             player.sendMessage(colorize(Lang.get("quest.report.not_complete")
                     .replace("{progress}", progress.label)));
@@ -322,6 +335,10 @@ public class QuestManager {
         boolean changed = !updated.equals(state.assignments);
         state.assignments.clear();
         state.assignments.putAll(updated);
+        long nowMillis = System.currentTimeMillis();
+        if (state.questCooldownUntil.entrySet().removeIf(entry -> entry.getValue() <= nowMillis)) {
+            changed = true;
+        }
         return changed;
     }
 
@@ -352,14 +369,29 @@ public class QuestManager {
         return elapsed.toHours() / schedule.periodHours;
     }
 
-    private QuestProgress evaluateProgress(Player player, QuestOffer offer) {
-        if (offer.conditions.items.isEmpty()) {
-            return new QuestProgress(false, Lang.get("quest.progress.no_conditions"));
-        }
+    private QuestProgress evaluateProgress(Player player, PlayerQuestState state, ActiveOffer active) {
+        QuestOffer offer = active.offer;
         PlayerInventory inventory = player.getInventory();
         List<String> parts = new ArrayList<>();
+        boolean hasAnyCondition = false;
         boolean complete = offer.conditions.op == ConditionOp.AND;
+
+        int requiredShopTrades = offer.conditions.requiredShopTrades;
+        if (requiredShopTrades > 0) {
+            hasAnyCondition = true;
+            int currentTrades = state.shopTradeCounts.getOrDefault(counterKey(offer.id, active.cycleIndex), 0);
+            parts.add("shop_trade " + currentTrades + "/" + requiredShopTrades);
+            if (offer.conditions.op == ConditionOp.AND) {
+                if (currentTrades < requiredShopTrades) {
+                    complete = false;
+                }
+            } else if (currentTrades >= requiredShopTrades) {
+                complete = true;
+            }
+        }
+
         for (QuestItem item : offer.conditions.items) {
+            hasAnyCondition = true;
             int count = countMaterial(inventory, item.type);
             String label = item.displayName + " " + count + "/" + item.amount;
             parts.add(label);
@@ -373,6 +405,10 @@ public class QuestManager {
                 }
             }
         }
+
+        if (!hasAnyCondition) {
+            return new QuestProgress(false, Lang.get("quest.progress.no_conditions"));
+        }
         String suffix = offer.conditions.op == ConditionOp.OR ? Lang.get("quest.progress.or_suffix") : "";
         return new QuestProgress(complete, String.join(", ", parts) + suffix);
     }
@@ -384,6 +420,13 @@ public class QuestManager {
             }
         }
         grantRewards(player, offer.rewards);
+        if (group.rules.respawnCooldownSeconds > 0) {
+            PlayerQuestState state = stateStore.get(player.getUniqueId());
+            long cooldownUntil = System.currentTimeMillis() + (group.rules.respawnCooldownSeconds * 1000L);
+            state.questCooldownUntil.put(offer.id, cooldownUntil);
+            stateStore.saveState(state);
+            stateStore.save();
+        }
         player.sendMessage(colorize(Lang.get("quest.complete").replace("{quest}", formatQuestName(offer))));
         return true;
     }
@@ -551,7 +594,8 @@ public class QuestManager {
         QuestRules rules = new QuestRules(
                 rulesSection != null ? rulesSection.getInt("accept_limit_per_player", 1) : 1,
                 rulesSection == null || rulesSection.getBoolean("expire_on_cycle_change", true),
-                rulesSection == null || rulesSection.getBoolean("consume_items_on_complete", true)
+                rulesSection == null || rulesSection.getBoolean("consume_items_on_complete", true),
+                rulesSection != null ? Math.max(0L, rulesSection.getLong("respawn_cooldown_seconds", 0L)) : 0L
         );
         List<QuestOffer> offers = new ArrayList<>();
         List<Map<?, ?>> offerMaps = groupSection.getMapList("offers");
@@ -591,11 +635,12 @@ public class QuestManager {
 
     private QuestConditions parseConditions(Object raw) {
         if (!(raw instanceof Map<?, ?> map)) {
-            return new QuestConditions(ConditionOp.AND, Collections.emptyList());
+            return new QuestConditions(ConditionOp.AND, Collections.emptyList(), 0);
         }
         String opRaw = Objects.toString(map.get("op"), "AND");
         ConditionOp op = opRaw.equalsIgnoreCase("OR") ? ConditionOp.OR : ConditionOp.AND;
         List<QuestItem> items = new ArrayList<>();
+        int requiredShopTrades = parseNonNegativeAmount(map.get("shop_trades"), 0);
         Object itemRaw = map.get("items");
         if (itemRaw instanceof List<?> list) {
             for (Object entry : list) {
@@ -606,7 +651,7 @@ public class QuestManager {
                 }
             }
         }
-        return new QuestConditions(op, items);
+        return new QuestConditions(op, items, requiredShopTrades);
     }
 
     private QuestRewards parseRewards(Object raw) {
@@ -666,6 +711,17 @@ public class QuestManager {
         }
         try {
             return Math.max(1, Integer.parseInt(raw.toString()));
+        } catch (NumberFormatException ex) {
+            return fallback;
+        }
+    }
+
+    private int parseNonNegativeAmount(Object raw, int fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        try {
+            return Math.max(0, Integer.parseInt(raw.toString()));
         } catch (NumberFormatException ex) {
             return fallback;
         }
@@ -746,11 +802,13 @@ public class QuestManager {
         private final int acceptLimitPerPlayer;
         private final boolean expireOnCycleChange;
         private final boolean consumeItemsOnComplete;
+        private final long respawnCooldownSeconds;
 
-        private QuestRules(int acceptLimitPerPlayer, boolean expireOnCycleChange, boolean consumeItemsOnComplete) {
+        private QuestRules(int acceptLimitPerPlayer, boolean expireOnCycleChange, boolean consumeItemsOnComplete, long respawnCooldownSeconds) {
             this.acceptLimitPerPlayer = acceptLimitPerPlayer;
             this.expireOnCycleChange = expireOnCycleChange;
             this.consumeItemsOnComplete = consumeItemsOnComplete;
+            this.respawnCooldownSeconds = respawnCooldownSeconds;
         }
     }
 
@@ -773,10 +831,12 @@ public class QuestManager {
     private static class QuestConditions {
         private final ConditionOp op;
         private final List<QuestItem> items;
+        private final int requiredShopTrades;
 
-        private QuestConditions(ConditionOp op, List<QuestItem> items) {
+        private QuestConditions(ConditionOp op, List<QuestItem> items, int requiredShopTrades) {
             this.op = op;
             this.items = items;
+            this.requiredShopTrades = requiredShopTrades;
         }
     }
 
@@ -844,6 +904,8 @@ public class QuestManager {
     static class PlayerQuestState {
         private final UUID playerId;
         private final Map<String, List<QuestAssignment>> assignments = new HashMap<>();
+        private final Map<String, Integer> shopTradeCounts = new HashMap<>();
+        private final Map<String, Long> questCooldownUntil = new HashMap<>();
 
         PlayerQuestState(UUID playerId) {
             this.playerId = playerId;
@@ -855,6 +917,14 @@ public class QuestManager {
 
         Map<String, List<QuestAssignment>> getAssignments() {
             return assignments;
+        }
+
+        Map<String, Integer> getShopTradeCounts() {
+            return shopTradeCounts;
+        }
+
+        Map<String, Long> getQuestCooldownUntil() {
+            return questCooldownUntil;
         }
     }
 
@@ -873,6 +943,67 @@ public class QuestManager {
 
         long getCycleIndex() {
             return cycleIndex;
+        }
+    }
+
+    private String counterKey(String questId, long cycleIndex) {
+        return questId + "@" + cycleIndex;
+    }
+
+    private long getCooldownRemainingMillis(PlayerQuestState state, String questId, long nowMillis) {
+        Long until = state.questCooldownUntil.get(questId);
+        if (until == null) {
+            return 0;
+        }
+        long remaining = until - nowMillis;
+        if (remaining <= 0) {
+            state.questCooldownUntil.remove(questId);
+            return 0;
+        }
+        return remaining;
+    }
+
+    private String formatDuration(long millis) {
+        long totalSeconds = Math.max(0L, millis / 1000L);
+        long hours = totalSeconds / 3600L;
+        long minutes = (totalSeconds % 3600L) / 60L;
+        long seconds = totalSeconds % 60L;
+        if (hours > 0) {
+            return hours + "h " + minutes + "m";
+        }
+        if (minutes > 0) {
+            return minutes + "m " + seconds + "s";
+        }
+        return seconds + "s";
+    }
+
+    public void recordShopTrade(Player player, int tradeCount) {
+        if (tradeCount <= 0 || config == null || config.groups.isEmpty()) {
+            return;
+        }
+        PlayerQuestState playerState = stateStore.get(player.getUniqueId());
+        ZonedDateTime now = ZonedDateTime.now(config.zoneId);
+        boolean changed = clearExpiredStates(playerState, now);
+        for (QuestGroup group : config.groups.values()) {
+            ActiveOffer active = getActiveOffer(group, now);
+            if (active == null) {
+                continue;
+            }
+            if (active.offer.conditions.requiredShopTrades <= 0) {
+                continue;
+            }
+            List<QuestAssignment> assignments = playerState.assignments.get(group.id);
+            if (findAssignment(assignments, active.offer.id) == null) {
+                continue;
+            }
+            String key = counterKey(active.offer.id, active.cycleIndex);
+            int current = playerState.shopTradeCounts.getOrDefault(key, 0);
+            playerState.shopTradeCounts.put(key, current + tradeCount);
+            changed = true;
+        }
+        if (changed) {
+            stateStore.saveState(playerState);
+            stateStore.save();
         }
     }
 

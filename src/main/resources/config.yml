@@ -67,6 +67,7 @@ quest:
         accept_limit_per_player: 1
         expire_on_cycle_change: true
         consume_items_on_complete: true
+        respawn_cooldown_seconds: 0
       offers:
         - id: "gunpowder_x64"
           name: "&e火薬64個納品 / Deliver 64 Gunpowder"
@@ -97,3 +98,23 @@ quest:
               - type: "minecraft:diamond_sword"
                 amount: 1
                 nbt: "{Enchantments:[{id:\"minecraft:sharpness\",lvl:2s}],Damage:0}"
+
+    quest_daily_shop_trade:
+      name: "ショップ取引デイリー"
+      schedule:
+        start: "2026-01-07T00:00:00+09:00"
+        period_hours: 24
+      rules:
+        accept_limit_per_player: 1
+        expire_on_cycle_change: true
+        consume_items_on_complete: false
+        respawn_cooldown_seconds: 0
+      offers:
+        - id: "shop_trade_once"
+          name: "&eショップで1回取引 / Make 1 shop trade"
+          description: "&7ショップで売買どちらかを1回行う。/ Complete one buy or sell trade in a shop."
+          conditions:
+            op: "AND"
+            shop_trades: 1
+          rewards:
+            money: 50

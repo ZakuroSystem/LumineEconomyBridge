@@ -612,6 +612,9 @@ public class ShopListener implements Listener {
                                 }
                             }
                             si.setStock(Math.max(0, si.getStock() - qty));
+                            if (plugin.getQuestManager() != null) {
+                                plugin.getQuestManager().recordShopTrade(p, 1);
+                            }
                             refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
                             p.openInventory(ch.getOrigin().getInventory());
                         }
@@ -826,6 +829,9 @@ public class ShopListener implements Listener {
                         if (res.has("status") && "success".equals(res.get("status").getAsString())) {
                             removeMatchingItems(p, si, qty);
                             si.setStock(si.getStock() + qty);
+                            if (plugin.getQuestManager() != null) {
+                                plugin.getQuestManager().recordShopTrade(p, 1);
+                            }
                             refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
                             p.openInventory(ch.getOrigin().getInventory());
                         }
