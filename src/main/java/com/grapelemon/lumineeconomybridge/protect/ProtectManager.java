@@ -41,6 +41,7 @@ public class ProtectManager {
     private final LumineEconomyBridge plugin;
     private final NamespacedKey wandKey;
     private final NamespacedKey leaseSignKey;
+    private final NamespacedKey wandModeKey;
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     private final Map<String, ProtectionRegion> protections = new LinkedHashMap<>();
@@ -52,6 +53,7 @@ public class ProtectManager {
     private final Map<UUID, PendingSignWizard> pendingSignWizards = new ConcurrentHashMap<>();
     private final Map<String, LeaseSignInfo> leaseSigns = new ConcurrentHashMap<>();
     private final Map<UUID, PendingLeaseConfirm> pendingLeaseConfirmations = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, String>> ezResetSnapshots = new ConcurrentHashMap<>();
 
     private File dataFile;
     private File jsonDataFile;
@@ -68,6 +70,7 @@ public class ProtectManager {
         this.plugin = plugin;
         this.wandKey = new NamespacedKey(plugin, "protect_wand");
         this.leaseSignKey = new NamespacedKey(plugin, "protect_lease_sign");
+        this.wandModeKey = new NamespacedKey(plugin, "protect_wand_mode");
         reload();
     }
 
@@ -196,6 +199,7 @@ public class ProtectManager {
                 }
                 ProtectionRegion region = new ProtectionRegion(id, ownerId, world,
                         minX, minY, minZ, maxX, maxY, maxZ, createdAt);
+                region.setMode(dataConfig.getString(path + "mode", "middle"));
                 String renterRaw = dataConfig.getString(path + "renter");
                 String renterName = dataConfig.getString(path + "renter_name", "");
                 long rentUntil = dataConfig.getLong(path + "rent_until", 0L);
@@ -249,6 +253,7 @@ public class ProtectManager {
             dataConfig.set(base + "maxY", region.getMaxY());
             dataConfig.set(base + "maxZ", region.getMaxZ());
             dataConfig.set(base + "created", region.getCreatedAt());
+            dataConfig.set(base + "mode", region.getMode());
             if (region.hasActiveRental()) {
                 dataConfig.set(base + "renter", region.getRenter().toString());
                 dataConfig.set(base + "renter_name", region.getRenterName());
@@ -293,6 +298,7 @@ public class ProtectManager {
                 row.put("maxY", region.getMaxY());
                 row.put("maxZ", region.getMaxZ());
                 row.put("created", region.getCreatedAt());
+                row.put("mode", region.getMode());
                 if (region.hasActiveRental()) {
                     row.put("renter", region.getRenter().toString());
                     row.put("renter_name", region.getRenterName());
@@ -330,6 +336,10 @@ public class ProtectManager {
     }
 
     public boolean canAccess(Player player, Location location) {
+        return isActionAllowed(player, location, ProtectAction.INTERACT);
+    }
+
+    public boolean isActionAllowed(Player player, Location location, ProtectAction action) {
         if (player == null || location == null) {
             return true;
         }
@@ -340,13 +350,20 @@ public class ProtectManager {
         if (region == null) {
             return true;
         }
-        if (region.getOwner().equals(player.getUniqueId())) {
+        if (region.getOwner().equals(player.getUniqueId()) || region.isRenter(player.getUniqueId())
+                || player.isOp() || player.hasPermission("lumineeconomy.admin") || plugin.hasBypass(player)) {
             return true;
         }
-        if (region.isRenter(player.getUniqueId())) {
-            return true;
-        }
-        return player.isOp() || player.hasPermission("lumineeconomy.admin") || plugin.hasBypass(player);
+        String mode = region.getMode();
+        return switch (mode) {
+            case "never" -> false;
+            case "high" -> false;
+            case "middle" -> action != ProtectAction.BREAK && action != ProtectAction.PLACE && action != ProtectAction.INTERACT && action != ProtectAction.INVENTORY && action != ProtectAction.DROP;
+            case "low" -> action != ProtectAction.BREAK && action != ProtectAction.PLACE;
+            case "pvp" -> action != ProtectAction.PVP;
+            case "ezreset" -> true;
+            default -> action != ProtectAction.BREAK && action != ProtectAction.PLACE && action != ProtectAction.INTERACT;
+        };
     }
 
     public synchronized void startLeasePrompt(Player owner) {
@@ -378,6 +395,7 @@ public class ProtectManager {
     public synchronized void startSelection(Player player, String requestedId) {
         ProtectSession session = new ProtectSession(player.getUniqueId(), requestedId);
         session.setGuiFlow(false);
+        session.setProtectionMode("middle");
         sessions.put(player.getUniqueId(), session);
         cancelNamePrompt(player.getUniqueId());
         clearApprovalPrompt(player.getUniqueId());
@@ -387,9 +405,27 @@ public class ProtectManager {
         player.sendMessage(ChatColor.AQUA + "Protection setup started. Use the Breeze Rod to mark the first and second corners." + ChatColor.RESET);
     }
 
+    public void giveAdminProtectionWand(Player player, String mode) {
+        startAdminSelection(player, normalizeMode(mode));
+    }
+
+    public synchronized void startAdminSelection(Player player, String mode) {
+        ProtectSession session = new ProtectSession(player.getUniqueId(), null);
+        session.setGuiFlow(false);
+        session.setAdminSelection(true);
+        session.setProtectionMode(mode);
+        sessions.put(player.getUniqueId(), session);
+        cancelNamePrompt(player.getUniqueId());
+        clearApprovalPrompt(player.getUniqueId());
+        clearRemovalPrompt(player.getUniqueId());
+        giveWand(player, mode, true);
+        player.sendMessage(ChatColor.GREEN + "管理者保護モード(" + mode + ")の棒を配布しました。" + ChatColor.RESET);
+    }
+
     public synchronized void startSelectionFromGui(Player player) {
         ProtectSession session = new ProtectSession(player.getUniqueId(), null);
         session.setGuiFlow(true);
+        session.setProtectionMode("middle");
         sessions.put(player.getUniqueId(), session);
         cancelNamePrompt(player.getUniqueId());
         clearApprovalPrompt(player.getUniqueId());
@@ -400,22 +436,34 @@ public class ProtectManager {
     }
 
     private void giveWand(Player player) {
-        ItemStack wand = createWand();
+        giveWand(player, "middle", false);
+    }
+
+    private void giveWand(Player player, String mode, boolean admin) {
+        ItemStack wand = createWand(mode, admin);
         player.getInventory().addItem(wand);
     }
 
     private ItemStack createWand() {
-        ItemStack stack = new ItemStack(org.bukkit.Material.BREEZE_ROD);
+        return createWand("middle", false);
+    }
+
+    private ItemStack createWand(String mode, boolean admin) {
+        ItemStack stack = new ItemStack(admin ? org.bukkit.Material.STICK : org.bukkit.Material.BREEZE_ROD);
         ItemMeta meta = stack.getItemMeta();
         if (meta != null) {
             meta.setDisplayName(ChatColor.AQUA + "Protection Wand");
-            List<String> lore = Arrays.asList(
-                    ChatColor.GRAY + "左クリック: 始点 / Left click: first corner",
-                    ChatColor.GRAY + "右クリック: 終点 / Right click: second corner"
-            );
+            List<String> lore = new ArrayList<>();
+            lore.add(ChatColor.GRAY + "左クリック: 始点 / Left click: first corner");
+            lore.add(ChatColor.GRAY + "右クリック: 終点 / Right click: second corner");
+            lore.add(ChatColor.DARK_AQUA + "mode: " + mode);
+            if (admin) {
+                lore.add(ChatColor.GOLD + "admin free selection");
+            }
             meta.setLore(lore);
             PersistentDataContainer container = meta.getPersistentDataContainer();
             container.set(wandKey, PersistentDataType.BYTE, (byte) 1);
+            container.set(wandModeKey, PersistentDataType.STRING, mode);
             stack.setItemMeta(meta);
         }
         return stack;
@@ -527,7 +575,7 @@ public class ProtectManager {
     }
 
     public boolean isWand(ItemStack stack) {
-        if (stack == null || stack.getType() != org.bukkit.Material.BREEZE_ROD) {
+        if (stack == null) {
             return false;
         }
         if (!stack.hasItemMeta()) {
@@ -537,6 +585,26 @@ public class ProtectManager {
         if (meta == null) return false;
         PersistentDataContainer container = meta.getPersistentDataContainer();
         return container.has(wandKey, PersistentDataType.BYTE);
+    }
+
+    public String getWandMode(ItemStack stack) {
+        if (!isWand(stack)) {
+            return "middle";
+        }
+        ItemMeta meta = stack.getItemMeta();
+        if (meta == null) {
+            return "middle";
+        }
+        String mode = meta.getPersistentDataContainer().get(wandModeKey, PersistentDataType.STRING);
+        return normalizeMode(mode);
+    }
+
+    public void applyWandMode(Player player, ItemStack stack) {
+        ProtectSession session = sessions.get(player.getUniqueId());
+        if (session == null) {
+            return;
+        }
+        session.setProtectionMode(getWandMode(stack));
     }
 
     public void recordFirst(Player player, Location location) {
@@ -757,7 +825,7 @@ public class ProtectManager {
             player.sendMessage(ChatColor.RED + "保護費用が大きすぎます。範囲を小さくしてください。/ The protection fee is too large." + ChatColor.RESET);
             return;
         }
-        int finalCost = (int) totalCost;
+        int finalCost = session.isAdminSelection() ? 0 : (int) totalCost;
         session.setFinalizing(true);
         cancelNamePrompt(player.getUniqueId());
         chargePlayer(player, finalCost, resolvedId, success -> {
@@ -767,6 +835,10 @@ public class ProtectManager {
             }
             ProtectionRegion region = new ProtectionRegion(resolvedId, player.getUniqueId(), worldName,
                     minX, minY, minZ, maxX, maxY, maxZ, System.currentTimeMillis());
+            region.setMode(normalizeMode(session.getProtectionMode()));
+            if ("ezreset".equals(region.getMode())) {
+                ezResetSnapshots.put(region.getId(), captureSnapshot(region));
+            }
             synchronized (ProtectManager.this) {
                 protections.put(resolvedId, region);
                 saveProtections();
@@ -1292,6 +1364,67 @@ public class ProtectManager {
         }
     }
 
+    public void resetProtection(Player sender, String regionId) {
+        ProtectionRegion region = findRegion(regionId);
+        if (region == null) {
+            sender.sendMessage(ChatColor.RED + "保護が見つかりません。" + ChatColor.RESET);
+            return;
+        }
+        if (!"ezreset".equals(region.getMode())) {
+            sender.sendMessage(ChatColor.RED + "この保護はezresetではありません。" + ChatColor.RESET);
+            return;
+        }
+        Map<String, String> snapshot = ezResetSnapshots.get(region.getId());
+        if (snapshot == null || snapshot.isEmpty()) {
+            sender.sendMessage(ChatColor.RED + "リセット用スナップショットがありません。" + ChatColor.RESET);
+            return;
+        }
+        org.bukkit.World world = Bukkit.getWorld(region.getWorldName());
+        if (world == null) {
+            sender.sendMessage(ChatColor.RED + "ワールドが見つかりません。" + ChatColor.RESET);
+            return;
+        }
+        snapshot.forEach((k, blockData) -> {
+            String[] p = k.split(",", 3);
+            int x = Integer.parseInt(p[0]);
+            int y = Integer.parseInt(p[1]);
+            int z = Integer.parseInt(p[2]);
+            try {
+                world.getBlockAt(x, y, z).setBlockData(Bukkit.createBlockData(blockData), false);
+            } catch (IllegalArgumentException ex) {
+                world.getBlockAt(x, y, z).setType(org.bukkit.Material.AIR, false);
+            }
+        });
+        sender.sendMessage(ChatColor.GREEN + "保護範囲を保存状態へリセットしました: " + region.getId() + ChatColor.RESET);
+    }
+
+    private Map<String, String> captureSnapshot(ProtectionRegion region) {
+        Map<String, String> snapshot = new HashMap<>();
+        org.bukkit.World world = Bukkit.getWorld(region.getWorldName());
+        if (world == null) {
+            return snapshot;
+        }
+        for (int x = region.getMinX(); x <= region.getMaxX(); x++) {
+            for (int y = region.getMinY(); y <= region.getMaxY(); y++) {
+                for (int z = region.getMinZ(); z <= region.getMaxZ(); z++) {
+                    snapshot.put(x + "," + y + "," + z, world.getBlockAt(x, y, z).getBlockData().getAsString());
+                }
+            }
+        }
+        return snapshot;
+    }
+
+    public String normalizeMode(String modeRaw) {
+        if (modeRaw == null) {
+            return "middle";
+        }
+        String m = modeRaw.trim().toLowerCase(Locale.ROOT);
+        return switch (m) {
+            case "never", "high", "middle", "low", "pvp", "ezreset" -> m;
+            default -> "middle";
+        };
+    }
+
     private String signKey(Location location) {
         return location.getWorld().getName() + ":" + location.getBlockX() + ":" + location.getBlockY() + ":" + location.getBlockZ();
     }
@@ -1363,6 +1496,8 @@ public class ProtectManager {
             session.setInitialId(id);
         }
     }
+
+    public enum ProtectAction { BREAK, PLACE, INTERACT, INVENTORY, DROP, PVP, ENTER }
 
     private record PendingName(BukkitTask timeout) {}
 

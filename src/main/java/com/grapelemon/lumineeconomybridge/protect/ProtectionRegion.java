@@ -23,6 +23,7 @@ public class ProtectionRegion {
     private String renterName;
     private long rentUntilEpochMillis;
     private int rentPriceUnits;
+    private String mode = "middle";
 
     public ProtectionRegion(String id, UUID owner, String worldName,
                             int minX, int minY, int minZ,
@@ -124,6 +125,14 @@ public class ProtectionRegion {
 
     public int getRentPriceUnits() {
         return rentPriceUnits;
+    }
+
+    public String getMode() {
+        return mode == null || mode.isBlank() ? "middle" : mode;
+    }
+
+    public void setMode(String mode) {
+        this.mode = (mode == null || mode.isBlank()) ? "middle" : mode.toLowerCase();
     }
 
     public void setRental(UUID renter, String renterName, long rentUntilEpochMillis, int rentPriceUnits) {

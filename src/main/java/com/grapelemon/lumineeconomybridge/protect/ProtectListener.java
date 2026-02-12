@@ -14,8 +14,13 @@ import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.block.SignChangeEvent;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
+import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
 
@@ -44,7 +49,7 @@ public class ProtectListener implements Listener {
                 }
             }
             if (clicked != null && (event.getAction() == Action.RIGHT_CLICK_BLOCK || event.getAction() == Action.LEFT_CLICK_BLOCK)) {
-                if (!manager.canAccess(player, clicked.getLocation())) {
+                if (!manager.isActionAllowed(player, clicked.getLocation(), ProtectManager.ProtectAction.INTERACT)) {
                     event.setCancelled(true);
                     player.sendMessage(ChatColor.RED + "この保護エリアは利用できません。/ Protected area." + ChatColor.RESET);
                 }
@@ -59,6 +64,7 @@ public class ProtectListener implements Listener {
         if (clicked == null) {
             return;
         }
+        manager.applyWandMode(player, item);
         event.setCancelled(true);
         Location loc = clicked.getLocation();
         if (action == Action.LEFT_CLICK_BLOCK) {
@@ -108,7 +114,7 @@ public class ProtectListener implements Listener {
             }
             manager.removeLeaseSign(sign);
         }
-        if (!manager.canAccess(event.getPlayer(), event.getBlock().getLocation())) {
+        if (!manager.isActionAllowed(event.getPlayer(), event.getBlock().getLocation(), ProtectManager.ProtectAction.BREAK)) {
             event.setCancelled(true);
             event.getPlayer().sendMessage(ChatColor.RED + "この保護エリアではブロック破壊できません。" + ChatColor.RESET);
         }
@@ -116,9 +122,58 @@ public class ProtectListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockPlace(BlockPlaceEvent event) {
-        if (!manager.canAccess(event.getPlayer(), event.getBlock().getLocation())) {
+        if (!manager.isActionAllowed(event.getPlayer(), event.getBlock().getLocation(), ProtectManager.ProtectAction.PLACE)) {
             event.setCancelled(true);
             event.getPlayer().sendMessage(ChatColor.RED + "この保護エリアではブロック設置できません。" + ChatColor.RESET);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onInventoryOpen(InventoryOpenEvent event) {
+        if (event.getPlayer() instanceof Player player) {
+            if (!manager.isActionAllowed(player, player.getLocation(), ProtectManager.ProtectAction.INVENTORY)) {
+                event.setCancelled(true);
+                player.sendMessage(ChatColor.RED + "この保護エリアではインベントリ操作できません。" + ChatColor.RESET);
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (event.getWhoClicked() instanceof Player player) {
+            if (!manager.isActionAllowed(player, player.getLocation(), ProtectManager.ProtectAction.INVENTORY)) {
+                event.setCancelled(true);
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onDrop(PlayerDropItemEvent event) {
+        if (!manager.isActionAllowed(event.getPlayer(), event.getPlayer().getLocation(), ProtectManager.ProtectAction.DROP)) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage(ChatColor.RED + "この保護エリアではアイテムドロップできません。" + ChatColor.RESET);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onPvp(EntityDamageByEntityEvent event) {
+        if (event.getEntity() instanceof Player victim && event.getDamager() instanceof Player attacker) {
+            if (!manager.isActionAllowed(attacker, victim.getLocation(), ProtectManager.ProtectAction.PVP)) {
+                event.setCancelled(true);
+                attacker.sendMessage(ChatColor.RED + "この保護エリアではPvPできません。" + ChatColor.RESET);
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onMove(PlayerMoveEvent event) {
+        Location to = event.getTo();
+        if (to == null) {
+            return;
+        }
+        if (!manager.isActionAllowed(event.getPlayer(), to, ProtectManager.ProtectAction.ENTER)) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage(ChatColor.RED + "この保護エリアには立ち入れません。" + ChatColor.RESET);
         }
     }
 

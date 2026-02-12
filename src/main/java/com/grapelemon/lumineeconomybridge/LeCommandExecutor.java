@@ -164,6 +164,33 @@ public class LeCommandExecutor implements CommandExecutor {
                     sendHelp(p);
                     return true;
                 }
+                case "protect" -> {
+                    if (!plugin.hasBypass(p) && !p.isOp() && !p.hasPermission("lumineeconomy.admin")) {
+                        p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                        return true;
+                    }
+                    if (plugin.getProtectManager() == null) {
+                        p.sendMessage(Lang.get("error-unavailable"));
+                        return true;
+                    }
+                    if (args.length >= 3 && args[1].equalsIgnoreCase("add")) {
+                        String mode = args[2].toLowerCase();
+                        List<String> modes = Arrays.asList("never", "high", "middle", "low", "pvp", "ezreset");
+                        if (!modes.contains(mode)) {
+                            p.sendMessage(ChatColor.YELLOW + "Usage: /le protect add <never|high|middle|low|pvp|ezreset>" + ChatColor.RESET);
+                            return true;
+                        }
+                        plugin.getProtectManager().giveAdminProtectionWand(p, mode);
+                        return true;
+                    }
+                    if (args.length >= 3 && args[1].equalsIgnoreCase("reset")) {
+                        plugin.getProtectManager().resetProtection(p, args[2]);
+                        return true;
+                    }
+                    p.sendMessage(ChatColor.YELLOW + "Usage: /le protect add <never|high|middle|low|pvp|ezreset>" + ChatColor.RESET);
+                    p.sendMessage(ChatColor.YELLOW + "       /le protect reset <protectionId>" + ChatColor.RESET);
+                    return true;
+                }
                 case "admin" -> {
                     if (!plugin.isActive() || plugin.getHttpClient() == null) {
                         p.sendMessage(Lang.get("error-unavailable"));
