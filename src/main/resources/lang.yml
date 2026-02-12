@@ -74,8 +74,8 @@ guide:
       lore_2: "&7範囲選択後にチャットでOK承認 / Confirm by chat after selection"
     protect_rent:
       name: "&5土地貸出 / Lease Protection"
-      lore_1: "&7保護IDと相手名をチャット入力 / Set target by chat"
-      lore_2: "&7期限と金額を設定して貸し出し / Configure period and price"
+      lore_1: "&7チャットで貸出看板設定を作成 / Setup lease sign by chat"
+      lore_2: "&7保護ID・期間・金額を入力 / Input region id, period and price"
   shop:
     prompt: "&bショップIDを入力してください (cancel で中止) / Enter a shop ID (type cancel to abort)"
     invalid: "&cショップIDを入力してください。 / Please enter a shop ID."

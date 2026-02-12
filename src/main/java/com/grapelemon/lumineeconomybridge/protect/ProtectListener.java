@@ -5,6 +5,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.block.Block;
+import org.bukkit.block.Sign;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -12,9 +13,11 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.inventory.ItemStack;
 
 public class ProtectListener implements Listener {
     private final LumineEconomyBridge plugin;
@@ -28,8 +31,18 @@ public class ProtectListener implements Listener {
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
-        if (!manager.isWand(event.getItem())) {
-            Block clicked = event.getClickedBlock();
+        ItemStack item = event.getItem();
+        Block clicked = event.getClickedBlock();
+
+        if (!manager.isWand(item)) {
+            if (clicked != null && clicked.getState() instanceof Sign sign && event.getAction() == Action.RIGHT_CLICK_BLOCK) {
+                if (manager.hasLeaseSign(sign)) {
+                    event.setCancelled(true);
+                    manager.showLeaseSignInfo(player, sign);
+                    manager.promptLeaseBySign(player, sign);
+                    return;
+                }
+            }
             if (clicked != null && (event.getAction() == Action.RIGHT_CLICK_BLOCK || event.getAction() == Action.LEFT_CLICK_BLOCK)) {
                 if (!manager.canAccess(player, clicked.getLocation())) {
                     event.setCancelled(true);
@@ -38,11 +51,11 @@ public class ProtectListener implements Listener {
             }
             return;
         }
+
         if (event.getHand() != org.bukkit.inventory.EquipmentSlot.HAND) {
             return;
         }
         Action action = event.getAction();
-        Block clicked = event.getClickedBlock();
         if (clicked == null) {
             return;
         }
@@ -56,7 +69,45 @@ public class ProtectListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onSignChange(SignChangeEvent event) {
+        ItemStack hand = event.getPlayer().getInventory().getItemInMainHand();
+        String data = manager.getLeaseSignTemplateData(hand);
+        if (data == null) {
+            return;
+        }
+        String[] parts = data.split("\\|", 3);
+        if (parts.length < 3) {
+            return;
+        }
+        String regionId = parts[0];
+        String periodRaw = parts[1];
+        int priceUnits;
+        try {
+            priceUnits = Integer.parseInt(parts[2]);
+        } catch (NumberFormatException ex) {
+            priceUnits = 0;
+        }
+        if (!(event.getBlock().getState() instanceof Sign sign)) {
+            return;
+        }
+        manager.registerLeaseSign(sign, event.getPlayer(), regionId, periodRaw, priceUnits);
+        event.setLine(0, regionId);
+        event.setLine(1, periodRaw);
+        event.setLine(2, String.valueOf(priceUnits));
+        event.setLine(3, event.getPlayer().getName());
+        event.getPlayer().sendMessage(ChatColor.GREEN + "貸出看板を作成しました。" + ChatColor.RESET);
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
+        if (event.getBlock().getState() instanceof Sign sign && manager.hasLeaseSign(sign)) {
+            if (!manager.canBreakLeaseSign(event.getPlayer(), sign)) {
+                event.setCancelled(true);
+                event.getPlayer().sendMessage(ChatColor.RED + "この看板は設置者のみ破壊できます。" + ChatColor.RESET);
+                return;
+            }
+            manager.removeLeaseSign(sign);
+        }
         if (!manager.canAccess(event.getPlayer(), event.getBlock().getLocation())) {
             event.setCancelled(true);
             event.getPlayer().sendMessage(ChatColor.RED + "この保護エリアではブロック破壊できません。" + ChatColor.RESET);
@@ -78,7 +129,9 @@ public class ProtectListener implements Listener {
         boolean awaitingApproval = manager.isAwaitingApproval(player.getUniqueId());
         boolean awaitingRemoval = manager.isAwaitingRemoval(player.getUniqueId());
         boolean awaitingLease = manager.isAwaitingLease(player.getUniqueId());
-        if (!awaitingName && !awaitingApproval && !awaitingRemoval && !awaitingLease) {
+        boolean awaitingSignWizard = manager.isAwaitingSignWizard(player.getUniqueId());
+        boolean awaitingLeaseConfirm = manager.isAwaitingLeaseConfirm(player.getUniqueId());
+        if (!awaitingName && !awaitingApproval && !awaitingRemoval && !awaitingLease && !awaitingSignWizard && !awaitingLeaseConfirm) {
             return;
         }
         event.setCancelled(true);
@@ -89,6 +142,10 @@ public class ProtectListener implements Listener {
                 manager.handleNameResponse(player, message);
             } else if (awaitingApproval) {
                 manager.handleApprovalResponse(player, message);
+            } else if (awaitingSignWizard) {
+                manager.handleSignWizardResponse(player, message);
+            } else if (awaitingLeaseConfirm) {
+                manager.handleLeaseConfirmResponse(player, message);
             } else if (awaitingLease) {
                 manager.handleLeaseResponse(player, message);
             } else if (awaitingRemoval) {

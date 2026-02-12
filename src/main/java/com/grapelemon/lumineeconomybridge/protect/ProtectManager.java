@@ -13,6 +13,7 @@ import net.md_5.bungee.api.chat.TextComponent;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
+import org.bukkit.Particle;
 import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -39,6 +40,7 @@ public class ProtectManager {
 
     private final LumineEconomyBridge plugin;
     private final NamespacedKey wandKey;
+    private final NamespacedKey leaseSignKey;
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     private final Map<String, ProtectionRegion> protections = new LinkedHashMap<>();
@@ -47,6 +49,9 @@ public class ProtectManager {
     private final Map<UUID, PendingApproval> pendingApprovals = new ConcurrentHashMap<>();
     private final Map<UUID, PendingRemoval> pendingRemoval = new ConcurrentHashMap<>();
     private final Map<UUID, PendingLease> pendingLeases = new ConcurrentHashMap<>();
+    private final Map<UUID, PendingSignWizard> pendingSignWizards = new ConcurrentHashMap<>();
+    private final Map<String, LeaseSignInfo> leaseSigns = new ConcurrentHashMap<>();
+    private final Map<UUID, PendingLeaseConfirm> pendingLeaseConfirmations = new ConcurrentHashMap<>();
 
     private File dataFile;
     private File jsonDataFile;
@@ -62,6 +67,7 @@ public class ProtectManager {
     public ProtectManager(LumineEconomyBridge plugin) {
         this.plugin = plugin;
         this.wandKey = new NamespacedKey(plugin, "protect_wand");
+        this.leaseSignKey = new NamespacedKey(plugin, "protect_lease_sign");
         reload();
     }
 
@@ -121,6 +127,7 @@ public class ProtectManager {
         }
         dataConfig = YamlConfiguration.loadConfiguration(dataFile);
         loadProtections();
+        loadLeaseSigns();
         restartUpkeepTask();
     }
 
@@ -206,6 +213,25 @@ public class ProtectManager {
         }
     }
 
+    private synchronized void loadLeaseSigns() {
+        leaseSigns.clear();
+        if (dataConfig == null || !dataConfig.isConfigurationSection("lease_signs")) {
+            return;
+        }
+        for (String key : dataConfig.getConfigurationSection("lease_signs").getKeys(false)) {
+            String base = "lease_signs." + key + ".";
+            String regionId = dataConfig.getString(base + "region_id", "");
+            String period = dataConfig.getString(base + "period", "");
+            int price = dataConfig.getInt(base + "price", 0);
+            String owner = dataConfig.getString(base + "owner_name", "");
+            long created = dataConfig.getLong(base + "created", System.currentTimeMillis());
+            if (regionId.isBlank()) {
+                continue;
+            }
+            leaseSigns.put(key, new LeaseSignInfo(regionId, period, price, owner, created));
+        }
+    }
+
     private synchronized void saveProtections() {
         if (dataConfig == null) {
             dataConfig = new YamlConfiguration();
@@ -229,6 +255,16 @@ public class ProtectManager {
                 dataConfig.set(base + "rent_until", region.getRentUntilEpochMillis());
                 dataConfig.set(base + "rent_price", region.getRentPriceUnits());
             }
+        }
+        dataConfig.set("lease_signs", null);
+        for (Map.Entry<String, LeaseSignInfo> entry : leaseSigns.entrySet()) {
+            String base = "lease_signs." + entry.getKey() + ".";
+            LeaseSignInfo info = entry.getValue();
+            dataConfig.set(base + "region_id", info.regionId());
+            dataConfig.set(base + "period", info.periodRaw());
+            dataConfig.set(base + "price", info.priceUnits());
+            dataConfig.set(base + "owner_name", info.ownerName());
+            dataConfig.set(base + "created", info.createdAt());
         }
         try {
             dataConfig.save(dataFile);
@@ -265,7 +301,10 @@ public class ProtectManager {
                 }
                 list.add(row);
             }
-            java.nio.file.Files.writeString(jsonDataFile.toPath(), gson.toJson(list), java.nio.charset.StandardCharsets.UTF_8);
+            Map<String, Object> root = new LinkedHashMap<>();
+            root.put("protections", list);
+            root.put("lease_signs", leaseSigns);
+            java.nio.file.Files.writeString(jsonDataFile.toPath(), gson.toJson(root), java.nio.charset.StandardCharsets.UTF_8);
         } catch (IOException ex) {
             plugin.getLogger().warning("Failed to save protections.json: " + ex.getMessage());
         }
@@ -380,6 +419,111 @@ public class ProtectManager {
             stack.setItemMeta(meta);
         }
         return stack;
+    }
+
+    public synchronized void startLeaseSignWizard(Player owner) {
+        PendingSignWizard existing = pendingSignWizards.remove(owner.getUniqueId());
+        if (existing != null) {
+            existing.timeout().cancel();
+        }
+        BukkitTask timeout = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            PendingSignWizard pending = pendingSignWizards.remove(owner.getUniqueId());
+            if (pending != null) {
+                owner.sendMessage(ChatColor.RED + "貸出看板作成がタイムアウトしました。" + ChatColor.RESET);
+            }
+        }, NAME_TIMEOUT_TICKS);
+        pendingSignWizards.put(owner.getUniqueId(), new PendingSignWizard(SignWizardStage.REGION_ID, null, null, 0, timeout));
+        owner.sendMessage(ChatColor.GOLD + "質問1: 貸し出す保護IDを入力してください。" + ChatColor.RESET);
+    }
+
+    public boolean isAwaitingSignWizard(UUID uuid) {
+        return pendingSignWizards.containsKey(uuid);
+    }
+
+    public void handleSignWizardResponse(Player owner, String message) {
+        PendingSignWizard pending = pendingSignWizards.get(owner.getUniqueId());
+        if (pending == null) {
+            return;
+        }
+        String input = message == null ? "" : message.trim();
+        if (input.isEmpty()) {
+            owner.sendMessage(ChatColor.RED + "入力が空です。" + ChatColor.RESET);
+            return;
+        }
+        switch (pending.stage()) {
+            case REGION_ID -> {
+                ProtectionRegion region = findRegion(input);
+                if (region == null || !region.getOwner().equals(owner.getUniqueId())) {
+                    owner.sendMessage(ChatColor.RED + "指定IDはあなたの保護地ではありません。" + ChatColor.RESET);
+                    return;
+                }
+                pendingSignWizards.put(owner.getUniqueId(), pending.next(SignWizardStage.PRICE, region.getId(), null, 0));
+                owner.sendMessage(ChatColor.GOLD + "質問2: 貸出金額を入力してください。" + ChatColor.RESET);
+            }
+            case PRICE -> {
+                int price;
+                try {
+                    price = Math.max(0, plugin.parseAmount(input));
+                } catch (NumberFormatException ex) {
+                    owner.sendMessage(ChatColor.RED + "金額の形式が不正です。" + ChatColor.RESET);
+                    return;
+                }
+                pendingSignWizards.put(owner.getUniqueId(), pending.next(SignWizardStage.PERIOD, pending.regionId(), null, price));
+                owner.sendMessage(ChatColor.GOLD + "質問3: 貸出期間を入力してください (例: 4d4h)。" + ChatColor.RESET);
+            }
+            case PERIOD -> {
+                long duration = parseDurationMillis(input);
+                if (duration <= 0) {
+                    owner.sendMessage(ChatColor.RED + "期間形式が不正です。例: 1d, 6h, 4d4h" + ChatColor.RESET);
+                    return;
+                }
+                PendingSignWizard done = pendingSignWizards.remove(owner.getUniqueId());
+                if (done != null) {
+                    done.timeout().cancel();
+                }
+                giveLeaseSign(owner, done.regionId(), input, done.priceUnits());
+            }
+        }
+    }
+
+    private void giveLeaseSign(Player owner, String regionId, String periodRaw, int priceUnits) {
+        ItemStack sign = new ItemStack(org.bukkit.Material.OAK_SIGN);
+        ItemMeta meta = sign.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName(ChatColor.DARK_RED + "[LumineRoom] Lease Sign");
+            meta.setLore(Arrays.asList(
+                    ChatColor.GRAY + "1行目: 保護ID",
+                    ChatColor.GRAY + "2行目: 期間(例 4d4h)",
+                    ChatColor.GRAY + "3行目: 金額",
+                    ChatColor.GRAY + "4行目: 貸出主"
+            ));
+            meta.getPersistentDataContainer().set(leaseSignKey, PersistentDataType.STRING, regionId + "|" + periodRaw + "|" + priceUnits);
+            sign.setItemMeta(meta);
+        }
+        owner.getInventory().addItem(sign);
+        owner.sendMessage(ChatColor.GREEN + "貸出看板アイテムを配布しました。設置して利用してください。" + ChatColor.RESET);
+    }
+
+    public boolean isLeaseSignTemplate(ItemStack stack) {
+        if (stack == null || stack.getType() != org.bukkit.Material.OAK_SIGN || !stack.hasItemMeta()) {
+            return false;
+        }
+        ItemMeta meta = stack.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        return meta.getPersistentDataContainer().has(leaseSignKey, PersistentDataType.STRING);
+    }
+
+    public String getLeaseSignTemplateData(ItemStack stack) {
+        if (!isLeaseSignTemplate(stack)) {
+            return null;
+        }
+        ItemMeta meta = stack.getItemMeta();
+        if (meta == null) {
+            return null;
+        }
+        return meta.getPersistentDataContainer().get(leaseSignKey, PersistentDataType.STRING);
     }
 
     public boolean isWand(ItemStack stack) {
@@ -606,6 +750,7 @@ public class ProtectManager {
         if (!isIdValid(baseId)) {
             baseId = generateFallbackId(session);
         }
+        baseId = normalizeProtectionId(baseId);
         final String resolvedId = ensureUniqueId(baseId);
         long totalCost = volume * (long) initialPricePerBlockUnits;
         if (totalCost < 0 || totalCost > Integer.MAX_VALUE) {
@@ -805,7 +950,7 @@ public class ProtectManager {
         if (trimmed.isEmpty()) {
             return false;
         }
-        return trimmed.length() <= 64;
+        return trimmed.length() <= 8;
     }
 
     private String generateFallbackId(ProtectSession session) {
@@ -820,7 +965,7 @@ public class ProtectManager {
     }
 
     private synchronized String ensureUniqueId(String base) {
-        String trimmed = base.trim();
+        String trimmed = normalizeProtectionId(base);
         if (trimmed.isEmpty()) {
             trimmed = "protect";
         }
@@ -973,6 +1118,163 @@ public class ProtectManager {
         target.sendMessage(ChatColor.AQUA + "保護 " + region.getId() + " を利用可能になりました。期限: " + expireMinutes + "分" + ChatColor.RESET);
     }
 
+    public void registerLeaseSign(org.bukkit.block.Sign sign, Player owner, String regionId, String periodRaw, int priceUnits) {
+        String key = signKey(sign.getLocation());
+        LeaseSignInfo info = new LeaseSignInfo(regionId, periodRaw, priceUnits, owner.getName(), System.currentTimeMillis());
+        leaseSigns.put(key, info);
+        sign.setLine(0, regionId);
+        sign.setLine(1, periodRaw);
+        sign.setLine(2, plugin.formatAmountPlain(priceUnits));
+        sign.setLine(3, owner.getName());
+        sign.update(true, false);
+        saveProtections();
+    }
+
+    public boolean hasLeaseSign(org.bukkit.block.Sign sign) {
+        return leaseSigns.containsKey(signKey(sign.getLocation()));
+    }
+
+    public void removeLeaseSign(org.bukkit.block.Sign sign) {
+        leaseSigns.remove(signKey(sign.getLocation()));
+        saveProtections();
+    }
+
+    public boolean canBreakLeaseSign(Player player, org.bukkit.block.Sign sign) {
+        LeaseSignInfo info = leaseSigns.get(signKey(sign.getLocation()));
+        if (info == null) {
+            return true;
+        }
+        return player.getName().equalsIgnoreCase(info.ownerName()) || player.isOp() || player.hasPermission("lumineeconomy.admin") || plugin.hasBypass(player);
+    }
+
+    public void showLeaseSignInfo(Player player, org.bukkit.block.Sign sign) {
+        LeaseSignInfo info = leaseSigns.get(signKey(sign.getLocation()));
+        if (info == null) {
+            return;
+        }
+        ProtectionRegion region = findRegion(info.regionId());
+        if (region == null) {
+            player.sendMessage(ChatColor.RED + "この看板の保護地が見つかりません。" + ChatColor.RESET);
+            return;
+        }
+        player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[貸出ID]:" + ChatColor.YELLOW + info.regionId());
+        player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[貸出金額]:" + ChatColor.YELLOW + plugin.formatAmount(info.priceUnits()));
+        player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[貸出期間]:" + ChatColor.YELLOW + info.periodRaw());
+        String coord = region.getMinX()+","+region.getMinY()+","+region.getMinZ()+" から "+region.getMaxX()+","+region.getMaxY()+","+region.getMaxZ();
+        player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[貸出座標]:" + ChatColor.YELLOW + coord);
+        if (region.hasActiveRental()) {
+            long remain = Math.max(0L, region.getRentUntilEpochMillis() - System.currentTimeMillis());
+            player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[残り貸し出し時間]:" + ChatColor.YELLOW + formatRemaining(remain));
+        } else {
+            player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[空室状況]:" + ChatColor.YELLOW + "空きあり");
+        }
+        player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[貸出主]:" + ChatColor.YELLOW + info.ownerName());
+        showRegionParticles(region);
+    }
+
+    public void promptLeaseBySign(Player player, org.bukkit.block.Sign sign) {
+        LeaseSignInfo info = leaseSigns.get(signKey(sign.getLocation()));
+        if (info == null) {
+            return;
+        }
+        ProtectionRegion region = findRegion(info.regionId());
+        if (region == null) {
+            player.sendMessage(ChatColor.RED + "保護地が見つかりません。" + ChatColor.RESET);
+            return;
+        }
+        if (region.hasActiveRental()) {
+            player.sendMessage(ChatColor.RED + "この保護地は現在レンタル中です。" + ChatColor.RESET);
+            return;
+        }
+        PendingLeaseConfirm old = pendingLeaseConfirmations.remove(player.getUniqueId());
+        if (old != null) {
+            old.timeout().cancel();
+        }
+        BukkitTask timeout = Bukkit.getScheduler().runTaskLater(plugin, () -> pendingLeaseConfirmations.remove(player.getUniqueId()), 20L * 30L);
+        pendingLeaseConfirmations.put(player.getUniqueId(), new PendingLeaseConfirm(info.regionId(), info.periodRaw(), info.priceUnits(), timeout));
+        player.sendMessage(ChatColor.AQUA + "このスペースを " + plugin.formatAmount(info.priceUnits()) + " で " + info.periodRaw() + " レンタルしますか？OKと入力してください。" + ChatColor.RESET);
+    }
+
+    public boolean isAwaitingLeaseConfirm(UUID uuid) {
+        return pendingLeaseConfirmations.containsKey(uuid);
+    }
+
+    public void handleLeaseConfirmResponse(Player player, String message) {
+        PendingLeaseConfirm pending = pendingLeaseConfirmations.remove(player.getUniqueId());
+        if (pending == null) {
+            return;
+        }
+        pending.timeout().cancel();
+        String n = message == null ? "" : message.trim().toLowerCase(Locale.ROOT);
+        if (!(n.equals("ok") || n.equals("yes") || n.equals("はい") || n.equals("y"))) {
+            player.sendMessage(ChatColor.RED + "レンタルをキャンセルしました。" + ChatColor.RESET);
+            return;
+        }
+        ProtectionRegion region = findRegion(pending.regionId());
+        if (region == null || region.hasActiveRental()) {
+            player.sendMessage(ChatColor.RED + "レンタルできません。" + ChatColor.RESET);
+            return;
+        }
+        long duration = parseDurationMillis(pending.periodRaw());
+        if (duration <= 0) {
+            player.sendMessage(ChatColor.RED + "看板の期間設定が不正です。" + ChatColor.RESET);
+            return;
+        }
+        chargePlayer(player, pending.priceUnits(), "signrent:" + pending.regionId(), success -> {
+            if (!success) {
+                return;
+            }
+            region.setRental(player.getUniqueId(), player.getName(), System.currentTimeMillis() + duration, pending.priceUnits());
+            saveProtections();
+            player.sendMessage(ChatColor.GREEN + "レンタル開始しました。" + ChatColor.RESET);
+        });
+    }
+
+    private long parseDurationMillis(String raw) {
+        if (raw == null || raw.isBlank()) return -1L;
+        String s = raw.trim().toLowerCase(Locale.ROOT);
+        long total = 0L;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)([dh])").matcher(s);
+        int consumed = 0;
+        while (m.find()) {
+            consumed += m.group(0).length();
+            long v = Long.parseLong(m.group(1));
+            String unit = m.group(2);
+            total += unit.equals("d") ? v * 24L * 60L * 60L * 1000L : v * 60L * 60L * 1000L;
+        }
+        return consumed == s.length() ? total : -1L;
+    }
+
+    private String formatRemaining(long millis) {
+        long sec = Math.max(0L, millis / 1000L);
+        long d = sec / 86400L;
+        long h = (sec % 86400L) / 3600L;
+        long m = (sec % 3600L) / 60L;
+        return d + "d " + h + "h " + m + "m";
+    }
+
+    private void showRegionParticles(ProtectionRegion region) {
+        org.bukkit.World world = Bukkit.getWorld(region.getWorldName());
+        if (world == null) return;
+        int stepX = Math.max(1, (region.getMaxX() - region.getMinX()) / 6);
+        int stepZ = Math.max(1, (region.getMaxZ() - region.getMinZ()) / 6);
+        for (int t = 0; t <= 20; t++) {
+            long delay = t * 20L;
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                for (int x = region.getMinX(); x <= region.getMaxX(); x += stepX) {
+                    for (int z = region.getMinZ(); z <= region.getMaxZ(); z += stepZ) {
+                        world.spawnParticle(Particle.FLAME, x + 0.5, region.getMinY() + 0.1, z + 0.5, 1, 0, 0, 0, 0);
+                        world.spawnParticle(Particle.FLAME, x + 0.5, region.getMaxY() + 0.1, z + 0.5, 1, 0, 0, 0, 0);
+                    }
+                }
+            }, delay);
+        }
+    }
+
+    private String signKey(Location location) {
+        return location.getWorld().getName() + ":" + location.getBlockX() + ":" + location.getBlockY() + ":" + location.getBlockZ();
+    }
+
     private void clearRemovalPrompt(UUID playerId) {
         PendingRemoval pending = pendingRemoval.remove(playerId);
         if (pending != null) {
@@ -987,11 +1289,27 @@ public class ProtectManager {
         }
     }
 
+    private void clearSignWizardPrompt(UUID playerId) {
+        PendingSignWizard pending = pendingSignWizards.remove(playerId);
+        if (pending != null) {
+            pending.timeout().cancel();
+        }
+    }
+
+    private void clearLeaseConfirmPrompt(UUID playerId) {
+        PendingLeaseConfirm pending = pendingLeaseConfirmations.remove(playerId);
+        if (pending != null) {
+            pending.timeout().cancel();
+        }
+    }
+
     public void cancelAll(Player player) {
         cancelNamePrompt(player.getUniqueId());
         clearApprovalPrompt(player.getUniqueId());
         clearRemovalPrompt(player.getUniqueId());
         clearLeasePrompt(player.getUniqueId());
+        clearSignWizardPrompt(player.getUniqueId());
+        clearLeaseConfirmPrompt(player.getUniqueId());
         sessions.remove(player.getUniqueId());
     }
 
@@ -1028,6 +1346,20 @@ public class ProtectManager {
     private record PendingName(BukkitTask timeout) {}
 
     private record PendingApproval(int estimatedCost, BukkitTask timeout) {}
+
+    private record LeaseSignInfo(String regionId, String periodRaw, int priceUnits, String ownerName, long createdAt) {}
+
+    private enum SignWizardStage {
+        REGION_ID, PRICE, PERIOD
+    }
+
+    private record PendingSignWizard(SignWizardStage stage, String regionId, String periodRaw, int priceUnits, BukkitTask timeout) {
+        PendingSignWizard next(SignWizardStage nextStage, String nextRegionId, String nextPeriodRaw, int nextPrice) {
+            return new PendingSignWizard(nextStage, nextRegionId, nextPeriodRaw, nextPrice, timeout);
+        }
+    }
+
+    private record PendingLeaseConfirm(String regionId, String periodRaw, int priceUnits, BukkitTask timeout) {}
 
     private enum LeaseStage {
         REGION_ID, TARGET_NAME, EXPIRE_MINUTES, PRICE

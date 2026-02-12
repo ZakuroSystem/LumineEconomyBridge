@@ -317,7 +317,7 @@ public class GuideBookListener implements Listener {
                 if (plugin.getProtectManager() == null) {
                     player.sendMessage(Lang.get("error-unavailable"));
                 } else {
-                    plugin.getProtectManager().startLeasePrompt(player);
+                    plugin.getProtectManager().startLeaseSignWizard(player);
                 }
             }
             case BACK_TO_MAIN -> openMainMenu(player);
