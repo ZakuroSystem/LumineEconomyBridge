@@ -48,6 +48,7 @@ quest:
         consume_items_on_complete: true
       offers:
         - id: "gunpowder_x64"
+          name: "&e火薬64個納品 / Deliver 64 Gunpowder"
           conditions:
             op: "AND"
             items:
@@ -59,6 +60,7 @@ quest:
               - type: "minecraft:emerald"
                 amount: 3
         - id: "stone_x128_multi"
+          name: "&e石128個+石炭16個納品 / Deliver 128 Stone + 16 Coal"
           conditions:
             op: "AND"
             items:

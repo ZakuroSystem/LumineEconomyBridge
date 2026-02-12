@@ -55,9 +55,9 @@ guide:
       lore_1: "&7在庫と価格をGUIで編集 / Edit inventory and prices in the GUI"
       lore_2: "&7/le shop でも開けます / Also available via /le shop"
     quests:
-      name: "&dおすすめクエスト / Recommended Quests"
-      lore_1: "&7未達成のクエストを表示 / Show quests you can clear next"
-      lore_2: "&7報酬でクエストポイント獲得 / Earn quest points as rewards"
+      name: "&dクエスト / Quests"
+      lore_1: "&7現在の受注可能クエストを表示 / Show active quests"
+      lore_2: "&7クリックでそのまま受注 / Click to accept directly"
     recommended_shops:
       name: "&6おすすめショップ / Recommended Shops"
       lore_1: "&7注目の販売・買取情報を表示 / View featured shop offers"
@@ -68,21 +68,15 @@ guide:
     creating: "&aショップID &e{shop}&a で作成します… / Creating shop {shop}..."
     cancelled: "&cショップ作成をキャンセルしました。 / Shop creation cancelled."
   quests:
-    menu_title: "&dおすすめクエスト / Recommended Quests"
-    loading: "&7読み込み中… / Loading…"
-    error: "&cクエストを取得できませんでした / Unable to fetch quests"
-    reward_line: "&b報酬: クエストポイント獲得 / Reward: Quest Points"
-    header: "&6おすすめクエスト / Recommended Quests"
-    none: "&7すべてのクエストを達成済みです！ / No quests remain!"
-    shop_create:
-      name: "&bショップを作成 / Open a shop"
-      description: "&7/le shop create <id> でショップを開店しましょう。 / Run /le shop create <id> to get your barrel."
-    shop_buy:
-      name: "&aショップで購入 / Buy from a shop"
-      description: "&7公開ショップで商品を購入しましょう。 / Purchase an item from a listed shop."
-    shop_sell:
-      name: "&d依頼を達成 / Fulfill a request"
-      description: "&7ショップにアイテムを補充して依頼を達成しましょう。 / Supply a shop's request to complete it."
+    menu_title: "&dクエスト / Quests"
+    error: "&cクエスト情報を取得できませんでした / Unable to load quest data"
+    none: "&7現在受注可能なクエストはありません / No active quests right now"
+    group: "&7グループ: &f{group}"
+    remaining: "&7残り時間: &f{remaining}"
+    accepted: "&e受注済み: {count}件 / Accepted x{count}"
+    progress: "&7進行度: &f{progress}"
+    available: "&a受注可能 / Available"
+    click_to_accept: "&bクリックで受注 / Click to accept"
   shops:
     menu_title: "&6おすすめショップ / Recommended Shops"
     loading: "&7ショップ情報を取得中… / Loading shop data..."

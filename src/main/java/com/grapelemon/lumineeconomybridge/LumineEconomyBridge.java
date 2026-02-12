@@ -151,6 +151,10 @@ public class LumineEconomyBridge extends JavaPlugin {
         return marketManager;
     }
 
+    public QuestManager getQuestManager() {
+        return questManager;
+    }
+
     public ShopListener getShopListener() {
         return shopListener;
     }
