@@ -62,6 +62,7 @@ public class ProtectManager {
     private int initialPricePerBlockUnits;
     private List<PricingBracket> initialPricingBrackets = Collections.emptyList();
     private int upkeepPricePerBlockUnits;
+    private int areaCostHeightBaselineBlocks;
     private long upkeepIntervalMinutes;
     private BukkitTask upkeepTask;
     private String collectorAccount;
@@ -83,6 +84,7 @@ public class ProtectManager {
         initialPricePerBlockUnits = 0;
         initialPricingBrackets = Collections.emptyList();
         upkeepPricePerBlockUnits = 0;
+        areaCostHeightBaselineBlocks = 15;
         upkeepIntervalMinutes = DEFAULT_UPKEEP_INTERVAL_MINUTES;
         collectorAccount = null;
         currency = null;
@@ -97,6 +99,7 @@ public class ProtectManager {
                 initialPricePerBlockUnits = 0;
             }
             initialPricingBrackets = loadInitialPricingBrackets(config);
+            areaCostHeightBaselineBlocks = Math.max(0, config.getInt("protect.area_cost_height_baseline", 15));
 
             String upkeepToken = config.getString("protect.upkeep_price_per_block", "0");
             try {
@@ -742,12 +745,31 @@ public class ProtectManager {
         if (!session.hasBoth()) {
             return;
         }
-        long volume = computeVolume(session.getFirst(), session.getSecond());
+        Location first = session.getFirst();
+        Location second = session.getSecond();
+        long volume = computeVolume(first, second);
         if (volume <= 0) {
             player.sendMessage(ChatColor.RED + "範囲の計算に失敗しました。" + ChatColor.RESET);
             return;
         }
-        long totalCost = computeInitialCostUnits(volume);
+        int minX = Math.min(first.getBlockX(), second.getBlockX());
+        int minY = Math.min(first.getBlockY(), second.getBlockY());
+        int minZ = Math.min(first.getBlockZ(), second.getBlockZ());
+        int maxX = Math.max(first.getBlockX(), second.getBlockX());
+        int maxY = Math.max(first.getBlockY(), second.getBlockY());
+        int maxZ = Math.max(first.getBlockZ(), second.getBlockZ());
+        String worldName = first.getWorld() != null ? first.getWorld().getName() : null;
+        if (worldName == null) {
+            player.sendMessage(ChatColor.RED + "ワールド情報を取得できません。" + ChatColor.RESET);
+            return;
+        }
+        if (hasForeignOverlap(player.getUniqueId(), worldName, minX, minY, minZ, maxX, maxY, maxZ)) {
+            player.sendMessage(ChatColor.RED + "他人の保護エリアに重なるため作成できません。" + ChatColor.RESET);
+            return;
+        }
+        long area = computeArea(first, second);
+        long billableVolume = computeBillableVolume(volume, area);
+        long totalCost = computeInitialCostUnits(billableVolume);
         if (totalCost < 0 || totalCost > Integer.MAX_VALUE) {
             player.sendMessage(ChatColor.RED + "保護費用が大きすぎます。範囲を小さくしてください。" + ChatColor.RESET);
             return;
@@ -781,6 +803,49 @@ public class ProtectManager {
         String suffix = (currency != null && !currency.isBlank()) ? (" " + currency) : "";
         player.sendMessage(ChatColor.GOLD + "暫定保護費用: " + amount + suffix + ChatColor.RESET);
         player.sendMessage(ChatColor.AQUA + "チャットで OK と入力すると確定します。/ Type OK in chat to confirm." + ChatColor.RESET);
+    }
+
+    private long computeArea(Location first, Location second) {
+        if (first == null || second == null) {
+            return -1;
+        }
+        long dx = Math.abs((long) first.getBlockX() - second.getBlockX()) + 1L;
+        long dz = Math.abs((long) first.getBlockZ() - second.getBlockZ()) + 1L;
+        return dx * dz;
+    }
+
+    private long computeBillableVolume(long volume, long area) {
+        long baselineVolume = area * (long) Math.max(0, areaCostHeightBaselineBlocks);
+        if (baselineVolume < 0) {
+            baselineVolume = Long.MAX_VALUE;
+        }
+        long total = volume + baselineVolume;
+        if (total < 0) {
+            return Long.MAX_VALUE;
+        }
+        return total;
+    }
+
+    private boolean hasForeignOverlap(UUID owner, String worldName,
+                                      int minX, int minY, int minZ,
+                                      int maxX, int maxY, int maxZ) {
+        synchronized (this) {
+            for (ProtectionRegion region : protections.values()) {
+                if (!region.getWorldName().equals(worldName)) {
+                    continue;
+                }
+                if (region.getOwner().equals(owner)) {
+                    continue;
+                }
+                boolean overlap = minX <= region.getMaxX() && maxX >= region.getMinX()
+                        && minY <= region.getMaxY() && maxY >= region.getMinY()
+                        && minZ <= region.getMaxZ() && maxZ >= region.getMinZ();
+                if (overlap) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private long computeVolume(Location first, Location second) {
@@ -912,13 +977,19 @@ public class ProtectManager {
             player.sendMessage(ChatColor.RED + "保護範囲の計算に失敗しました。/ Failed to compute selection volume." + ChatColor.RESET);
             return;
         }
+        if (hasForeignOverlap(player.getUniqueId(), worldName, minX, minY, minZ, maxX, maxY, maxZ)) {
+            player.sendMessage(ChatColor.RED + "他人の保護エリアに重なるため作成できません。/ Overlaps another player's protection." + ChatColor.RESET);
+            return;
+        }
+        long area = ((long) maxX - minX + 1L) * ((long) maxZ - minZ + 1L);
+        long billableVolume = computeBillableVolume(volume, area);
         String baseId = requestedId != null ? requestedId.trim() : "";
         if (!isIdValid(baseId)) {
             baseId = generateFallbackId(session);
         }
         baseId = normalizeProtectionId(baseId);
         final String resolvedId = ensureUniqueId(baseId);
-        long totalCost = computeInitialCostUnits(volume);
+        long totalCost = computeInitialCostUnits(billableVolume);
         if (totalCost < 0 || totalCost > Integer.MAX_VALUE) {
             player.sendMessage(ChatColor.RED + "保護費用が大きすぎます。範囲を小さくしてください。/ The protection fee is too large." + ChatColor.RESET);
             return;

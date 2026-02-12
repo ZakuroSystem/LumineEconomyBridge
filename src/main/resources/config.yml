@@ -34,6 +34,7 @@ protect:
     - min: 100000
       max: null
       rate_per_block: "10.0"
+  area_cost_height_baseline: 15
   upkeep_price_per_block: "0"
   upkeep_interval_minutes: 1440
   collect_account: "treasury"
