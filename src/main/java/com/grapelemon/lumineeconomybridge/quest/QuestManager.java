@@ -137,6 +137,7 @@ public class QuestManager {
             int acceptedCount = countAssignments(assignments, active.offer.id);
             QuestProgress progressState = evaluateProgress(player, active.offer);
             String progress = acceptedCount > 0 ? progressState.label : null;
+            boolean reportReady = acceptedCount > 0 && progressState.complete;
             entries.add(new QuestDisplayEntry(
                     active.offer.id,
                     colorize(active.offer.displayName),
@@ -145,7 +146,7 @@ public class QuestManager {
                     formatRemaining(active.endsAt, now),
                     acceptedCount,
                     progress,
-                    progressState.complete
+                    reportReady
             ));
         }
         if (updated) {
@@ -861,36 +862,6 @@ public class QuestManager {
         PlayerQuestState playerState = stateStore.get(player.getUniqueId());
         ZonedDateTime now = ZonedDateTime.now(config.zoneId);
         boolean updated = clearExpiredStates(playerState, now);
-        for (QuestGroup group : config.groups.values()) {
-            ActiveOffer active = getActiveOffer(group, now);
-            if (active == null) {
-                continue;
-            }
-            List<QuestAssignment> assignments = playerState.assignments.get(group.id);
-            if (assignments == null || assignments.isEmpty()) {
-                continue;
-            }
-            boolean removedAny = false;
-            while (true) {
-                QuestAssignment matching = findAssignment(assignments, active.offer.id);
-                if (matching == null) {
-                    break;
-                }
-                QuestProgress progress = evaluateProgress(player, active.offer);
-                if (!progress.complete) {
-                    break;
-                }
-                if (!completeQuest(player, group, active.offer, progress)) {
-                    break;
-                }
-                assignments.remove(matching);
-                removedAny = true;
-                updated = true;
-            }
-            if (removedAny && assignments.isEmpty()) {
-                playerState.assignments.remove(group.id);
-            }
-        }
         if (updated) {
             stateStore.saveState(playerState);
             stateStore.save();
