@@ -163,7 +163,7 @@ public class ProtectManager {
             chargePlayer(owner, fee, "upkeep", success -> {
                 if (success) {
                     owner.sendMessage(ChatColor.YELLOW + "土地保護の継続費用を支払いました: "
-                            + plugin.formatAmount(fee)
+                            + formatAmount(fee)
                             + (currency != null && !currency.isBlank() ? " " + currency : "") + ChatColor.RESET);
                 }
             });
@@ -592,8 +592,8 @@ public class ProtectManager {
             Integer balance = balances.get(currency);
             if (balance != null && balance < estimatedCost) {
                 player.sendMessage(ChatColor.RED + "残高不足のため承認できません。必要: "
-                        + plugin.formatAmount(estimatedCost) + " " + currency
-                        + " / 現在: " + plugin.formatAmount(balance) + " " + currency + ChatColor.RESET);
+                        + formatAmount(estimatedCost) + " " + currency
+                        + " / 現在: " + formatAmount(balance) + " " + currency + ChatColor.RESET);
                 return;
             }
         }
@@ -611,7 +611,7 @@ public class ProtectManager {
             }
         }, APPROVAL_TIMEOUT_TICKS);
         pendingApprovals.put(player.getUniqueId(), new PendingApproval(estimatedCost, timeout));
-        String amount = plugin.formatAmount(estimatedCost);
+        String amount = formatAmount(estimatedCost);
         String suffix = (currency != null && !currency.isBlank()) ? (" " + currency) : "";
         player.sendMessage(ChatColor.GOLD + "暫定保護費用: " + amount + suffix + ChatColor.RESET);
         player.sendMessage(ChatColor.AQUA + "チャットで OK と入力すると確定します。/ Type OK in chat to confirm." + ChatColor.RESET);
@@ -944,6 +944,11 @@ public class ProtectManager {
         }
     }
 
+
+    private String formatAmount(int amount) {
+        return plugin.formatAmountPlain(amount);
+    }
+
     private boolean isIdValid(String candidate) {
         if (candidate == null) return false;
         String trimmed = candidate.trim();
@@ -962,6 +967,22 @@ public class ProtectManager {
             return "protect-" + System.currentTimeMillis();
         }
         return "x" + base.getBlockX() + "y" + base.getBlockY() + "z" + base.getBlockZ();
+    }
+
+
+    private String normalizeProtectionId(String raw) {
+        String value = raw == null ? "" : raw.trim();
+        if (value.isEmpty()) {
+            value = "p" + Long.toHexString(System.currentTimeMillis());
+        }
+        value = value.replaceAll("[^A-Za-z0-9_-]", "");
+        if (value.isEmpty()) {
+            value = "p" + Long.toHexString(System.currentTimeMillis());
+        }
+        if (value.length() > 8) {
+            value = value.substring(0, 8);
+        }
+        return value;
     }
 
     private synchronized String ensureUniqueId(String base) {
@@ -1158,7 +1179,7 @@ public class ProtectManager {
             return;
         }
         player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[貸出ID]:" + ChatColor.YELLOW + info.regionId());
-        player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[貸出金額]:" + ChatColor.YELLOW + plugin.formatAmount(info.priceUnits()));
+        player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[貸出金額]:" + ChatColor.YELLOW + formatAmount(info.priceUnits()));
         player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[貸出期間]:" + ChatColor.YELLOW + info.periodRaw());
         String coord = region.getMinX()+","+region.getMinY()+","+region.getMinZ()+" から "+region.getMaxX()+","+region.getMaxY()+","+region.getMaxZ();
         player.sendMessage(ChatColor.DARK_RED + "[LumineRoom]" + ChatColor.GOLD + "| " + ChatColor.GRAY + "[貸出座標]:" + ChatColor.YELLOW + coord);
@@ -1192,7 +1213,7 @@ public class ProtectManager {
         }
         BukkitTask timeout = Bukkit.getScheduler().runTaskLater(plugin, () -> pendingLeaseConfirmations.remove(player.getUniqueId()), 20L * 30L);
         pendingLeaseConfirmations.put(player.getUniqueId(), new PendingLeaseConfirm(info.regionId(), info.periodRaw(), info.priceUnits(), timeout));
-        player.sendMessage(ChatColor.AQUA + "このスペースを " + plugin.formatAmount(info.priceUnits()) + " で " + info.periodRaw() + " レンタルしますか？OKと入力してください。" + ChatColor.RESET);
+        player.sendMessage(ChatColor.AQUA + "このスペースを " + formatAmount(info.priceUnits()) + " で " + info.periodRaw() + " レンタルしますか？OKと入力してください。" + ChatColor.RESET);
     }
 
     public boolean isAwaitingLeaseConfirm(UUID uuid) {
