@@ -205,7 +205,9 @@ public class QuestManager {
             player.sendMessage(Lang.get("quest.accept.disabled"));
             return;
         }
-        if (assignments.size() >= limit) {
+        String acceptCountKey = acceptanceCountKey(targetGroup.id, target.offer.id, target.cycleIndex);
+        int acceptedInCycle = playerState.acceptanceCounts.getOrDefault(acceptCountKey, 0);
+        if (acceptedInCycle >= limit) {
             if (limit <= 1) {
                 player.sendMessage(Lang.get("quest.accept.already"));
             } else {
@@ -214,6 +216,7 @@ public class QuestManager {
             return;
         }
         assignments.add(new QuestAssignment(target.offer.id, target.cycleIndex));
+        playerState.acceptanceCounts.put(acceptCountKey, acceptedInCycle + 1);
         stateStore.saveState(playerState);
         stateStore.save();
         player.sendMessage(colorize(Lang.get("quest.accept.success")
@@ -268,7 +271,7 @@ public class QuestManager {
             }
             return;
         }
-        if (!completeQuest(player, targetGroup, target.offer, progress)) {
+        if (!completeQuest(player, playerState, targetGroup, target.offer, progress)) {
             player.sendMessage(Lang.get("quest.report.consume_failed"));
             return;
         }
@@ -341,6 +344,13 @@ public class QuestManager {
         state.assignments.putAll(updated);
         long nowMillis = System.currentTimeMillis();
         if (state.questCooldownUntil.entrySet().removeIf(entry -> entry.getValue() <= nowMillis)) {
+            changed = true;
+        }
+        Map<String, Long> currentCycles = new HashMap<>();
+        for (QuestGroup group : config.groups.values()) {
+            currentCycles.put(group.id, computeCycleIndex(group.schedule, now));
+        }
+        if (state.acceptanceCounts.entrySet().removeIf(entry -> !isAcceptanceCountCurrent(entry.getKey(), currentCycles))) {
             changed = true;
         }
         return changed;
@@ -417,7 +427,7 @@ public class QuestManager {
         return new QuestProgress(complete, String.join(", ", parts) + suffix);
     }
 
-    private boolean completeQuest(Player player, QuestGroup group, QuestOffer offer, QuestProgress progress) {
+    private boolean completeQuest(Player player, PlayerQuestState playerState, QuestGroup group, QuestOffer offer, QuestProgress progress) {
         if (group.rules.consumeItemsOnComplete) {
             if (!consumeItems(player.getInventory(), offer)) {
                 return false;
@@ -425,11 +435,8 @@ public class QuestManager {
         }
         grantRewards(player, offer.rewards);
         if (group.rules.respawnCooldownSeconds > 0) {
-            PlayerQuestState state = stateStore.get(player.getUniqueId());
             long cooldownUntil = System.currentTimeMillis() + (group.rules.respawnCooldownSeconds * 1000L);
-            state.questCooldownUntil.put(offer.id, cooldownUntil);
-            stateStore.saveState(state);
-            stateStore.save();
+            playerState.questCooldownUntil.put(offer.id, cooldownUntil);
         }
         player.sendMessage(colorize(Lang.get("quest.complete").replace("{quest}", formatQuestName(offer))));
         return true;
@@ -961,6 +968,7 @@ public class QuestManager {
         private final Map<String, List<QuestAssignment>> assignments = new HashMap<>();
         private final Map<String, Integer> shopTradeCounts = new HashMap<>();
         private final Map<String, Long> questCooldownUntil = new HashMap<>();
+        private final Map<String, Integer> acceptanceCounts = new HashMap<>();
 
         PlayerQuestState(UUID playerId) {
             this.playerId = playerId;
@@ -981,6 +989,10 @@ public class QuestManager {
         Map<String, Long> getQuestCooldownUntil() {
             return questCooldownUntil;
         }
+
+        Map<String, Integer> getAcceptanceCounts() {
+            return acceptanceCounts;
+        }
     }
 
     static class QuestAssignment {
@@ -999,6 +1011,29 @@ public class QuestManager {
         long getCycleIndex() {
             return cycleIndex;
         }
+    }
+
+    private String acceptanceCountKey(String groupId, String questId, long cycleIndex) {
+        return groupId + "@" + questId + "@" + cycleIndex;
+    }
+
+    private boolean isAcceptanceCountCurrent(String key, Map<String, Long> currentCycles) {
+        if (key == null || key.isBlank()) {
+            return false;
+        }
+        String[] parts = key.split("@", 3);
+        if (parts.length != 3) {
+            return false;
+        }
+        String groupId = parts[0];
+        long cycle;
+        try {
+            cycle = Long.parseLong(parts[2]);
+        } catch (NumberFormatException ex) {
+            return false;
+        }
+        Long currentCycle = currentCycles.get(groupId);
+        return currentCycle != null && currentCycle >= 0 && currentCycle == cycle;
     }
 
     private String counterKey(String questId, long cycleIndex) {

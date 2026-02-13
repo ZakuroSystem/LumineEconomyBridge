@@ -90,6 +90,16 @@ public class QuestStateStore {
             }
         }
 
+
+        ConfigurationSection acceptanceCounts = root.getConfigurationSection("acceptance_counts");
+        if (acceptanceCounts != null) {
+            for (String key : acceptanceCounts.getKeys(false)) {
+                int count = acceptanceCounts.getInt(key, 0);
+                if (count > 0) {
+                    state.getAcceptanceCounts().put(key, count);
+                }
+            }
+        }
         ConfigurationSection cooldowns = root.getConfigurationSection("quest_cooldowns");
         if (cooldowns != null) {
             for (String questId : cooldowns.getKeys(false)) {
@@ -129,6 +139,11 @@ public class QuestStateStore {
         config.set(base + ".quest_cooldowns", null);
         for (var entry : state.getQuestCooldownUntil().entrySet()) {
             config.set(base + ".quest_cooldowns." + entry.getKey(), entry.getValue());
+        }
+
+        config.set(base + ".acceptance_counts", null);
+        for (var entry : state.getAcceptanceCounts().entrySet()) {
+            config.set(base + ".acceptance_counts." + entry.getKey(), entry.getValue());
         }
     }
 
