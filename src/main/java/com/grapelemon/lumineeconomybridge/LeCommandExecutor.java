@@ -1605,8 +1605,7 @@ public class LeCommandExecutor implements CommandExecutor {
             JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
             if (obj.has("owners")) {
                 if (obj.getAsJsonArray("owners").size() == 0) {
-                    purgeShop(shopId);
-                    return true; // orphan removed, id available
+                    return false; // shop exists but has no owner info; keep data to avoid accidental stock loss
                 }
                 for (JsonElement el : obj.getAsJsonArray("owners")) {
                     if (ownerUuid.equalsIgnoreCase(el.getAsString())) {
@@ -1639,7 +1638,6 @@ public class LeCommandExecutor implements CommandExecutor {
             JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
             if (obj.has("owners")) {
                 if (obj.getAsJsonArray("owners").size() == 0) {
-                    purgeShop(shopId);
                     return false;
                 }
                 for (JsonElement el : obj.getAsJsonArray("owners")) {
@@ -1716,25 +1714,6 @@ public class LeCommandExecutor implements CommandExecutor {
             }
         }
         return false;
-    }
-
-    private void purgeShop(String shopId) {
-        OkHttpClient http = plugin.getHttpClient();
-        if (http == null) return;
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("shop_id", shopId);
-        Request req = new Request.Builder()
-                .url(plugin.getBaseUrl() + "/api/shop/remove")
-                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
-                .post(RequestBody.create(gson.toJson(payload), JSON))
-                .build();
-        try (Response res = http.newCall(req).execute()) {
-            if (!res.isSuccessful()) {
-                plugin.getLogger().warning("Failed to purge shop " + shopId + ": " + res.code());
-            }
-        } catch (IOException ex) {
-            plugin.getLogger().warning("Failed to purge shop " + shopId + ": " + ex.getMessage());
-        }
     }
 
     private Long parseDurationSeconds(String raw) {
