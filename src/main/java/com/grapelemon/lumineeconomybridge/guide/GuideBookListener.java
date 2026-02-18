@@ -203,6 +203,12 @@ public class GuideBookListener implements Listener {
                 Lang.get("guide.option.shop.lore_2")));
         holder.bind(3, GuideAction.CREATE_SHOP);
 
+        inv.setItem(2, buildMenuItem(Material.EMERALD,
+                Lang.get("guide.option.market.name"),
+                Lang.get("guide.option.market.lore_1"),
+                Lang.get("guide.option.market.lore_2")));
+        holder.bind(2, GuideAction.OPEN_MARKET);
+
         inv.setItem(5, buildMenuItem(Material.CLOCK,
                 Lang.get("guide.option.manage_shops.name"),
                 Lang.get("guide.option.manage_shops.lore_1"),
@@ -300,6 +306,14 @@ public class GuideBookListener implements Listener {
                     player.sendMessage(Lang.get("error-unavailable"));
                 } else {
                     plugin.getShopGuiManager().openMainMenu(player);
+                }
+            }
+            case OPEN_MARKET -> {
+                player.closeInventory();
+                if (plugin.getMarketManager() == null) {
+                    player.sendMessage(Lang.get("error-unavailable"));
+                } else {
+                    plugin.getMarketManager().openMarket(player);
                 }
             }
             case RECOMMENDED_QUESTS -> openQuestMenu(player);

@@ -62,6 +62,10 @@ guide:
       name: "&eショップ管理 / Manage Shops"
       lore_1: "&7在庫と価格をGUIで編集 / Edit inventory and prices in the GUI"
       lore_2: "&7/le shop でも開けます / Also available via /le shop"
+    market:
+      name: "&aマーケット / Market"
+      lore_1: "&7出店中ショップ一覧を表示 / Browse listed shops"
+      lore_2: "&7クリックでマーケットGUIを開く / Open market GUI"
     quests:
       name: "&dクエスト / Quests"
       lore_1: "&7現在の受注可能クエストを表示 / Show active quests"

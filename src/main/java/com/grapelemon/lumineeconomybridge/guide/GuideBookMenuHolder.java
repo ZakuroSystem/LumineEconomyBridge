@@ -19,6 +19,7 @@ public class GuideBookMenuHolder implements InventoryHolder {
         CHECK_BALANCE,
         CREATE_SHOP,
         MANAGE_SHOPS,
+        OPEN_MARKET,
         RECOMMENDED_QUESTS,
         RECOMMENDED_SHOPS,
         PROTECT_LAND,
