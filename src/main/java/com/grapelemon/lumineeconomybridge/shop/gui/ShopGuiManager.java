@@ -1031,6 +1031,9 @@ public class ShopGuiManager {
                     plugin.getMarketManager().openMarket(pl);
                 }
             });
+            menu.setItem(16, button(Material.BREEZE_ROD, ChatColor.LIGHT_PURPLE + "土地保護関連",
+                    ChatColor.GRAY + "土地保護とレンタルを管理"));
+            actions.put(16, this::showProtectionMenu);
             menu.setItem(17, button(Material.BOOK, ChatColor.GREEN + "Help",
                     ChatColor.GRAY + "Click to view shop commands"));
             actions.put(17, () -> {
@@ -1042,6 +1045,44 @@ public class ShopGuiManager {
             });
             this.inventory = menu;
             this.reopenAction = this::showMainMenu;
+            player.openInventory(menu);
+        }
+
+        private void showProtectionMenu() {
+            if (closed) {
+                return;
+            }
+            Player player = player();
+            if (player == null) return;
+            Inventory menu = Bukkit.createInventory(new ShopGuiSessionHolder(playerId), 27,
+                    ChatColor.DARK_PURPLE + "土地保護関連");
+            actions.clear();
+            menu.setItem(11, button(Material.BREEZE_ROD, ChatColor.AQUA + "土地保護を開始",
+                    ChatColor.GRAY + "ロッドで範囲選択して保護"));
+            actions.put(11, () -> {
+                Player pl = player();
+                if (pl != null) {
+                    pl.closeInventory();
+                    if (plugin.getProtectManager() != null) {
+                        plugin.getProtectManager().startSelectionFromGui(pl);
+                    }
+                }
+            });
+            menu.setItem(15, button(Material.OAK_SIGN, ChatColor.GOLD + "貸出看板を作成",
+                    ChatColor.GRAY + "チャット質問に答えて作成"));
+            actions.put(15, () -> {
+                Player pl = player();
+                if (pl != null) {
+                    pl.closeInventory();
+                    if (plugin.getProtectManager() != null) {
+                        plugin.getProtectManager().startLeaseSignWizard(pl);
+                    }
+                }
+            });
+            menu.setItem(18, button(Material.ARROW, ChatColor.YELLOW + "Back"));
+            actions.put(18, this::showMainMenu);
+            this.inventory = menu;
+            this.reopenAction = this::showProtectionMenu;
             player.openInventory(menu);
         }
 

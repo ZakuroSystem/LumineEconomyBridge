@@ -100,7 +100,7 @@ public class LeTabCompleter implements TabCompleter {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-              return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo", "help", "lang", "backup", "restore", "weblink", "shop", "pay", "wallet", "api")
+              return Stream.of("rewrite", "start", "stop", "reload", "money", "deposit", "withdraw", "transfer", "balance", "currency", "setbalance", "history", "account", "undo", "redo", "help", "lang", "backup", "restore", "weblink", "shop", "pay", "wallet", "api", "protect")
                       .filter(s -> s.startsWith(args[0].toLowerCase()))
                       .toList();
         }
@@ -144,6 +144,11 @@ public class LeTabCompleter implements TabCompleter {
                 }
                 names.removeIf(n -> !n.toLowerCase().startsWith(args[1].toLowerCase()));
                 return names;
+            }
+            if (first.equals("protect")) {
+                return Stream.of("add", "reset")
+                        .filter(s -> s.startsWith(args[1].toLowerCase()))
+                        .toList();
             }
             if (first.equals("shop")) {
                 return Stream.of("gui", "create", "add", "take", "price", "buyprice", "autoprice", "autopricedisable", "remove", "partner", "account", "reopen", "hopper", "search", "limit", "help")
@@ -210,6 +215,11 @@ public class LeTabCompleter implements TabCompleter {
             }
             if (first.equals("money") && args[1].equalsIgnoreCase("top")) {
                 return Stream.of("thy")
+                        .filter(s -> s.startsWith(args[2].toLowerCase()))
+                        .collect(Collectors.toList());
+            }
+            if (first.equals("protect") && args[1].equalsIgnoreCase("add")) {
+                return Stream.of("never", "high", "middle", "low", "pvp", "ezreset")
                         .filter(s -> s.startsWith(args[2].toLowerCase()))
                         .collect(Collectors.toList());
             }

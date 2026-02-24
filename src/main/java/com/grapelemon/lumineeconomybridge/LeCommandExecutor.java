@@ -164,6 +164,33 @@ public class LeCommandExecutor implements CommandExecutor {
                     sendHelp(p);
                     return true;
                 }
+                case "protect" -> {
+                    if (!plugin.hasBypass(p) && !p.isOp() && !p.hasPermission("lumineeconomy.admin")) {
+                        p.sendMessage(ChatColor.RED + "No permission" + ChatColor.RESET);
+                        return true;
+                    }
+                    if (plugin.getProtectManager() == null) {
+                        p.sendMessage(Lang.get("error-unavailable"));
+                        return true;
+                    }
+                    if (args.length >= 3 && args[1].equalsIgnoreCase("add")) {
+                        String mode = args[2].toLowerCase();
+                        List<String> modes = Arrays.asList("never", "high", "middle", "low", "pvp", "ezreset");
+                        if (!modes.contains(mode)) {
+                            p.sendMessage(ChatColor.YELLOW + "Usage: /le protect add <never|high|middle|low|pvp|ezreset>" + ChatColor.RESET);
+                            return true;
+                        }
+                        plugin.getProtectManager().giveAdminProtectionWand(p, mode);
+                        return true;
+                    }
+                    if (args.length >= 3 && args[1].equalsIgnoreCase("reset")) {
+                        plugin.getProtectManager().resetProtection(p, args[2]);
+                        return true;
+                    }
+                    p.sendMessage(ChatColor.YELLOW + "Usage: /le protect add <never|high|middle|low|pvp|ezreset>" + ChatColor.RESET);
+                    p.sendMessage(ChatColor.YELLOW + "       /le protect reset <protectionId>" + ChatColor.RESET);
+                    return true;
+                }
                 case "admin" -> {
                     if (!plugin.isActive() || plugin.getHttpClient() == null) {
                         p.sendMessage(Lang.get("error-unavailable"));
@@ -1578,8 +1605,7 @@ public class LeCommandExecutor implements CommandExecutor {
             JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
             if (obj.has("owners")) {
                 if (obj.getAsJsonArray("owners").size() == 0) {
-                    purgeShop(shopId);
-                    return true; // orphan removed, id available
+                    return false; // shop exists but has no owner info; keep data to avoid accidental stock loss
                 }
                 for (JsonElement el : obj.getAsJsonArray("owners")) {
                     if (ownerUuid.equalsIgnoreCase(el.getAsString())) {
@@ -1612,7 +1638,6 @@ public class LeCommandExecutor implements CommandExecutor {
             JsonObject obj = JsonParser.parseString(body).getAsJsonObject();
             if (obj.has("owners")) {
                 if (obj.getAsJsonArray("owners").size() == 0) {
-                    purgeShop(shopId);
                     return false;
                 }
                 for (JsonElement el : obj.getAsJsonArray("owners")) {
@@ -1689,25 +1714,6 @@ public class LeCommandExecutor implements CommandExecutor {
             }
         }
         return false;
-    }
-
-    private void purgeShop(String shopId) {
-        OkHttpClient http = plugin.getHttpClient();
-        if (http == null) return;
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("shop_id", shopId);
-        Request req = new Request.Builder()
-                .url(plugin.getBaseUrl() + "/api/shop/remove")
-                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
-                .post(RequestBody.create(gson.toJson(payload), JSON))
-                .build();
-        try (Response res = http.newCall(req).execute()) {
-            if (!res.isSuccessful()) {
-                plugin.getLogger().warning("Failed to purge shop " + shopId + ": " + res.code());
-            }
-        } catch (IOException ex) {
-            plugin.getLogger().warning("Failed to purge shop " + shopId + ": " + ex.getMessage());
-        }
     }
 
     private Long parseDurationSeconds(String raw) {

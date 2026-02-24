@@ -13,6 +13,7 @@ quest:
     group_title: "&b{name} &7({id})"
     accepted: "&e  {quest} &7[accepted x{count}] / 受注済み ({count})"
     available: "&a  {quest} &7[available] / 受注可能"
+    cooldown: "&6  {quest} &7[cooldown: {remaining}] / 再受注クールタイム中"
     progress: "&7  Progress: {progress}"
     remaining: "&7  Remaining: {remaining}"
     none_available: "&7現在のサイクルで受注可能なクエストはありません。/ No quests available for this cycle."
@@ -21,6 +22,7 @@ quest:
     already: "&e既に受注済みです。/ Already accepted."
     limit: "&cこのグループではこれ以上受注できません。/ Acceptance limit reached."
     disabled: "&cこのクエストは受注できません。/ Quest acceptance disabled."
+    cooldown: "&eこのクエストは再受注クールタイム中です: &f{remaining}"
     success: "&aクエストを受注しました: {quest}"
     remaining: "&7残り時間: {remaining}"
   progress:
@@ -33,6 +35,7 @@ quest:
     not_complete: "&e達成条件を満たしていません: &f{progress}"
     consume_failed: "&c必要アイテムの回収に失敗しました。/ Failed to collect required items."
   economy_unavailable: "&e報酬の通貨付与に失敗しました。/ Economy unavailable."
+  money_rewarded: "&aクエスト報酬として &e{amount} &aを受け取りました。/ Received {amount} as quest reward."
   reminder: "&7クエスト案内: /quest で確認できます。/ Check quests with /quest."
 guide:
   book_name: "&a経済ガイドブック / Economy Guide"
@@ -59,6 +62,10 @@ guide:
       name: "&eショップ管理 / Manage Shops"
       lore_1: "&7在庫と価格をGUIで編集 / Edit inventory and prices in the GUI"
       lore_2: "&7/le shop でも開けます / Also available via /le shop"
+    market:
+      name: "&aマーケット / Market"
+      lore_1: "&7出店中ショップ一覧を表示 / Browse listed shops"
+      lore_2: "&7クリックでマーケットGUIを開く / Open market GUI"
     quests:
       name: "&dクエスト / Quests"
       lore_1: "&7現在の受注可能クエストを表示 / Show active quests"
@@ -67,6 +74,14 @@ guide:
       name: "&6おすすめショップ / Recommended Shops"
       lore_1: "&7注目の販売・買取情報を表示 / View featured shop offers"
       lore_2: "&7座標と取引内容を確認 / Check trade details and locations"
+    protect:
+      name: "&3土地保護 / Land Protection"
+      lore_1: "&7保護範囲選択ロッドを受け取る / Get a selection wand"
+      lore_2: "&7範囲選択後にチャットでOK承認 / Confirm by chat after selection"
+    protect_rent:
+      name: "&5土地貸出 / Lease Protection"
+      lore_1: "&7チャットで貸出看板設定を作成 / Setup lease sign by chat"
+      lore_2: "&7保護ID・期間・金額を入力 / Input region id, period and price"
   shop:
     prompt: "&bショップIDを入力してください (cancel で中止) / Enter a shop ID (type cancel to abort)"
     invalid: "&cショップIDを入力してください。 / Please enter a shop ID."

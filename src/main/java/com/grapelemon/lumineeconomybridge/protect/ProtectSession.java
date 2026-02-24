@@ -10,6 +10,10 @@ class ProtectSession {
     private Location first;
     private Location second;
     private boolean awaitingName;
+    private boolean awaitingApproval;
+    private boolean guiFlow;
+    private String protectionMode = "middle";
+    private boolean adminSelection;
     private boolean finalizing;
 
     ProtectSession(UUID playerId, String initialId) {
@@ -55,6 +59,39 @@ class ProtectSession {
 
     void setAwaitingName(boolean awaitingName) {
         this.awaitingName = awaitingName;
+    }
+
+    boolean isAwaitingApproval() {
+        return awaitingApproval;
+    }
+
+    void setAwaitingApproval(boolean awaitingApproval) {
+        this.awaitingApproval = awaitingApproval;
+    }
+
+    boolean isGuiFlow() {
+        return guiFlow;
+    }
+
+    void setGuiFlow(boolean guiFlow) {
+        this.guiFlow = guiFlow;
+    }
+
+
+    String getProtectionMode() {
+        return protectionMode == null || protectionMode.isBlank() ? "middle" : protectionMode;
+    }
+
+    void setProtectionMode(String protectionMode) {
+        this.protectionMode = protectionMode;
+    }
+
+    boolean isAdminSelection() {
+        return adminSelection;
+    }
+
+    void setAdminSelection(boolean adminSelection) {
+        this.adminSelection = adminSelection;
     }
 
     boolean isFinalizing() {

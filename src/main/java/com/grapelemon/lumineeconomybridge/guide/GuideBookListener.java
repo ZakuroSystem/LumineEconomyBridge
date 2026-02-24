@@ -203,11 +203,29 @@ public class GuideBookListener implements Listener {
                 Lang.get("guide.option.shop.lore_2")));
         holder.bind(3, GuideAction.CREATE_SHOP);
 
+        inv.setItem(2, buildMenuItem(Material.EMERALD,
+                Lang.get("guide.option.market.name"),
+                Lang.get("guide.option.market.lore_1"),
+                Lang.get("guide.option.market.lore_2")));
+        holder.bind(2, GuideAction.OPEN_MARKET);
+
         inv.setItem(5, buildMenuItem(Material.CLOCK,
                 Lang.get("guide.option.manage_shops.name"),
                 Lang.get("guide.option.manage_shops.lore_1"),
                 Lang.get("guide.option.manage_shops.lore_2")));
         holder.bind(5, GuideAction.MANAGE_SHOPS);
+
+        inv.setItem(4, buildMenuItem(Material.NAME_TAG,
+                Lang.get("guide.option.protect_rent.name"),
+                Lang.get("guide.option.protect_rent.lore_1"),
+                Lang.get("guide.option.protect_rent.lore_2")));
+        holder.bind(4, GuideAction.RENT_OUT_PROTECTION);
+
+        inv.setItem(6, buildMenuItem(Material.BREEZE_ROD,
+                Lang.get("guide.option.protect.name"),
+                Lang.get("guide.option.protect.lore_1"),
+                Lang.get("guide.option.protect.lore_2")));
+        holder.bind(6, GuideAction.PROTECT_LAND);
 
         inv.setItem(7, buildMenuItem(Material.ENCHANTED_BOOK,
                 Lang.get("guide.option.quests.name"),
@@ -290,8 +308,32 @@ public class GuideBookListener implements Listener {
                     plugin.getShopGuiManager().openMainMenu(player);
                 }
             }
+            case OPEN_MARKET -> {
+                player.closeInventory();
+                if (plugin.getMarketManager() == null) {
+                    player.sendMessage(Lang.get("error-unavailable"));
+                } else {
+                    plugin.getMarketManager().openMarket(player);
+                }
+            }
             case RECOMMENDED_QUESTS -> openQuestMenu(player);
             case RECOMMENDED_SHOPS -> openRecommendedShopMenu(player);
+            case PROTECT_LAND -> {
+                player.closeInventory();
+                if (plugin.getProtectManager() == null) {
+                    player.sendMessage(Lang.get("error-unavailable"));
+                } else {
+                    plugin.getProtectManager().startSelectionFromGui(player);
+                }
+            }
+            case RENT_OUT_PROTECTION -> {
+                player.closeInventory();
+                if (plugin.getProtectManager() == null) {
+                    player.sendMessage(Lang.get("error-unavailable"));
+                } else {
+                    plugin.getProtectManager().startLeaseSignWizard(player);
+                }
+            }
             case BACK_TO_MAIN -> openMainMenu(player);
             default -> {
             }

@@ -612,6 +612,9 @@ public class ShopListener implements Listener {
                                 }
                             }
                             si.setStock(Math.max(0, si.getStock() - qty));
+                            if (plugin.getQuestManager() != null) {
+                                plugin.getQuestManager().recordShopTrade(p, 1);
+                            }
                             refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
                             p.openInventory(ch.getOrigin().getInventory());
                         }
@@ -826,6 +829,9 @@ public class ShopListener implements Listener {
                         if (res.has("status") && "success".equals(res.get("status").getAsString())) {
                             removeMatchingItems(p, si, qty);
                             si.setStock(si.getStock() + qty);
+                            if (plugin.getQuestManager() != null) {
+                                plugin.getQuestManager().recordShopTrade(p, 1);
+                            }
                             refreshDisplay(ch.getOrigin(), ch.getSlot(), si);
                             p.openInventory(ch.getOrigin().getInventory());
                         }
@@ -1441,10 +1447,7 @@ public class ShopListener implements Listener {
             e.getPlayer().sendMessage(ChatColor.RED + "You are not the owner / あなたはオーナーではありません" + ChatColor.RESET);
             return;
         }
-        notifyRemove(owner, shopId);
-        Player op = Bukkit.getPlayer(UUID.fromString(owner));
-        if (op != null && op != e.getPlayer())
-            op.sendMessage(ChatColor.RED + "Your shop " + ChatColor.YELLOW + shopId + ChatColor.RED + " was removed / あなたのショップが撤去されました" + ChatColor.RESET);
+        e.getPlayer().sendMessage(ChatColor.YELLOW + "Shop block removed. Shop data is kept; place/create the same ID to continue. / ブロックのみ撤去しました。ショップデータは保持されます。" + ChatColor.RESET);
     }
 
     @EventHandler
@@ -1464,23 +1467,6 @@ public class ShopListener implements Listener {
             return tile.getPersistentDataContainer().has(keyShop, PersistentDataType.BYTE);
         }
         return false;
-    }
-
-    private void notifyRemove(String owner, String shopId) {
-        OkHttpClient http = plugin.getHttpClient();
-        if (http == null || owner == null || shopId == null) return;
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("owner_uuid", owner);
-        payload.put("shop_id", shopId);
-        Request req = new Request.Builder()
-                .url(plugin.getBaseUrl() + "/api/shop/remove")
-                .addHeader("X-LE-Token", plugin.getConfig().getString("api.token", ""))
-                .post(RequestBody.create(gson.toJson(payload), JSON))
-                .build();
-        http.newCall(req).enqueue(new Callback() {
-            @Override public void onFailure(Call call, IOException ex) { }
-            @Override public void onResponse(Call call, Response response) throws IOException { response.close(); }
-        });
     }
 
     private int getPlayerBalance(Player p, String currency) {
